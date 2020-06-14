@@ -9,8 +9,10 @@
 enum token_error {
 	TE_OK,
 	TE_STR_START_CHAR,
+	TE_NUM_START_CHAR,
 	TE_SYM_START_CHAR,
 	TE_SYM_CHAR,
+	TE_NUM_CHAR,
 	TE_SYM_OVERFLOW,
 };
 
@@ -67,7 +69,9 @@ static const char *token_error_string(enum token_error err)
 	case TE_OK: return "all good";
 	case TE_STR_START_CHAR: return "string didn't start with \"";
 	case TE_SYM_START_CHAR: return "symbol didn't start with a-z";
+	case TE_NUM_START_CHAR: return "number didn't start with 0-9 or -";
 	case TE_SYM_CHAR: return "invalid symbol character";
+	case TE_NUM_CHAR: return "invalid number character";
 	case TE_SYM_OVERFLOW: return "symbol push overflow";
 	}
 
@@ -78,6 +82,8 @@ static void print_token_error(struct cursor *cursor)
 {
 	int is_chr_data = cursor->err == TE_STR_START_CHAR ||
 		cursor->err == TE_SYM_START_CHAR ||
+		cursor->err == TE_NUM_START_CHAR ||
+		cursor->err == TE_NUM_CHAR ||
 		cursor->err == TE_SYM_CHAR;
 	printf("\nerror: %s %.*s\n", token_error_string(cursor->err),
 	       is_chr_data?1:0, (char*)&cursor->err_data.c);
@@ -139,9 +145,6 @@ static int push_token_data(struct cursor *tokens,
 	if (!ok) return 0;
 
 	switch (token) {
-	case T_NUMBER:
-		tokdebug("NUM");
-		break;
 
 	case T_OPEN:
 		depth++;
@@ -151,18 +154,19 @@ static int push_token_data(struct cursor *tokens,
 		depth--;
 		break; /* nothing to write after these tokens */
 
+	case T_NUMBER:
 	case T_SYMBOL:
-		/* tokdebug(""); */
 
 		/* fallthrough */
 	case T_STRING:
 		print_spaces(depth*2);
 		str = (struct tok_str*)token_data;
 		if (token == T_STRING) {
-			tokdebug("\"%.*s\" ", str->len, str->data);
-		}
-		else {
-			tokdebug("%.*s ", str->len, str->data);
+			tokdebug("str \"%.*s\"", str->len, str->data);
+		} else if (token == T_NUMBER) {
+			tokdebug("num %.*s", str->len, str->data);
+		} else {
+			tokdebug("sym %.*s", str->len, str->data);
 		}
 		ok = push_data(tokens, token_data, token_data_size);
 		if (!ok) return 0;
@@ -188,6 +192,11 @@ static int push_symbol(struct cursor *tokens, struct tok_str symbol)
 static int push_string(struct cursor *tokens, struct tok_str str)
 {
 	return push_token_data(tokens, T_STRING, &str, sizeof(str));
+}
+
+static int push_number(struct cursor *tokens, struct tok_str str)
+{
+	return push_token_data(tokens, T_NUMBER, &str, sizeof(str));
 }
 
 
@@ -222,6 +231,62 @@ static int pull_escaped_char(struct cursor *cursor, u8 *c)
 	}
 
 	return 2;
+}
+
+static int pull_number(struct cursor *cursor, u8 *buf, int buf_len)
+{
+	int ok = 1;
+	int chars = 0;
+	u8 c;
+
+	struct cursor temp;
+	struct cursor buf_cursor;
+
+	temp.p = cursor->p;
+	temp.end = cursor->end;
+
+	buf_cursor.p = buf;
+	buf_cursor.end = buf + buf_len;
+
+	while (1) {
+		ok = pull_byte(&temp, &c);
+		if (!ok) return 0;
+
+		/* first char should start with a letter */
+		if (chars == 0 && !isdigit(c) && c != '-') {
+			cursor->err = TE_NUM_START_CHAR;
+			cursor->err_data.c = c;
+			return 0;
+		} else if (chars > 0 && (isspace(c) || c == ')')) {
+			/* we got a number */
+			break;
+		} else if (chars > 0 && !isdigit(c) && c != '.') {
+			cursor->err = TE_NUM_CHAR;
+			cursor->err_data.c = c;
+			return 0;
+		} 
+		ok = push_byte(&buf_cursor, c);
+		chars++;
+
+		if (!ok) {
+			cursor->err = TE_SYM_OVERFLOW;
+			return 0;
+		}
+	}
+
+	ok = push_byte(&buf_cursor, 0);
+	chars++;
+
+	if (!ok) {
+		cursor->err = TE_SYM_OVERFLOW;
+		return 0;
+	}
+
+	cursor->p = temp.p-1;
+	cursor->err = TE_OK;
+
+	/* remove the first counted quote since this was not pushed */
+	return chars;
 }
 
 static int pull_string(struct cursor *cursor, u8 *buf, int buf_len)
@@ -347,7 +412,7 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 
 	ok = pull_symbol(cursor, buf, sizeof(buf));
 	if (ok) {
-		str.len = ok;
+		str.len  = ok;
 		str.data = buf;
 		ok = push_symbol(tokens, str);
 		if (!ok) {
@@ -356,19 +421,27 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 		}
 		return 1;
 	}
-	else {
-		/* printf("\ndidn't get symbol: "); */
-		/* print_token_error(cursor); */
-	}
 
 
 	ok = pull_string(cursor, buf, sizeof(buf));
 	if (ok) {
-		str.len = ok;
+		str.len  = ok;
 		str.data = buf;
 		ok = push_string(tokens, str);
 		if (!ok) {
 			printf("read_and_push_atom string push overflow\n");
+			return 0;
+		}
+		return 1;
+	}
+
+	ok = pull_number(cursor, buf, sizeof(buf));
+	if (ok) {
+		str.len  = ok;
+		str.data = buf;
+		ok = push_number(tokens, str);
+		if (!ok) {
+			printf("read_and_push_atom number push overflow\n");
 			return 0;
 		}
 		return 1;
