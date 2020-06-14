@@ -8,6 +8,7 @@
 
 enum token_error {
 	TE_OK,
+	TE_STR_START_CHAR,
 	TE_SYM_START_CHAR,
 	TE_SYM_CHAR,
 	TE_SYM_OVERFLOW,
@@ -60,6 +61,28 @@ struct cursor {
 	} err_data;
 };
 
+static const char *token_error_string(enum token_error err)
+{
+	switch (err) {
+	case TE_OK: return "all good";
+	case TE_STR_START_CHAR: return "string didn't start with \"";
+	case TE_SYM_START_CHAR: return "symbol didn't start with a-z";
+	case TE_SYM_CHAR: return "invalid symbol character";
+	case TE_SYM_OVERFLOW: return "symbol push overflow";
+	}
+
+	return "unknown";
+}
+
+static void print_token_error(struct cursor *cursor)
+{
+	int is_chr_data = cursor->err == TE_STR_START_CHAR ||
+		cursor->err == TE_SYM_START_CHAR ||
+		cursor->err == TE_SYM_CHAR;
+	printf("\nerror: %s %.*s\n", token_error_string(cursor->err),
+	       is_chr_data?1:0, (char*)&cursor->err_data.c);
+}
+
 static int pull_byte(struct cursor *cursor, u8 *c)
 {
 	if (cursor->p + 1 >= cursor->end)
@@ -98,10 +121,18 @@ static int push_data(struct cursor *cursor, u8 *data, int len)
 	return 1;
 }
 
+static void print_spaces(int n)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		putchar(' ');
+}
+
 static int push_token_data(struct cursor *tokens,
 			   enum token_type token,
 			   void *token_data, int token_data_size)
 {
+	static int depth = 0;
 	struct tok_str *str;
 	int ok;
 	ok = push_byte(tokens, token);
@@ -113,18 +144,19 @@ static int push_token_data(struct cursor *tokens,
 		break;
 
 	case T_OPEN:
-		tokdebug("(");
+		depth++;
 		break;
 
 	case T_CLOSE:
-		tokdebug(")");
+		depth--;
 		break; /* nothing to write after these tokens */
 
 	case T_SYMBOL:
-		tokdebug("S_");
+		/* tokdebug(""); */
 
 		/* fallthrough */
 	case T_STRING:
+		print_spaces(depth*2);
 		str = (struct tok_str*)token_data;
 		if (token == T_STRING) {
 			tokdebug("\"%.*s\" ", str->len, str->data);
@@ -134,8 +166,10 @@ static int push_token_data(struct cursor *tokens,
 		}
 		ok = push_data(tokens, token_data, token_data_size);
 		if (!ok) return 0;
+		printf("\n");
 		break;
 	}
+
 
 	return 1;
 }
@@ -168,12 +202,84 @@ static int is_symbol_char(char c)
 		(c >= '0' && c <= '9');
 }
 
+static int pull_escaped_char(struct cursor *cursor, u8 *c)
+{
+	int ok;
+
+	ok = pull_byte(cursor, c);
+	if (!ok)
+		return 0;
+
+	if (*c != '\\') {
+		return 1;
+	}
+
+	ok = pull_byte(cursor, c);
+
+	/* we saw an escape char but input ended!? */
+	if (!ok) {
+		return 0;
+	}
+
+	return 2;
+}
+
 static int pull_string(struct cursor *cursor, u8 *buf, int buf_len)
 {
-	(void)cursor;
-	(void)buf;
-	(void)buf_len;
-	return 0;
+	int ok = 1;
+	int chars = 0;
+	u8 c;
+
+	struct cursor temp;
+	struct cursor buf_cursor;
+
+	temp.p = cursor->p;
+	temp.end = cursor->end;
+
+	buf_cursor.p = buf;
+	buf_cursor.end = buf + buf_len;
+
+	while (1) {
+		ok = pull_escaped_char(&temp, &c);
+		if (!ok) return 0;
+
+		/* first char should start with a letter */
+		if (chars == 0 && c != '"') {
+			cursor->err = TE_STR_START_CHAR;
+			cursor->err_data.c = c;
+			return 0;
+		} else if (chars == 0 && c == '"') {
+			/* this increment will get removed at end */
+			chars++;
+			continue;
+		} else if (chars > 0 && c == '"' && ok == 1) {
+			/* ok == 2 would mean that it was escaped, so
+			   we're done here */
+			break;
+		}
+
+		ok = push_byte(&buf_cursor, c);
+		chars++;
+
+		if (!ok) {
+			cursor->err = TE_SYM_OVERFLOW;
+			return 0;
+		}
+	}
+
+	ok = push_byte(&buf_cursor, 0);
+	chars++;
+
+	if (!ok) {
+		cursor->err = TE_SYM_OVERFLOW;
+		return 0;
+	}
+
+	cursor->p = temp.p;
+	cursor->err = TE_OK;
+
+	/* remove the first counted quote since this was not pushed */
+	return --chars;
 }
 
 static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
@@ -200,7 +306,7 @@ static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
 			cursor->err = TE_SYM_START_CHAR;
 			cursor->err_data.c = c;
 			return 0;
-		} else if (chars > 0 && isspace(c)) {
+		} else if (chars > 0 && (isspace(c) || c == ')')) {
 			/* we're done here */
 			break;
 		} else if (chars > 0 && !is_symbol_char(c)) {
@@ -226,7 +332,7 @@ static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
 		return 0;
 	}
 
-	cursor->p = temp.p;
+	cursor->p = temp.p-1;
 	cursor->end = temp.end;
 	cursor->err = TE_OK;
 
@@ -250,6 +356,11 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 		}
 		return 1;
 	}
+	else {
+		/* printf("\ndidn't get symbol: "); */
+		/* print_token_error(cursor); */
+	}
+
 
 	ok = pull_string(cursor, buf, sizeof(buf));
 	if (ok) {
@@ -273,6 +384,7 @@ int tokenize_space(u8 *buf, int buf_size, u8 *token_buf, int token_buf_size)
 	enum tok_state state;
 	struct cursor cursor;
 	struct cursor tokens;
+	/* u8 *start = buf; */
 	u8 c;
 	int ok;
 
@@ -316,8 +428,12 @@ int tokenize_space(u8 *buf, int buf_size, u8 *token_buf, int token_buf_size)
 			}
 
 			cursor.p--;
+			/* printf("\nat %c (%ld) before reading atom\n", *cursor.p, cursor.p - start); */
 			ok = read_and_push_atom(&cursor, &tokens);
-			if (!ok) return 0;
+			if (!ok) {
+				print_token_error(&cursor);
+				return 0;
+			}
 
 		}
 	}
