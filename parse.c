@@ -8,31 +8,31 @@
 
 enum token_error {
 	TE_OK,
-	TE_IDENT_START_CHAR,
-	TE_IDENT_CHAR,
-	TE_IDENT_OVERFLOW,
+	TE_SYM_START_CHAR,
+	TE_SYM_CHAR,
+	TE_SYM_OVERFLOW,
 };
 
-enum known_identifier {
-	I_OBJECT,
-	I_SPACE,
-	I_OBJECTS,
-	I_NAME,
-	I_TYPE,
-	I_SHAPE,
-	I_WIDTH,
-	I_DEPTH,
-	I_HEIGHT,
-	I_CONDITION,
-	I_LOCATION,
-	I_MATERIAL,
+enum known_symbol {
+	S_OBJECT,
+	S_SPACE,
+	S_OBJECTS,
+	S_NAME,
+	S_TYPE,
+	S_SHAPE,
+	S_WIDTH,
+	S_DEPTH,
+	S_HEIGHT,
+	S_CONDITION,
+	S_LOCATION,
+	S_MATERIAL,
 };
 
 enum token_type {
 	T_OPEN,
 	T_CLOSE,
 	T_STRING,
-	T_IDENTIFIER,
+	T_SYMBOL,
 	T_NUMBER,
 };
 
@@ -120,8 +120,8 @@ static int push_token_data(struct cursor *tokens,
 		tokdebug(")");
 		break; /* nothing to write after these tokens */
 
-	case T_IDENTIFIER:
-		tokdebug("I_");
+	case T_SYMBOL:
+		tokdebug("S_");
 
 		/* fallthrough */
 	case T_STRING:
@@ -146,9 +146,9 @@ static int push_token(struct cursor *tokens, enum token_type token)
 	return push_token_data(tokens, token, NULL, 0);
 }
 
-static int push_identifier(struct cursor *tokens, struct tok_str ident)
+static int push_symbol(struct cursor *tokens, struct tok_str symbol)
 {
-	return push_token_data(tokens, T_IDENTIFIER, &ident, sizeof(ident));
+	return push_token_data(tokens, T_SYMBOL, &symbol, sizeof(symbol));
 }
 
 static int push_string(struct cursor *tokens, struct tok_str str)
@@ -157,14 +157,14 @@ static int push_string(struct cursor *tokens, struct tok_str str)
 }
 
 
-static int is_start_ident_char(char c)
+static int is_start_symbol_char(char c)
 {
 	return c >= 'a' && c <= 'z';
 }
 
-static int is_ident_char(char c)
+static int is_symbol_char(char c)
 {
-	return is_start_ident_char(c) || c == '-' || c == '_' ||
+	return is_start_symbol_char(c) || c == '-' || c == '_' ||
 		(c >= '0' && c <= '9');
 }
 
@@ -176,53 +176,53 @@ static int pull_string(struct cursor *cursor, u8 *buf, int buf_len)
 	return 0;
 }
 
-static int pull_identifier(struct cursor *cursor, u8 *buf, int buf_len)
+static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
 {
 	int ok = 1;
 	int chars = 0;
 	u8 c;
 
 	struct cursor temp;
-	struct cursor ident_cursor;
+	struct cursor sym_cursor;
 
 	temp.p = cursor->p;
 	temp.end = cursor->end;
 
-	ident_cursor.p = buf;
-	ident_cursor.end = buf + buf_len;
+	sym_cursor.p = buf;
+	sym_cursor.end = buf + buf_len;
 
 	while (1) {
 		ok = pull_byte(&temp, &c);
 		if (!ok) return 0;
 
 		/* first char should start with a letter */
-		if (chars == 0 && !is_start_ident_char(c)) {
-			cursor->err = TE_IDENT_START_CHAR;
+		if (chars == 0 && !is_start_symbol_char(c)) {
+			cursor->err = TE_SYM_START_CHAR;
 			cursor->err_data.c = c;
 			return 0;
 		} else if (chars > 0 && isspace(c)) {
 			/* we're done here */
 			break;
-		} else if (chars > 0 && !is_ident_char(c)) {
-			cursor->err = TE_IDENT_CHAR;
+		} else if (chars > 0 && !is_symbol_char(c)) {
+			cursor->err = TE_SYM_CHAR;
 			cursor->err_data.c = c;
 			return 0;
 		}
 
-		ok = push_byte(&ident_cursor, c);
+		ok = push_byte(&sym_cursor, c);
 		chars++;
 
 		if (!ok) {
-			cursor->err = TE_IDENT_OVERFLOW;
+			cursor->err = TE_SYM_OVERFLOW;
 			return 0;
 		}
 	}
 
-	ok = push_byte(&ident_cursor, 0);
+	ok = push_byte(&sym_cursor, 0);
 	chars++;
 
 	if (!ok) {
-		cursor->err = TE_IDENT_OVERFLOW;
+		cursor->err = TE_SYM_OVERFLOW;
 		return 0;
 	}
 
@@ -239,11 +239,11 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 	struct tok_str str;
 	int ok;
 
-	ok = pull_identifier(cursor, buf, sizeof(buf));
+	ok = pull_symbol(cursor, buf, sizeof(buf));
 	if (ok) {
 		str.len = ok;
 		str.data = buf;
-		ok = push_identifier(tokens, str);
+		ok = push_symbol(tokens, str);
 		if (!ok) {
 			printf("read_and_push_atom identifier push overflow\n");
 			return 0;
