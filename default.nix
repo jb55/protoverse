@@ -2,5 +2,5 @@
 with pkgs;
 stdenv.mkDerivation {
   name = "project";
-  nativeBuildInputs = [ ];
+  nativeBuildInputs = [ gdb ];
 }

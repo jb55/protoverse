@@ -1,17 +1,13 @@
-(group (name "\"Satoshi's\" Citadel")
-  (room (name "Foyer")
-        (shape rectangle) 
-        (width 10) (depth 10) (height 100)
-        (group
-           (table
-              (id welcome-desk)
-              (name "Welcome desk")
-              (material marble)
-              (condition clean new)
-              (width 1) (depth 2) (height 1)
-              (location center)
-           )
-        )
-  )
-)
+(room (name "\"Satoshi's\" Citadel")
+      (shape rectangle) 
+      (width 10) (depth 10) (height 100)
+      (group
+         (table
+            (id welcome-desk)
+            (name "Welcome desk")
+            (material marble)
+            (condition clean new)
+            (width 1) (depth 2) (height 1)
+            (location center)
+         )))
 

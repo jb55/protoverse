@@ -22,14 +22,6 @@ enum known_symbol {
 	S_MATERIAL,
 };
 
-enum token_type {
-	T_OPEN,
-	T_CLOSE,
-	T_STRING,
-	T_SYMBOL,
-	T_NUMBER,
-};
-
 enum tok_state {
 	TS_OPEN,
 	TS_CLOSE,
@@ -64,14 +56,47 @@ enum attribute_type {
 	A_LOCATION,
 };
 
+union attr_data {
+	struct {
+		const char *ptr;
+		int len;
+	} str;
+	int integer;
+	double fdouble;
+};
+
+struct attribute {
+	union attr_data data;
+	enum attribute_type type;
+};
+
 struct cell {
 	int attributes[MAX_ATTRIBUTES];
+	struct cell *child;
 
 	const char *name;
 	const char *id;
 
 	enum cell_type type;
 };
+
+static void copy_cursor(struct cursor *src, struct cursor *dest)
+{
+	dest->start = src->start;
+	dest->p = src->p;
+	dest->end = src->end;
+	dest->err = src->err;
+	memcpy(&dest->err_data, &src->err_data, sizeof(src->err_data));
+}
+
+void make_cursor(u8 *start, u8 *end, struct cursor *cursor)
+{
+	cursor->start = start;
+	cursor->p = start;
+	cursor->end = end;
+	cursor->err = TE_OK;
+	memset(&cursor->err_data, 0, sizeof(cursor->err_data));
+}
 
 static const char *token_error_string(enum token_error err)
 {
@@ -83,20 +108,44 @@ static const char *token_error_string(enum token_error err)
 	case TE_SYM_CHAR: return "invalid symbol character";
 	case TE_NUM_CHAR: return "invalid number character";
 	case TE_SYM_OVERFLOW: return "symbol push overflow";
+	case TE_UNEXPECTED_TOKEN: return "unexpected token during parsing";
 	}
 
 	return "unknown";
 }
 
-static void print_token_error(struct cursor *cursor)
+static const char *token_type_str(enum token_type type)
 {
-	int is_chr_data = cursor->err == TE_STR_START_CHAR ||
-		cursor->err == TE_SYM_START_CHAR ||
-		cursor->err == TE_NUM_START_CHAR ||
-		cursor->err == TE_NUM_CHAR ||
-		cursor->err == TE_SYM_CHAR;
-	printf("\nerror: %s %.*s\n", token_error_string(cursor->err),
-	       is_chr_data?1:0, (char*)&cursor->err_data.c);
+	switch (type) {
+	case T_OPEN: return "(";
+	case T_CLOSE: return ")";
+	case T_SYMBOL: return "symbol";
+	case T_STRING: return "string";
+	case T_NUMBER: return "number";
+	}
+
+	return "unknown";
+}
+
+void print_token_error(struct cursor *cursor)
+{
+	if (cursor->err == TE_UNEXPECTED_TOKEN) {
+		printf("error: %s: expected '%s' got '%s'\n",
+		       token_error_string(cursor->err),
+		       token_type_str(cursor->err_data.parse.expected),
+		       token_type_str(cursor->err_data.parse.got));
+	}
+	else {
+		int is_chr_data = cursor->err == TE_STR_START_CHAR ||
+			cursor->err == TE_SYM_START_CHAR ||
+			cursor->err == TE_NUM_START_CHAR ||
+			cursor->err == TE_NUM_CHAR ||
+			cursor->err == TE_SYM_CHAR;
+
+		printf("\nerror: %s %.*s\n", token_error_string(cursor->err),
+		       is_chr_data?1:0, (char*)&cursor->err_data.c);
+	}
+
 }
 
 static int pull_byte(struct cursor *cursor, u8 *c)
@@ -255,20 +304,16 @@ static int pull_escaped_char(struct cursor *cursor, u8 *c)
 	return 2;
 }
 
-static int pull_number(struct cursor *cursor, u8 *buf, int buf_len)
+static int pull_number(struct cursor *cursor, u8 **start)
 {
 	int ok = 1;
 	int chars = 0;
 	u8 c;
 
 	struct cursor temp;
-	struct cursor buf_cursor;
 
-	temp.p = cursor->p;
+	*start = temp.p = cursor->p;
 	temp.end = cursor->end;
-
-	buf_cursor.p = buf;
-	buf_cursor.end = buf + buf_len;
 
 	while (1) {
 		ok = pull_byte(&temp, &c);
@@ -287,7 +332,7 @@ static int pull_number(struct cursor *cursor, u8 *buf, int buf_len)
 			cursor->err_data.c = c;
 			return 0;
 		} 
-		ok = push_byte(&buf_cursor, c);
+	
 		chars++;
 
 		if (!ok) {
@@ -295,9 +340,6 @@ static int pull_number(struct cursor *cursor, u8 *buf, int buf_len)
 			return 0;
 		}
 	}
-
-	ok = push_byte(&buf_cursor, 0);
-	chars++;
 
 	if (!ok) {
 		cursor->err = TE_SYM_OVERFLOW;
@@ -311,24 +353,22 @@ static int pull_number(struct cursor *cursor, u8 *buf, int buf_len)
 	return chars;
 }
 
-static int pull_string(struct cursor *cursor, u8 *buf, int buf_len)
+static int pull_string(struct cursor *cursor, u8 **start)
 {
 	int ok = 1;
 	int chars = 0;
 	u8 c;
 
 	struct cursor temp;
-	struct cursor buf_cursor;
 
-	temp.p = cursor->p;
-	temp.end = cursor->end;
-
-	buf_cursor.p = buf;
-	buf_cursor.end = buf + buf_len;
+	copy_cursor(cursor, &temp);
 
 	while (1) {
 		ok = pull_escaped_char(&temp, &c);
 		if (!ok) return 0;
+
+		if (chars == 1)
+			*start = temp.p;
 
 		/* first char should start with a letter */
 		if (chars == 0 && c != '"') {
@@ -345,7 +385,6 @@ static int pull_string(struct cursor *cursor, u8 *buf, int buf_len)
 			break;
 		}
 
-		ok = push_byte(&buf_cursor, c);
 		chars++;
 
 		if (!ok) {
@@ -354,35 +393,28 @@ static int pull_string(struct cursor *cursor, u8 *buf, int buf_len)
 		}
 	}
 
-	ok = push_byte(&buf_cursor, 0);
-	chars++;
-
 	if (!ok) {
 		cursor->err = TE_SYM_OVERFLOW;
 		return 0;
 	}
 
-	cursor->p = temp.p;
-	cursor->err = TE_OK;
+	copy_cursor(&temp, cursor);
 
 	/* remove the first counted quote since this was not pushed */
 	return --chars;
 }
 
-static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
+static int pull_symbol(struct cursor *cursor, u8 **start)
 {
 	int ok = 1;
 	int chars = 0;
 	u8 c;
 
 	struct cursor temp;
-	struct cursor sym_cursor;
 
-	temp.p = cursor->p;
-	temp.end = cursor->end;
+	copy_cursor(cursor, &temp);
 
-	sym_cursor.p = buf;
-	sym_cursor.end = buf + buf_len;
+	*start = temp.p;
 
 	while (1) {
 		ok = pull_byte(&temp, &c);
@@ -402,7 +434,6 @@ static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
 			return 0;
 		}
 
-		ok = push_byte(&sym_cursor, c);
 		chars++;
 
 		if (!ok) {
@@ -411,31 +442,27 @@ static int pull_symbol(struct cursor *cursor, u8 *buf, int buf_len)
 		}
 	}
 
-	ok = push_byte(&sym_cursor, 0);
-	chars++;
-
 	if (!ok) {
 		cursor->err = TE_SYM_OVERFLOW;
 		return 0;
 	}
 
-	cursor->p = temp.p-1;
-	cursor->end = temp.end;
-	cursor->err = TE_OK;
+	temp.p--;
+	copy_cursor(&temp, cursor);
 
 	return chars;
 }
 
 static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 {
-	u8 buf[255];
 	struct tok_str str;
+	u8 *start;
 	int ok;
 
-	ok = pull_symbol(cursor, buf, sizeof(buf));
+	ok = pull_symbol(cursor, &start);
 	if (ok) {
 		str.len  = ok;
-		str.data = buf;
+		str.data = start;
 		ok = push_symbol(tokens, str);
 		if (!ok) {
 			printf("read_and_push_atom identifier push overflow\n");
@@ -444,11 +471,10 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 		return 1;
 	}
 
-
-	ok = pull_string(cursor, buf, sizeof(buf));
+	ok = pull_string(cursor, &start);
 	if (ok) {
 		str.len  = ok;
-		str.data = buf;
+		str.data = start;
 		ok = push_string(tokens, str);
 		if (!ok) {
 			printf("read_and_push_atom string push overflow\n");
@@ -457,10 +483,11 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 		return 1;
 	}
 
-	ok = pull_number(cursor, buf, sizeof(buf));
+	start = cursor->p;
+	ok = pull_number(cursor, &start);
 	if (ok) {
 		str.len  = ok;
-		str.data = buf;
+		str.data = start;
 		ok = push_number(tokens, str);
 		if (!ok) {
 			printf("read_and_push_atom number push overflow\n");
@@ -474,26 +501,23 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 	return 0;
 }
 
-int tokenize_space(u8 *buf, int buf_size, u8 *token_buf,
-		   int token_buf_size, struct cursor *tokens)
+int tokenize_cells(u8 *buf, int buf_size, struct cursor *tokens)
 {
 	enum tok_state state;
 	struct cursor cursor;
 	/* u8 *start = buf; */
+	u8 *token_buf = tokens->p;
 	u8 c;
 	int ok;
 
 	cursor.p = buf;
 	cursor.end = buf + buf_size;
 
-	tokens.p = token_buf;
-	tokens.end = token_buf + token_buf_size;
-
 	state = TS_OPEN;
 
 	while (cursor.p < cursor.end) {
 		ok = pull_byte(&cursor, &c);
-		if (!ok) return 0;
+		if (!ok) break;
 
 		if (state == TS_OPEN) {
 			if (isspace(c))
@@ -533,6 +557,10 @@ int tokenize_space(u8 *buf, int buf_size, u8 *token_buf,
 		}
 	}
 
+	/* just seal the buffer now since we won't be adding to it */
+	tokens->end = tokens->p;
+	tokens->p = token_buf;
+
 	return 1;
 }
 
@@ -566,20 +594,22 @@ static int pull_token(struct cursor *tokens,
 	u8 c;
 	int ok;
 
-	temp.p = tokens->p;
-	temp.end = tokens->end;
+	copy_cursor(tokens, &temp);
 
 	ok = pull_byte(&temp, &c);
 	if (!ok) return 0;
 
 	type = (enum token_type)c;
 
-	ok = pull_token_data(&temp, token, type);
-	if (!ok) {
+	if (type != expected_type) {
+		tokens->err = TE_UNEXPECTED_TOKEN;
+		tokens->err_data.parse.expected = expected_type;
+		tokens->err_data.parse.got = type;
 		return 0;
 	}
 
-	if (type != expected_type) {
+	ok = pull_token_data(&temp, token, type);
+	if (!ok) {
 		return 0;
 	}
 
@@ -612,24 +642,108 @@ static int pull_symbol_token(struct cursor *tokens, struct tok_str *str)
 	return 1;
 }
 
-int parse_cell(struct cursor *tokens)
+static int memeq(void *buf, int buf_len, void *buf2, int buf2_len)
 {
-	struct cursor tokens;
+	if (buf_len != buf2_len)
+		return 0;
+
+	return memcmp(buf, buf2, buf_len) == 0;
+}
+
+static int parse_attribute(struct cursor *tokens, struct attribute attr)
+{
+	int ok;
+	struct tok_str str;
+
+	(void)attr;
+
+	ok = pull_symbol_token(tokens, &str);
+	if (!ok) return 0;
+	return 1;
+}
+
+
+/*
+static int parse_attributes(struct cursor *tokens,
+			    struct cursor *attributes,
+			    struct cursor *attr_ids,
+			    int *parsed_attrs)
+{
+	int ok;
+	struct attribute attr;
+
+	while (1) {
+		ok = parse_attribute(tokens, &attr);
+
+		if (!ok) return 0;
+
+		push_data()
+	}
+
+	ok = pull_symbol_token(tokens, &str);
+	if (!ok) return 0;
+}
+*/
+
+/*
+static int parse_group(struct cursor *tokens)
+{
+	int ok;
+	struct tok_str str;
+
+	ok = pull_symbol_token(tokens, &str);
+	if (!ok) return 0;
+
+	if (!memeq(str.data, str.len, "group", 5))
+		return 0;
+
+	parse_attributes(&tokens)
+}
+*/
+
+static int parse_room(struct cursor *tokens, struct cell *cell)
+{
+	int ok;
+	struct tok_str str;
+
+	ok = pull_symbol_token(tokens, &str);
+	if (!ok) return 0;
+
+	if (!memeq(str.data, str.len, "room", 5))
+		return 0;
+
+	parse_attributes(&tokens);
+
+	parse_object(tokens, cell);
+}
+
+static int parse_cell(struct cursor *tokens, struct cell *cell)
+{
+	int ok;
+	/* ok = parse_group(tokens, cell); */
+	/* if (ok) return 1; */
+
+	ok = parse_room(tokens, cell);
+	if (ok) return 1;
+
+	/* ok = parse_object(tokens, cell); */
+
+	return 0;
+}
+
+int parse_cells(struct cursor *tokens)
+{
 	struct tok_str str;
 	int ok;
 
-	tokens.p = token_buf;
-	tokens.end = token_buf + token_buf_size;
-
 	while (1) {
-		ok = pull_open(&tokens);
+		ok = pull_open(tokens);
 		if (!ok) return 0;
 
 		/* cell identifier */
-		ok = pull_symbol_token(&tokens, &str);
+		ok = parse_cell(tokens, &str);
 		if (!ok) return 0;
 
-		printf("got token: %.*s\n", str.len, str.data);
 	}
 
 
