@@ -6,6 +6,7 @@
 int main(int argc, const char *argv[]) {
 	static u8 file_buf[4096];
 	static u8 token_buf[2048];
+	struct cursor tokens;
 
 	size_t count;
 
@@ -16,7 +17,10 @@ int main(int argc, const char *argv[]) {
 		return 1;
 	}
 
-	tokenize_space(file_buf, count, token_buf, sizeof(token_buf));
+	tokenize_space(file_buf, count, token_buf, sizeof(token_buf),
+		       &tokens);
+
+	parse_cell(&tokens);
 
 	return 0;
 }

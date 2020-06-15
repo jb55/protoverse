@@ -5,16 +5,7 @@
 #include <ctype.h>
 
 #define tokdebug printf
-
-enum token_error {
-	TE_OK,
-	TE_STR_START_CHAR,
-	TE_NUM_START_CHAR,
-	TE_SYM_START_CHAR,
-	TE_SYM_CHAR,
-	TE_NUM_CHAR,
-	TE_SYM_OVERFLOW,
-};
+#define MAX_ATTRIBUTES 16
 
 enum known_symbol {
 	S_OBJECT,
@@ -54,13 +45,32 @@ union token {
 	struct tok_str str;
 };
 
-struct cursor {
-	u8 *p;
-	u8 *end;
-	enum token_error err;
-	union {
-		char c;
-	} err_data;
+
+enum cell_type {
+	C_GROUP,
+	C_SPACE,
+	C_OBJECT,
+};
+
+enum attribute_type {
+	A_ID,
+	A_TYPE,
+	A_NAME,
+	A_MATERIAL,
+	A_CONDITION,
+	A_WIDTH,
+	A_DEPTH,
+	A_HEIGHT,
+	A_LOCATION,
+};
+
+struct cell {
+	int attributes[MAX_ATTRIBUTES];
+
+	const char *name;
+	const char *id;
+
+	enum cell_type type;
 };
 
 static const char *token_error_string(enum token_error err)
@@ -113,6 +123,18 @@ static int push_byte(struct cursor *cursor, u8 c)
 	return 1;
 }
 
+
+static int pull_data(struct cursor *cursor, u8 *data, int len)
+{
+	if (cursor->p + len >= cursor->end) {
+		return 0;
+	}
+
+	memcpy(data, cursor->p, len);
+	cursor->p += len;
+
+	return 1;
+}
 
 static int push_data(struct cursor *cursor, u8 *data, int len)
 {
@@ -452,11 +474,11 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 	return 0;
 }
 
-int tokenize_space(u8 *buf, int buf_size, u8 *token_buf, int token_buf_size)
+int tokenize_space(u8 *buf, int buf_size, u8 *token_buf,
+		   int token_buf_size, struct cursor *tokens)
 {
 	enum tok_state state;
 	struct cursor cursor;
-	struct cursor tokens;
 	/* u8 *start = buf; */
 	u8 c;
 	int ok;
@@ -482,7 +504,7 @@ int tokenize_space(u8 *buf, int buf_size, u8 *token_buf, int token_buf_size)
 				return 0;
 			}
 
-			push_token(&tokens, T_OPEN);
+			push_token(tokens, T_OPEN);
 			state = TS_ATOM;
 			continue;
 		}
@@ -491,18 +513,18 @@ int tokenize_space(u8 *buf, int buf_size, u8 *token_buf, int token_buf_size)
 				continue;
 
 			if (c == '(') {
-				push_token(&tokens, T_OPEN);
+				push_token(tokens, T_OPEN);
 				continue;
 			}
 
 			if (c == ')') {
-				push_token(&tokens, T_CLOSE);
+				push_token(tokens, T_CLOSE);
 				continue;
 			}
 
 			cursor.p--;
 			/* printf("\nat %c (%ld) before reading atom\n", *cursor.p, cursor.p - start); */
-			ok = read_and_push_atom(&cursor, &tokens);
+			ok = read_and_push_atom(&cursor, tokens);
 			if (!ok) {
 				print_token_error(&cursor);
 				return 0;
@@ -510,6 +532,106 @@ int tokenize_space(u8 *buf, int buf_size, u8 *token_buf, int token_buf_size)
 
 		}
 	}
+
+	return 1;
+}
+
+
+static int pull_token_data(struct cursor *tokens, union token *token,
+			   enum token_type type)
+{
+	int ok;
+
+	switch (type) {
+	case T_OPEN:
+	case T_CLOSE:
+		return 1;
+	case T_STRING:
+	case T_SYMBOL:
+	case T_NUMBER:
+		ok = pull_data(tokens, (void*)&token->str,
+			       sizeof(struct tok_str));
+		return ok;
+	}
+
+	return 0;
+}
+
+static int pull_token(struct cursor *tokens,
+		      union token *token,
+		      enum token_type expected_type)
+{
+	struct cursor temp;
+	enum token_type type;
+	u8 c;
+	int ok;
+
+	temp.p = tokens->p;
+	temp.end = tokens->end;
+
+	ok = pull_byte(&temp, &c);
+	if (!ok) return 0;
+
+	type = (enum token_type)c;
+
+	ok = pull_token_data(&temp, token, type);
+	if (!ok) {
+		return 0;
+	}
+
+	if (type != expected_type) {
+		return 0;
+	}
+
+	tokens->p = temp.p;
+
+	return 1;
+}
+
+/*
+ *  PARSING
+ */
+
+
+static int pull_open(struct cursor *tokens)
+{
+	return pull_token(tokens, NULL, T_OPEN);
+}
+
+static int pull_symbol_token(struct cursor *tokens, struct tok_str *str)
+{
+	union token token;
+	int ok;
+
+	ok = pull_token(tokens, &token, T_SYMBOL);
+	if (!ok) return 0;
+
+	str->data = token.str.data;
+	str->len = token.str.len;
+
+	return 1;
+}
+
+int parse_cell(struct cursor *tokens)
+{
+	struct cursor tokens;
+	struct tok_str str;
+	int ok;
+
+	tokens.p = token_buf;
+	tokens.end = token_buf + token_buf_size;
+
+	while (1) {
+		ok = pull_open(&tokens);
+		if (!ok) return 0;
+
+		/* cell identifier */
+		ok = pull_symbol_token(&tokens, &str);
+		if (!ok) return 0;
+
+		printf("got token: %.*s\n", str.len, str.data);
+	}
+
 
 	return 1;
 }
