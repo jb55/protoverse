@@ -28,11 +28,6 @@ enum tok_state {
 	TS_ATOM,
 };
 
-struct tok_str {
-	u8 *data;
-	int len;
-};
-
 union token {
 	struct tok_str str;
 };
@@ -54,6 +49,11 @@ enum attribute_type {
 	A_DEPTH,
 	A_HEIGHT,
 	A_LOCATION,
+	A_SHAPE,
+};
+
+enum shape {
+	SHAPE_RECTANGLE
 };
 
 union attr_data {
@@ -61,6 +61,7 @@ union attr_data {
 		const char *ptr;
 		int len;
 	} str;
+	enum shape shape;
 	int integer;
 	double fdouble;
 };
@@ -109,6 +110,7 @@ static const char *token_error_string(enum token_error err)
 	case TE_NUM_CHAR: return "invalid number character";
 	case TE_SYM_OVERFLOW: return "symbol push overflow";
 	case TE_UNEXPECTED_TOKEN: return "unexpected token during parsing";
+	case TE_UNEXPECTED_SYMBOL: return "unexpected symbol during parsing";
 	}
 
 	return "unknown";
@@ -132,8 +134,16 @@ void print_token_error(struct cursor *cursor)
 	if (cursor->err == TE_UNEXPECTED_TOKEN) {
 		printf("error: %s: expected '%s' got '%s'\n",
 		       token_error_string(cursor->err),
-		       token_type_str(cursor->err_data.parse.expected),
-		       token_type_str(cursor->err_data.parse.got));
+		       token_type_str(cursor->err_data.lex.expected),
+		       token_type_str(cursor->err_data.lex.got));
+	}
+	else if (cursor->err == TE_UNEXPECTED_SYMBOL) {
+		printf("error: %s: expected symbol '%.*s' got '%.*s'\n",
+		       token_error_string(cursor->err),
+		       cursor->err_data.symbol.expected.len,
+		       cursor->err_data.symbol.expected.data,
+		       cursor->err_data.symbol.got.len,
+		       cursor->err_data.symbol.got.data);
 	}
 	else {
 		int is_chr_data = cursor->err == TE_STR_START_CHAR ||
@@ -603,8 +613,8 @@ static int pull_token(struct cursor *tokens,
 
 	if (type != expected_type) {
 		tokens->err = TE_UNEXPECTED_TOKEN;
-		tokens->err_data.parse.expected = expected_type;
-		tokens->err_data.parse.got = type;
+		tokens->err_data.lex.expected = expected_type;
+		tokens->err_data.lex.got = type;
 		return 0;
 	}
 
@@ -650,40 +660,127 @@ static int memeq(void *buf, int buf_len, void *buf2, int buf2_len)
 	return memcmp(buf, buf2, buf_len) == 0;
 }
 
-static int parse_attribute(struct cursor *tokens, struct attribute attr)
+static int symbol_eq(struct tok_str *a, char *b, int b_len)
+{
+	return memeq(a->data, a->len, b, b_len);
+}
+
+static int parse_symbol(struct cursor *tokens, const char *match)
 {
 	int ok;
 	struct tok_str str;
 
-	(void)attr;
-
 	ok = pull_symbol_token(tokens, &str);
-	if (!ok) return 0;
+
+	if (!ok)
+		return 0;
+
+	if (!symbol_eq(&str, match, strlen(match)))
+		return 0;
+
 	return 1;
 }
 
-
-/*
-static int parse_attributes(struct cursor *tokens,
-			    struct cursor *attributes,
-			    struct cursor *attr_ids,
-			    int *parsed_attrs)
+static int parse_symbol(struct cursor *tokens, const char *match)
 {
 	int ok;
+	struct tok_str str;
+
+	ok = pull_symbol_token(tokens, &str);
+
+	if (!ok)
+		return 0;
+
+	if (!symbol_eq(&str, match, strlen(match)))
+		return 0;
+
+	return 1;
+}
+
+static int parse_shape_attr(struct cursor *tokens, struct attribute *attr)
+{
+	struct cursor temp;
+	struct tok_str str;
+	int ok;
+
+	copy_cursor(tokens, &temp);
+
+	ok = parse_symbol(&temp, "shape");
+	if (!ok)
+		return 0;
+
+	ok = pull_symbol_token(&temp, &str);
+
+	if (!ok)
+		return 0;
+
+	if (symbol_eq(&str, "rectangle", 9)) {
+		attr->data.shape = SHAPE_RECTANGLE;
+	}
+	else {
+		tokens->err = TE_UNEXPECTED_SYMBOL;
+		tokens->err_data.symbol.expected.data = (u8*)"rectangle";
+		tokens->err_data.symbol.expected.len = 9;
+		tokens->err_data.symbol.got.data = str.data;
+		tokens->err_data.symbol.got.len = str.len;
+	}
+
+	copy_cursor(&temp, tokens);
+
+	return 1;
+}
+
+static int parse_attribute(struct cursor *tokens, struct attribute *attr)
+{
+	int ok;
+
+	ok = parse_shape_attr(tokens, attr);
+	if (ok) return 1;
+
+	return 0;
+}
+
+
+static int cursor_index(struct cursor *cursor, int elem_size)
+{
+	return (cursor->p - cursor->start) / elem_size;
+}
+
+static int parse_attributes(struct cursor *tokens,
+			    struct cursor *attributes,
+			    int attr_inds[2])
+{
+	int ok;
+	int index = -1;
+	int first = 1;
+	int parsed = 1;
 	struct attribute attr;
 
 	while (1) {
 		ok = parse_attribute(tokens, &attr);
 
-		if (!ok) return 0;
+		if (!ok) break;
 
-		push_data()
+		index = cursor_index(attributes, sizeof(attr));
+
+		ok = push_data(attributes, (u8*)&attr, sizeof(attr));
+		if (!ok) {
+			printf("attribute data overflow\n");
+			return 0;
+		}
+
+		parsed++;
+
+		if (first) {
+			first = 0;
+			attr_inds[0] = index;
+		}
 	}
 
-	ok = pull_symbol_token(tokens, &str);
-	if (!ok) return 0;
+	attr_inds[1] = index;
+
+	return parsed;
 }
-*/
 
 /*
 static int parse_group(struct cursor *tokens)
@@ -701,29 +798,45 @@ static int parse_group(struct cursor *tokens)
 }
 */
 
-static int parse_room(struct cursor *tokens, struct cell *cell)
+static int parse_room(struct cursor *tokens,
+		      struct cursor *attributes,
+		      struct cell *cell)
 {
 	int ok;
+	struct cursor temp;
 	struct tok_str str;
+	int attr_inds[2];
 
-	ok = pull_symbol_token(tokens, &str);
+	(void)cell;
+
+	copy_cursor(tokens, &temp);
+
+	ok = pull_symbol_token(&temp, &str);
 	if (!ok) return 0;
 
-	if (!memeq(str.data, str.len, "room", 5))
+	if (!symbol_eq(&str, "room", 4))
 		return 0;
 
-	parse_attributes(&tokens);
+	/* 0 attributes returns 1, 1 attrs returns 2, etc
+	   0 is a real error, an attribute push overflow */
+	ok = parse_attributes(&temp, attributes, attr_inds);
+	if (!ok)
+		return 0;
 
-	parse_object(tokens, cell);
+	/* parse_object(tokens, cell); */
+
+	return 1;
 }
 
-static int parse_cell(struct cursor *tokens, struct cell *cell)
+static int parse_cell(struct cursor *tokens,
+		      struct cursor *attributes,
+		      struct cell *cell)
 {
 	int ok;
 	/* ok = parse_group(tokens, cell); */
 	/* if (ok) return 1; */
 
-	ok = parse_room(tokens, cell);
+	ok = parse_room(tokens, attributes, cell);
 	if (ok) return 1;
 
 	/* ok = parse_object(tokens, cell); */
@@ -731,9 +844,9 @@ static int parse_cell(struct cursor *tokens, struct cell *cell)
 	return 0;
 }
 
-int parse_cells(struct cursor *tokens)
+int parse_cells(struct cursor *tokens, struct cursor *attributes)
 {
-	struct tok_str str;
+	struct cell cell;
 	int ok;
 
 	while (1) {
@@ -741,7 +854,7 @@ int parse_cells(struct cursor *tokens)
 		if (!ok) return 0;
 
 		/* cell identifier */
-		ok = parse_cell(tokens, &str);
+		ok = parse_cell(tokens, attributes, &cell);
 		if (!ok) return 0;
 
 	}
