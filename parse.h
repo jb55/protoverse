@@ -76,14 +76,18 @@ struct cursor {
 	union cursor_err err_data;
 };
 
+union number {
+	int integer;
+	double fdouble;
+};
+
 union attr_data {
 	struct {
 		const char *ptr;
 		int len;
 	} str;
 	enum shape shape;
-	int integer;
-	double fdouble;
+	union number number;
 };
 
 struct attribute {

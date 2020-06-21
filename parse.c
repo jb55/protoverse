@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 #define tokdebug printf
 
@@ -54,6 +55,25 @@ static int cursor_index(struct cursor *cursor, int elem_size)
 {
 	return (cursor->p - cursor->start) / elem_size;
 }
+
+static const char *attr_type_str(enum attribute_type type)
+{
+	switch (type) {
+	case A_CONDITION: return "condition";
+	case A_DEPTH: return "depth";
+	case A_HEIGHT: return "height";
+	case A_ID: return "id";
+	case A_LOCATION: return "location";
+	case A_MATERIAL: return "material";
+	case A_NAME: return "name";
+	case A_SHAPE: return "shape";
+	case A_TYPE: return "type";
+	case A_WIDTH: return "width";
+	}
+
+	return "unknown";
+}
+
 
 static const char *token_error_string(enum token_error err)
 {
@@ -325,7 +345,7 @@ static int pull_number(struct cursor *cursor, u8 **start)
 	return chars;
 }
 
-static int pull_string(struct cursor *cursor, u8 **start)
+static int pull_string(struct cursor *cursor, u8 **start, int *len)
 {
 	int ok = 1;
 	int chars = 0;
@@ -336,11 +356,12 @@ static int pull_string(struct cursor *cursor, u8 **start)
 	copy_cursor(cursor, &temp);
 
 	while (1) {
+		if (chars == 0)
+			*start = temp.p+1;
+
 		ok = pull_escaped_char(&temp, &c);
 		if (!ok) return 0;
 
-		if (chars == 1)
-			*start = temp.p;
 
 		/* first char should start with a letter */
 		if (chars == 0 && c != '"') {
@@ -357,8 +378,6 @@ static int pull_string(struct cursor *cursor, u8 **start)
 			break;
 		}
 
-		chars++;
-
 		if (!ok) {
 			cursor->err = TE_SYM_OVERFLOW;
 			return 0;
@@ -373,7 +392,8 @@ static int pull_string(struct cursor *cursor, u8 **start)
 	copy_cursor(&temp, cursor);
 
 	/* remove the first counted quote since this was not pushed */
-	return --chars;
+	*len = temp.p - *start - 1;
+	return 1;
 }
 
 static int pull_symbol(struct cursor *cursor, u8 **start)
@@ -429,7 +449,7 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 {
 	struct tok_str str;
 	u8 *start;
-	int ok;
+	int ok, len;
 
 	ok = pull_symbol(cursor, &start);
 	if (ok) {
@@ -443,9 +463,9 @@ static int read_and_push_atom(struct cursor *cursor, struct cursor *tokens)
 		return 1;
 	}
 
-	ok = pull_string(cursor, &start);
+	ok = pull_string(cursor, &start, &len);
 	if (ok) {
-		str.len  = ok;
+		str.len  = len;
 		str.data = start;
 		ok = push_string(tokens, str);
 		if (!ok) {
@@ -600,7 +620,7 @@ static int pull_token(struct cursor *tokens,
 	return 1;
 }
 
-
+/*
 static void print_token_data(union token *token, enum token_type type)
 {
 	switch (type) {
@@ -619,6 +639,7 @@ static void print_token_data(union token *token, enum token_type type)
 		return;
 	}
 }
+
 
 static void print_current_token(struct cursor *tokens)
 {
@@ -646,6 +667,7 @@ static void print_current_token(struct cursor *tokens)
 	print_token_data(&token, type);
 	printf("\n");
 }
+*/
 
 /*
  *  PARSING
@@ -662,16 +684,54 @@ static int parse_close(struct cursor *tokens)
 	return pull_token(tokens, NULL, T_CLOSE);
 }
 
-static int pull_symbol_token(struct cursor *tokens, struct tok_str *str)
+static int parse_stringy_token(struct cursor *tokens,
+			       struct tok_str *str,
+			       enum token_type type)
 {
 	union token token;
 	int ok;
 
-	ok = pull_token(tokens, &token, T_SYMBOL);
+	ok = pull_token(tokens, &token, type);
 	if (!ok) return 0;
 
 	str->data = token.str.data;
 	str->len = token.str.len;
+
+	return 1;
+}
+
+
+static int pull_symbol_token(struct cursor *tokens, struct tok_str *str)
+{
+	return parse_stringy_token(tokens, str, T_SYMBOL);
+}
+
+static int pull_string_token(struct cursor *tokens, struct tok_str *str)
+{
+	return parse_stringy_token(tokens, str, T_STRING);
+}
+
+static int pull_number_token(struct cursor *tokens, struct tok_str *str)
+{
+	return parse_stringy_token(tokens, str, T_NUMBER);
+}
+
+static int parse_number(struct cursor *tokens, union number *number)
+{
+	int ok;
+	struct tok_str str;
+	char *end;
+
+	ok = pull_number_token(tokens, &str);
+	if (!ok) return 0;
+
+	/* TODO: float numbers */
+	number->integer = strtol((char*)str.data, &end, 10);
+
+	if ((u8*)end != (str.data + str.len)) {
+		printf("parse_number failed\n");
+		return 0;
+	}
 
 	return 1;
 }
@@ -714,6 +774,8 @@ static int parse_shape(struct cursor *tokens, struct attribute *attr)
 	ok = parse_symbol(&temp, "shape");
 	if (!ok) return 0;
 
+	attr->type = A_SHAPE;
+
 	ok = pull_symbol_token(&temp, &str);
 	if (!ok) return 0;
 
@@ -732,19 +794,55 @@ static int parse_shape(struct cursor *tokens, struct attribute *attr)
 	return 1;
 }
 
-static int parse_name(struct cursor *tokens, struct attribute *name)
+static int parse_name(struct cursor *tokens, struct attribute *attr)
 {
 	struct cursor temp;
+	struct tok_str str;
+	int ok;
 
 	copy_cursor(tokens, &temp);
 
 	ok = parse_symbol(&temp, "name");
 	if (!ok) return 0;
 
-	ok = parse_string(&temp);
+	ok = pull_string_token(&temp, &str);
 	if (!ok) return 0;
 
-	name->
+	attr->data.str.ptr = (char*)str.data;
+	attr->data.str.len = str.len;
+	attr->type = A_NAME;
+
+	printf("attribute name %.*s\n", str.len, str.data);
+
+	copy_cursor(&temp, tokens);
+
+	return 1;
+}
+
+static int parse_size(struct cursor *tokens, struct attribute *attr)
+{
+	struct cursor temp;
+	struct tok_str str;
+	int ok;
+
+	copy_cursor(tokens, &temp);
+
+	ok = pull_symbol_token(&temp, &str);
+	if (!ok) return 0;
+
+	if (symbol_eq(&str, "height", 6)) {
+		attr->type = A_HEIGHT;
+	} else if (symbol_eq(&str, "width", 5)) {
+		attr->type = A_WIDTH;
+	} else if (symbol_eq(&str, "depth", 5)) {
+		attr->type = A_DEPTH;
+	}
+
+	ok = parse_number(&temp, &attr->data.number);
+	if (!ok) return 0;
+
+	printf("attribute %s %d\n", attr_type_str(attr->type),
+	       attr->data.number.integer);
 
 	copy_cursor(&temp, tokens);
 
@@ -767,6 +865,9 @@ static int parse_attribute(struct cursor *tokens, struct attribute *attr)
 	ok = parse_name(&temp, attr);
 	if (ok) goto close;
 
+	ok = parse_size(&temp, attr);
+	if (ok) goto close;
+
 	return 0;
  close:
 	ok = parse_close(&temp);
@@ -776,7 +877,6 @@ static int parse_attribute(struct cursor *tokens, struct attribute *attr)
 
 	return 1;
 }
-
 
 static int parse_attributes(struct cursor *tokens,
 			    struct cursor *attributes,
@@ -794,8 +894,8 @@ static int parse_attributes(struct cursor *tokens,
 		if (!ok) break;
 
 		index = cursor_index(attributes, sizeof(attr));
-
 		ok = push_data(attributes, (u8*)&attr, sizeof(attr));
+
 		if (!ok) {
 			printf("attribute data overflow\n");
 			return 0;
@@ -856,12 +956,9 @@ static int parse_room(struct cursor *tokens,
 	ok = parse_attributes(&temp, attributes, attr_inds);
 	if (!ok) return 0;
 
-	printf("got here %d %d\n", attr_inds[0], attr_inds[1]);
-
-	for (i = attr_inds[0]; i < attr_inds[1]; i++) {
+	for (i = attr_inds[0]; i <= attr_inds[1]; i++) {
 		ok = push_int(&cell_attr_inds, i);
 		if (!ok) return 0;
-		printf("pushed attr %d\n", i);
 	}
 
 	/* parse_object(tokens, cell); */
@@ -889,6 +986,8 @@ int parse_cells(struct cursor *tokens, struct cursor *attributes)
 {
 	struct cell cell;
 	int ok;
+
+	memset(&cell, 0, sizeof(cell));
 
 	while (1) {
 		ok = parse_open(tokens);
