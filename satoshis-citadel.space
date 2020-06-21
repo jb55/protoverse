@@ -1,5 +1,5 @@
-(room (name "\"Satoshi's\" Citadel")
-      (shape rectangle) 
+(room (shape rectangle) 
+      (name "\"Satoshi's\" Citadel")
       (width 10) (depth 10) (height 100)
       (group
          (table

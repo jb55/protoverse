@@ -8,3 +8,9 @@ protoverse: protoverse.c $(OBJS)
 
 clean:
 	rm -f protoverse *.o
+
+TAGS: fake
+	etags *.c *.h > $@
+
+
+.PHONY: fake
