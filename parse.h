@@ -5,6 +5,7 @@
 #include "typedefs.h"
 
 #define MAX_ATTRIBUTES 24
+#define MAX_CHILDREN 24
 
 enum token_error {
 	TE_OK,
@@ -96,9 +97,10 @@ struct attribute {
 };
 
 struct cell {
-	int attributes[MAX_ATTRIBUTES];
+	u16 attributes[MAX_ATTRIBUTES];
+	u16 children[MAX_CHILDREN];
 	int n_attributes;
-	struct cell *child;
+	int n_children;
 
 	const char *name;
 	const char *id;
@@ -109,7 +111,7 @@ struct cell {
 
 void make_cursor(u8 *start, u8 *end, struct cursor *cursor);
 int tokenize_cells(unsigned char *buf, int buf_size, struct cursor *tokens);
-int parse_cells(struct cursor *tokens, struct cursor *attributes);
+int parse_cells(struct cursor *tokens, struct cursor *attributes, struct cursor *cells);
 void print_token_error(struct cursor *cursor);
 
 #endif /* PROTOVERSE_PARSE_H */
