@@ -22,6 +22,7 @@ enum token_error {
 enum cell_type {
 	C_GROUP,
 	C_SPACE,
+	C_ROOM,
 	C_OBJECT,
 };
 
@@ -56,17 +57,19 @@ struct tok_str {
 	int len;
 };
 
-union cursor_err {
-	struct {
-		struct tok_str expected;
-		struct tok_str got;
-	} symbol;
-	struct {
-		enum token_type expected;
-		enum token_type got;
-	} lex;
+struct cursor_err {
+	union {
+		struct {
+			struct tok_str expected;
+			struct tok_str got;
+		} symbol;
+		struct {
+			enum token_type expected;
+			enum token_type got;
+		} lex;
+		char c;
+	};
 	int pos;
-	char c;
 };
 
 struct cursor {
@@ -74,7 +77,7 @@ struct cursor {
 	u8 *p;
 	u8 *end;
 	enum token_error err;
-	union cursor_err err_data;
+	struct cursor_err err_data;
 };
 
 union number {
@@ -102,16 +105,23 @@ struct cell {
 	int n_attributes;
 	int n_children;
 
-	const char *name;
-	const char *id;
-
 	enum cell_type type;
+};
+
+struct parser {
+	struct cursor *tokens;
+	struct cursor *attributes;
+	struct cursor *cells;
 };
 
 
 void make_cursor(u8 *start, u8 *end, struct cursor *cursor);
 int tokenize_cells(unsigned char *buf, int buf_size, struct cursor *tokens);
-int parse_cells(struct cursor *tokens, struct cursor *attributes, struct cursor *cells);
+int parse_cell(struct parser *parser, u16 *index);
 void print_token_error(struct cursor *cursor);
+int cursor_index(struct cursor *cursor, int elem_size);
+const char *cell_type_str(enum cell_type);
+int cell_name(struct cursor *attributes, struct cell *cell, const char** name, int *len);
+struct cell *get_cell(struct cursor *cells, u16 index);
 
 #endif /* PROTOVERSE_PARSE_H */

@@ -14,9 +14,22 @@ int main(int argc, const char *argv[]) {
 	struct cursor attributes;
 	struct cursor cells;
 
+	struct cell *cell;
+
+	struct parser parser;
+
 	size_t count;
 	const char *space;
-	int ok;
+	int ok, i;
+	u16 root;
+	int ncells;
+	const char *name;
+	int name_len;
+
+	parser.tokens = &tokens;
+	parser.attributes = &attributes;
+	parser.cells = &cells;
+
 
 	make_cursor(cells_buf, cells_buf + sizeof(cells_buf), &cells);
 	make_cursor(attrs_buf, attrs_buf + sizeof(attrs_buf), &attributes);
@@ -40,9 +53,19 @@ int main(int argc, const char *argv[]) {
 
 	assert(tokens.p == token_buf);
 
-	ok = parse_cells(&tokens, &attributes, &cells);
+	ok = parse_cell(&parser, &root);
 	if (!ok) {
 		print_token_error(&tokens);
+	}
+
+	ncells = cursor_index(&cells, sizeof(struct cell));
+	printf("ncells %d\n", ncells);
+	for (i = 0; i < ncells; i++) {
+		name_len = 0;
+		cell = get_cell(&cells, i);
+		cell_name(&attributes, cell, &name, &name_len);
+		printf("cell %s %.*s\n",
+		       cell_type_str(cell->type), name_len, name);
 	}
 
 	return 0;
