@@ -65,7 +65,9 @@ int main(int argc, const char *argv[]) {
 		cell = get_cell(&cells, i);
 		cell_name(&attributes, cell, &name, &name_len);
 		printf("cell %s %.*s\n",
-		       cell_type_str(cell->type), name_len, name);
+		       cell->type == C_OBJECT
+		       ? object_type_str(cell->obj_type)
+		       : cell_type_str(cell->type), name_len, name);
 	}
 
 	return 0;

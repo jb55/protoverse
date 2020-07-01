@@ -6,6 +6,7 @@
 
 #define MAX_ATTRIBUTES 24
 #define MAX_CHILDREN 24
+#define ARRAY_SIZE(x) ((int)(sizeof(x) / sizeof((x)[0])))
 
 enum token_error {
 	TE_OK,
@@ -24,6 +25,12 @@ enum cell_type {
 	C_SPACE,
 	C_ROOM,
 	C_OBJECT,
+};
+
+enum object_type {
+	O_TABLE,
+	O_DOOR,
+	O_LIGHT,
 };
 
 enum attribute_type {
@@ -106,6 +113,7 @@ struct cell {
 	int n_children;
 
 	enum cell_type type;
+	enum object_type obj_type;
 };
 
 struct parser {
@@ -121,6 +129,7 @@ int parse_cell(struct parser *parser, u16 *index);
 void print_token_error(struct cursor *cursor);
 int cursor_index(struct cursor *cursor, int elem_size);
 const char *cell_type_str(enum cell_type);
+const char *object_type_str(enum object_type);
 int cell_name(struct cursor *attributes, struct cell *cell, const char** name, int *len);
 struct cell *get_cell(struct cursor *cells, u16 index);
 

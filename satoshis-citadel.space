@@ -9,6 +9,10 @@
             (condition clean)
             (condition new)
             (width 1) (depth 2) (height 1)
-            (location center)
-         )))
+            (location center))
+         (table
+           (name "main")
+           (light (name "lamp")))
+       )
+)
 

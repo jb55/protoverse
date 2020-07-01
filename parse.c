@@ -1076,6 +1076,17 @@ static int push_cell_child(struct cell *parent, u16 child_ind)
 	return 1;
 }
 
+const char *object_type_str(enum object_type type)
+{
+	switch (type) {
+	case O_DOOR: return "door";
+	case O_TABLE: return "table";
+	case O_LIGHT: return "light";
+	}
+
+	return "unknown";
+}
+
 const char *cell_type_str(enum cell_type type)
 {
 	switch (type) {
@@ -1088,22 +1099,19 @@ const char *cell_type_str(enum cell_type type)
 	return "unknown";
 }
 
-static int parse_cell_attrs(struct parser *parser, u16 *index, enum cell_type type)
+static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell)
 {
 	struct cursor cell_attr_inds;
 	struct cell *child_cell;
-	struct cell cell;
 	u16 child_cell_index;
 	int attr_inds[2] = {0};
 	int i, ok;
 
-	init_cell(&cell);
-
-	make_cursor((u8*)cell.attributes,
-		    (u8*)cell.attributes + sizeof(cell.attributes),
+	make_cursor((u8*)cell->attributes,
+		    (u8*)cell->attributes + sizeof(cell->attributes),
 		    &cell_attr_inds);
 
-	cell_attr_inds.p += cell.n_attributes * sizeof(cell.attributes[0]);
+	cell_attr_inds.p += cell->n_attributes * sizeof(cell->attributes[0]);
 
 	/* 0 attributes returns 1, 1 attrs returns 2, etc
 	   0 is a real error, an attribute push overflow */
@@ -1114,7 +1122,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, enum cell_type ty
 
 	for (i = attr_inds[0]; i <= attr_inds[1]; i++) {
 		ok = push_int(&cell_attr_inds, i);
-		cell.n_attributes++;
+		cell->n_attributes++;
 		if (!ok) return 0;
 	}
 
@@ -1125,7 +1133,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, enum cell_type ty
 		child_cell = get_cell(parser->cells, child_cell_index);
 		if (!child_cell) return 0;
 		tokdebug("parse_cell_attrs push child cell\n");
-		ok = push_cell_child(&cell, child_cell_index);
+		ok = push_cell_child(cell, child_cell_index);
 		if (!ok) return 0;
 
 	}
@@ -1133,8 +1141,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, enum cell_type ty
 		tokdebug("no child cells found\n");
 	}
 
-	cell.type = type;
-	ok = push_cell(parser->cells, &cell, index);
+	ok = push_cell(parser->cells, cell, index);
 	if (!ok) return 0;
 
 	return 1;
@@ -1148,16 +1155,20 @@ static int parse_cell_by_name(struct parser *parser,
 	int ok;
 	struct cursor temp;
 	struct parser backtracked;
+	struct cell cell;
 	u16 ind;
 
+	init_cell(&cell);
 	copy_cursor(parser->tokens, &temp);
 	copy_parser(parser, &backtracked);
 	backtracked.tokens = &temp;
 
+	cell.type = type;
+
 	ok = parse_symbol(&temp, name);
 	if (!ok) return 0;
 
-	ok = parse_cell_attrs(&backtracked, &ind, type);
+	ok = parse_cell_attrs(&backtracked, &ind, &cell);
 	if (!ok) return 0;
 
 	if (index)
@@ -1226,9 +1237,55 @@ static int parse_group(struct parser *parser, u16 *index)
 	return ncells;
 }
 
+struct object_def {
+	const char *name;
+	enum object_type type;
+};
+
+static struct object_def object_defs[] = {
+	{"table", O_TABLE},
+	{"door", O_DOOR},
+	{"light", O_LIGHT},
+};
+
 static int parse_object(struct parser *parser, u16 *index)
 {
-	return parse_cell_by_name(parser, index, "table", C_OBJECT);
+	int ok, i;
+	struct cursor temp;
+	struct parser backtracked;
+	struct tok_str str;
+	struct object_def *def;
+	struct cell cell;
+	u16 ind;
+
+	init_cell(&cell);
+	cell.type = C_OBJECT;
+
+	copy_cursor(parser->tokens, &temp);
+	copy_parser(parser, &backtracked);
+	backtracked.tokens = &temp;
+
+	ok = pull_symbol_token(&temp, &str);
+	if (!ok) return 0;
+
+	for (i = 0; i < ARRAY_SIZE(object_defs); i++) {
+		def = &object_defs[i];
+
+		if (symbol_eq(&str, def->name, strlen(def->name))) {
+			cell.obj_type = def->type;
+			break;
+		}
+	}
+
+	ok = parse_cell_attrs(&backtracked, &ind, &cell);
+	if (!ok) return 0;
+
+	if (index)
+		*index = ind;
+
+	copy_cursor(&temp, parser->tokens);
+
+	return 1;
 }
 
 int parse_cell(struct parser *parser, u16 *index)
