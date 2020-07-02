@@ -4,6 +4,48 @@
 
 #include <assert.h>
 
+static void print_all_cells(struct parser *parser)
+{
+	struct cell *cell;
+	int i, j;
+	int ncells;
+
+	ncells = cursor_index(parser->cells, sizeof(struct cell));
+	printf("ncells %d\n", ncells);
+	for (i = 0; i < ncells; i++) {
+		cell = get_cell(parser->cells, i);
+		print_cell(parser->attributes, cell);
+
+		for (j = 0; j < cell->n_children; j++) {
+			cell = get_cell(parser->cells, cell->children[j]);
+			assert(cell);
+			printf("  ");
+			print_cell(parser->attributes, cell);
+		}
+	}
+}
+
+static int print_cell_tree(struct parser *parser, u16 root, int depth)
+{
+	int i;
+
+	struct cell *cell = get_cell(parser->cells, root);
+	if (!cell) return 0;
+
+	for (i = 0; i < depth; i++) {
+		printf("  ");
+	}
+
+	print_cell(parser->attributes, cell);
+
+	for (i = 0; i < cell->n_children; i++) {
+		print_cell_tree(parser, cell->children[i], depth+1);
+	}
+
+
+	return 1;
+}
+
 int main(int argc, const char *argv[]) {
 	static u8 file_buf[4096];
 	static u8 token_buf[2048];
@@ -14,17 +56,12 @@ int main(int argc, const char *argv[]) {
 	struct cursor attributes;
 	struct cursor cells;
 
-	struct cell *cell;
-
 	struct parser parser;
 
 	size_t count;
 	const char *space;
-	int ok, i;
+	int ok;
 	u16 root;
-	int ncells;
-	const char *name;
-	int name_len;
 
 	parser.tokens = &tokens;
 	parser.attributes = &attributes;
@@ -58,17 +95,8 @@ int main(int argc, const char *argv[]) {
 		print_token_error(&tokens);
 	}
 
-	ncells = cursor_index(&cells, sizeof(struct cell));
-	printf("ncells %d\n", ncells);
-	for (i = 0; i < ncells; i++) {
-		name_len = 0;
-		cell = get_cell(&cells, i);
-		cell_name(&attributes, cell, &name, &name_len);
-		printf("cell %s %.*s\n",
-		       cell->type == C_OBJECT
-		       ? object_type_str(cell->obj_type)
-		       : cell_type_str(cell->type), name_len, name);
-	}
+	print_cell_tree(&parser, root, 0);
 
 	return 0;
 }
+

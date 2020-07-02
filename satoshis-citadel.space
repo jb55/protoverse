@@ -1,18 +1,17 @@
-(room (shape rectangle) 
-      (name "\"Satoshi's\" Citadel")
+(room (shape rectangle)
+      (name "Satoshi's Citadel")
       (width 10) (depth 10) (height 100)
       (group
          (table
             (id welcome-desk)
-            (name "Welcome desk")
+            (name "welcome desk")
             (material marble)
             (condition clean)
             (condition new)
             (width 1) (depth 2) (height 1)
-            (location center))
-         (table
-           (name "main")
-           (light (name "lamp")))
-       )
-)
-
+            (location center)
+            (light (name "desk")))
+         (chair (id welcome-desk-chair)
+                (name  "welcome desk chair"))
+         (light (location ceiling)
+                (shape round))))

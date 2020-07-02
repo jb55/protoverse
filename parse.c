@@ -99,6 +99,25 @@ static const char *token_error_string(enum token_error err)
 	return "unknown";
 }
 
+void print_cell(struct cursor *attributes, struct cell *cell)
+{
+	const char *name;
+	int name_len;
+
+	if (cell->type == C_GROUP) {
+		printf("---\n");
+		return;
+	}
+
+	cell_name(attributes, cell, &name, &name_len);
+
+	printf("%.*s%s%s\n", name_len, name, name_len > 0?" ":"",
+	       cell->type == C_OBJECT
+	       ? object_type_str(cell->obj_type)
+	       : cell_type_str(cell->type));
+}
+
+
 static const char *token_type_str(enum token_type type)
 {
 	switch (type) {
@@ -1024,16 +1043,9 @@ static int push_cell(struct cursor *cells, struct cell *cell, u16 *cell_index)
 	int index;
 	int ok;
 
-	static int group_count = 0;
+	index = cursor_index(cells, sizeof(*cell));
 
-	if (cell->type == C_GROUP)
-		group_count++;
-
-	assert(group_count != 2);
-
-	tokdebug("push_cell %s\n", cell_type_str(cell->type));
-
-	index = cursor_index(cells, sizeof(cell));
+	tokdebug("push_cell %d (%zu) %s\n", index, cells->p - cells->start, cell_type_str(cell->type));
 
 	if (index > 0xFFFF) {
 		/* TODO: actual error message here */
@@ -1280,6 +1292,7 @@ static int parse_object(struct parser *parser, u16 *index)
 	ok = parse_cell_attrs(&backtracked, &ind, &cell);
 	if (!ok) return 0;
 
+	assert(ind < 10);
 	if (index)
 		*index = ind;
 

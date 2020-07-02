@@ -6,6 +6,9 @@ OBJS = io.o parse.o
 protoverse: protoverse.c $(OBJS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
+libprotoverse.a: $(OBJS)
+	ar rcs $@ $^
+
 clean:
 	rm -f protoverse *.o
 

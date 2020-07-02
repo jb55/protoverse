@@ -124,6 +124,7 @@ struct parser {
 
 
 void make_cursor(u8 *start, u8 *end, struct cursor *cursor);
+void print_cell(struct cursor *attributes, struct cell *cell);
 int tokenize_cells(unsigned char *buf, int buf_size, struct cursor *tokens);
 int parse_cell(struct parser *parser, u16 *index);
 void print_token_error(struct cursor *cursor);
