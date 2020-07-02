@@ -30,6 +30,7 @@ enum cell_type {
 
 enum object_type {
 	O_TABLE,
+	O_CHAIR,
 	O_DOOR,
 	O_LIGHT,
 };
@@ -48,7 +49,9 @@ enum attribute_type {
 };
 
 enum shape {
-	SHAPE_RECTANGLE
+	SHAPE_RECTANGLE,
+	SHAPE_CIRCLE,
+	SHAPE_SQUARE,
 };
 
 

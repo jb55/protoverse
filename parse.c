@@ -39,7 +39,6 @@ union token {
 };
 
 
-#ifdef DEBUG
 static const char *attr_type_str(enum attribute_type type)
 {
 	switch (type) {
@@ -57,7 +56,6 @@ static const char *attr_type_str(enum attribute_type type)
 
 	return "unknown";
 }
-#endif
 
 static const char *token_error_string(enum token_error err)
 {
@@ -90,6 +88,55 @@ void make_token_cursor(u8 *start, u8 *end, struct token_cursor *cursor)
 	memset(&cursor->err_data, 0, sizeof(cursor->err_data));
 }
 
+static struct attribute *get_attr(struct cursor *attributes, u16 index)
+{
+	return (struct attribute*)index_cursor(attributes, index,
+					       sizeof(struct attribute));
+}
+
+static const char *shape_str(enum shape shape)
+{
+	switch (shape) {
+	case SHAPE_RECTANGLE: return "rectangle";
+	case SHAPE_CIRCLE: return "circle";
+	case SHAPE_SQUARE: return "square";
+	}
+
+	return "unknown";
+}
+
+static void print_attribute(struct attribute *attr)
+{
+	printf("%s ", attr_type_str(attr->type));
+
+	switch (attr->type) {
+	case A_NAME:
+		printf("%.*s ", attr->data.str.len, attr->data.str.ptr);
+	        break;
+	case A_SHAPE:
+		printf("%s ", shape_str(attr->data.shape));
+		break;
+	default:
+		break;
+		/* TODO: finish print_attribute */
+	}
+
+}
+
+static void print_attributes(struct cursor *attributes, struct cell *cell)
+{
+	int i;
+	struct attribute *attr;
+
+	printf("%d attrs: ", cell->n_attributes);
+	for (i = 0; i < cell->n_attributes; i++) {
+		attr = get_attr(attributes, cell->attributes[i]);
+		assert(attr);
+		printf("[%d]", cell->attributes[i]);
+		print_attribute(attr);
+	}
+}
+
 void print_cell(struct cursor *attributes, struct cell *cell)
 {
 	const char *name;
@@ -102,10 +149,13 @@ void print_cell(struct cursor *attributes, struct cell *cell)
 
 	cell_name(attributes, cell, &name, &name_len);
 
-	printf("%.*s%s%s\n", name_len, name, name_len > 0?" ":"",
+	printf("%.*s%s%s ", name_len, name, name_len > 0?" ":"",
 	       cell->type == C_OBJECT
 	       ? object_type_str(cell->obj_type)
 	       : cell_type_str(cell->type));
+
+	print_attributes(attributes, cell);
+	printf("\n");
 }
 
 
@@ -619,16 +669,16 @@ static void print_token_data(union token *token, enum token_type type)
 }
 
 
-static void print_current_token(struct cursor *tokens)
+static void print_current_token(struct token_cursor *tokens)
 {
-	struct cursor temp;
+	struct token_cursor temp;
 	enum token_type type;
 	union token token;
 	int ok;
 
 	copy_token_cursor(tokens, &temp);
 
-	ok = pull_token_type(&temp, &type);
+	ok = pull_token_type(&temp.c, &type);
 	if (!ok) {
 		printf("could not peek token\n");
 		return;
@@ -636,7 +686,7 @@ static void print_current_token(struct cursor *tokens)
 
 	printf("current token: %s ", token_type_str(type));
 
-	ok = pull_token_data(&temp, &token, type);
+	ok = pull_token_data(&temp.c, &token, type);
 	if (!ok) {
 		printf("[could not peek token data]\n");
 		return;
@@ -710,12 +760,6 @@ static int parse_number(struct token_cursor *tokens, union number *number)
 }
 
 
-static struct attribute *get_attr(struct cursor *attributes, u16 index)
-{
-	return (struct attribute*)index_cursor(attributes, index,
-					       sizeof(struct attribute));
-}
-
 struct cell *get_cell(struct cursor *cells, u16 index)
 {
 	return (struct cell*)index_cursor(cells, index,
@@ -768,6 +812,10 @@ static int parse_shape(struct token_cursor *tokens, struct attribute *attr)
 
 	if (symbol_eq(&str, "rectangle", 9)) {
 		attr->data.shape = SHAPE_RECTANGLE;
+	} else if (symbol_eq(&str, "circle", 6)) {
+		attr->data.shape = SHAPE_CIRCLE;
+	} else if (symbol_eq(&str, "square", 6)) {
+		attr->data.shape = SHAPE_SQUARE;
 	} else {
 		tokens->err = TE_UNEXPECTED_SYMBOL;
 		tokens->err_data.symbol.expected.data = (u8*)"rectangle";
@@ -1014,6 +1062,7 @@ const char *object_type_str(enum object_type type)
 	switch (type) {
 	case O_DOOR: return "door";
 	case O_TABLE: return "table";
+	case O_CHAIR: return "chair";
 	case O_LIGHT: return "light";
 	}
 
@@ -1054,9 +1103,9 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 	tokdebug("parse_attributes %d\n", ok);
 
 	for (i = attr_inds[0]; i <= attr_inds[1]; i++) {
-		ok = push_int(&cell_attr_inds, i);
-		cell->n_attributes++;
+		ok = push_u16(&cell_attr_inds, i);
 		if (!ok) return 0;
+		cell->n_attributes++;
 	}
 
 	/* Optional child cell */
@@ -1092,6 +1141,7 @@ static int parse_cell_by_name(struct parser *parser,
 	u16 ind;
 
 	init_cell(&cell);
+
 	copy_token_cursor(parser->tokens, &temp);
 	copy_parser(parser, &backtracked);
 	backtracked.tokens = &temp;
@@ -1177,6 +1227,7 @@ struct object_def {
 
 static struct object_def object_defs[] = {
 	{"table", O_TABLE},
+	{"chair", O_CHAIR},
 	{"door", O_DOOR},
 	{"light", O_LIGHT},
 };

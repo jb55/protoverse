@@ -12,6 +12,6 @@
             (location center)
             (light (name "desk")))
          (chair (id welcome-desk-chair)
-                (name  "welcome desk chair"))
+                (name "welcome desk"))
          (light (location ceiling)
-                (shape round))))
+                (shape circle))))
