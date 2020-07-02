@@ -1,2 +1,4 @@
 *.o
 /protoverse
+/libprotoverse.a
+/TAGS

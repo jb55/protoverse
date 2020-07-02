@@ -52,7 +52,7 @@ int main(int argc, const char *argv[]) {
 	static u8 attrs_buf[4096];
 	static u8 cells_buf[sizeof(struct cell) * 1024];
 
-	struct cursor tokens;
+	struct token_cursor tokens;
 	struct cursor attributes;
 	struct cursor cells;
 
@@ -70,7 +70,7 @@ int main(int argc, const char *argv[]) {
 
 	make_cursor(cells_buf, cells_buf + sizeof(cells_buf), &cells);
 	make_cursor(attrs_buf, attrs_buf + sizeof(attrs_buf), &attributes);
-	make_cursor(token_buf, token_buf + sizeof(token_buf), &tokens);
+	make_token_cursor(token_buf, token_buf + sizeof(token_buf), &tokens);
 
 	space = argc == 2 ? argv[1] : "satoshis-citadel.space";
 	ok = read_file(space, file_buf, sizeof(file_buf), &count);
@@ -88,7 +88,7 @@ int main(int argc, const char *argv[]) {
 		return 1;
 	}
 
-	assert(tokens.p == token_buf);
+	assert(tokens.c.p == token_buf);
 
 	ok = parse_cell(&parser, &root);
 	if (!ok) {

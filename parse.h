@@ -3,6 +3,7 @@
 #define PROTOVERSE_PARSE_H
 
 #include "typedefs.h"
+#include "cursor.h"
 
 #define MAX_ATTRIBUTES 24
 #define MAX_CHILDREN 24
@@ -63,30 +64,6 @@ struct tok_str {
 	u8 *data;
 	int len;
 };
-
-struct cursor_err {
-	union {
-		struct {
-			struct tok_str expected;
-			struct tok_str got;
-		} symbol;
-		struct {
-			enum token_type expected;
-			enum token_type got;
-		} lex;
-		char c;
-	};
-	int pos;
-};
-
-struct cursor {
-	u8 *start;
-	u8 *p;
-	u8 *end;
-	enum token_error err;
-	struct cursor_err err_data;
-};
-
 union number {
 	int integer;
 	double fdouble;
@@ -116,19 +93,39 @@ struct cell {
 	enum object_type obj_type;
 };
 
+struct cursor_err {
+	union {
+		struct {
+			struct tok_str expected;
+			struct tok_str got;
+		} symbol;
+		struct {
+			enum token_type expected;
+			enum token_type got;
+		} lex;
+		char c;
+	};
+	int pos;
+};
+
+struct token_cursor {
+	struct cursor c;
+	enum token_error err;
+	struct cursor_err err_data;
+};
+
 struct parser {
-	struct cursor *tokens;
+	struct token_cursor *tokens;
 	struct cursor *attributes;
 	struct cursor *cells;
 };
 
 
-void make_cursor(u8 *start, u8 *end, struct cursor *cursor);
 void print_cell(struct cursor *attributes, struct cell *cell);
-int tokenize_cells(unsigned char *buf, int buf_size, struct cursor *tokens);
+int tokenize_cells(unsigned char *buf, int buf_size, struct token_cursor *tokens);
+void make_token_cursor(u8 *start, u8 *end, struct token_cursor *cursor);
 int parse_cell(struct parser *parser, u16 *index);
-void print_token_error(struct cursor *cursor);
-int cursor_index(struct cursor *cursor, int elem_size);
+void print_token_error(struct token_cursor *cursor);
 const char *cell_type_str(enum cell_type);
 const char *object_type_str(enum object_type);
 int cell_name(struct cursor *attributes, struct cell *cell, const char** name, int *len);
