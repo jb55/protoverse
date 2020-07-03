@@ -88,7 +88,7 @@ void make_token_cursor(u8 *start, u8 *end, struct token_cursor *cursor)
 	memset(&cursor->err_data, 0, sizeof(cursor->err_data));
 }
 
-static struct attribute *get_attr(struct cursor *attributes, u16 index)
+struct attribute *get_attr(struct cursor *attributes, u16 index)
 {
 	return (struct attribute*)index_cursor(attributes, index,
 					       sizeof(struct attribute));
@@ -154,7 +154,7 @@ void print_cell(struct cursor *attributes, struct cell *cell)
 	       ? object_type_str(cell->obj_type)
 	       : cell_type_str(cell->type));
 
-	print_attributes(attributes, cell);
+	/* print_attributes(attributes, cell); */
 	printf("\n");
 }
 
@@ -931,11 +931,11 @@ static int parse_attribute(struct token_cursor *tokens, struct attribute *attr)
 		goto close;
 	}
 
-	ok = parse_str_attr(&temp, attr, "material", A_MATERIAL, T_SYMBOL);
+	ok = parse_str_attr(&temp, attr, "material", A_MATERIAL, T_STRING);
 	if (ok) goto close;
 
 	/* TODO: parse multiple conditions */
-	ok = parse_str_attr(&temp, attr, "condition", A_CONDITION, T_SYMBOL);
+	ok = parse_str_attr(&temp, attr, "condition", A_CONDITION, T_STRING);
 	if (ok) goto close;
 
 	ok = parse_str_attr(&temp, attr, "location", A_LOCATION, T_SYMBOL);

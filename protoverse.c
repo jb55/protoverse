@@ -1,6 +1,7 @@
 
 #include "io.h"
 #include "parse.h"
+#include "describe.h"
 
 #include <assert.h>
 
@@ -46,38 +47,34 @@ static int print_cell_tree(struct parser *parser, u16 root, int depth)
 	return 1;
 }
 
-int main(int argc, const char *argv[]) {
+static int parse_file(struct parser *parser, const char *filename, u16 *root)
+{
+	/* TODO: increase these limits */
 	static u8 file_buf[4096];
 	static u8 token_buf[2048];
-	static u8 attrs_buf[4096];
+	static u8 attrs_buf[sizeof(struct attribute) * 1024];
 	static u8 cells_buf[sizeof(struct cell) * 1024];
 
 	struct token_cursor tokens;
 	struct cursor attributes;
 	struct cursor cells;
 
-	struct parser parser;
-
 	size_t count;
-	const char *space;
 	int ok;
-	u16 root;
 
-	parser.tokens = &tokens;
-	parser.attributes = &attributes;
-	parser.cells = &cells;
-
+	parser->tokens = &tokens;
+	parser->attributes = &attributes;
+	parser->cells = &cells;
 
 	make_cursor(cells_buf, cells_buf + sizeof(cells_buf), &cells);
 	make_cursor(attrs_buf, attrs_buf + sizeof(attrs_buf), &attributes);
 	make_token_cursor(token_buf, token_buf + sizeof(token_buf), &tokens);
 
-	space = argc == 2 ? argv[1] : "satoshis-citadel.space";
-	ok = read_file(space, file_buf, sizeof(file_buf), &count);
+	ok = read_file(filename, file_buf, sizeof(file_buf), &count);
 
 	if (!ok) {
-		printf("failed to load '%s'\n", space);
-		return 1;
+		printf("failed to load '%s'\n", filename);
+		return 0;
 	}
 
 
@@ -85,17 +82,54 @@ int main(int argc, const char *argv[]) {
 
 	if (!ok) {
 		printf("failed to tokenize\n");
-		return 1;
+		return 0;
 	}
 
 	assert(tokens.c.p == token_buf);
 
-	ok = parse_cell(&parser, &root);
+	ok = parse_cell(parser, root);
 	if (!ok) {
 		print_token_error(&tokens);
+		return 0;
 	}
 
+	return 1;
+}
+
+static int describe(struct parser *parser, u16 root_cell)
+{
+	static char strbuf[2048];
+	struct cursor strs;
+	struct cell *cell;
+
+	strbuf[0] = 0;
+
+	cell = get_cell(parser->cells, root_cell);
+
+	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
+
+	describe_cell(cell, parser, &strs);
+
+	printf("\n\ndescription\n-----------\n\n%s\n", strbuf);
+
+	return 1;
+}
+
+int main(int argc, const char *argv[])
+{
+	const char *space;
+	struct parser parser;
+	u16 root;
+	int ok;
+
+	space = argc == 2 ? argv[1] : "satoshis-citadel.space";
+
+	ok = parse_file(&parser, space, &root);
+	if (!ok) return 1;
+
 	print_cell_tree(&parser, root, 0);
+
+	describe(&parser, root);
 
 	return 0;
 }

@@ -133,5 +133,6 @@ const char *cell_type_str(enum cell_type);
 const char *object_type_str(enum object_type);
 int cell_name(struct cursor *attributes, struct cell *cell, const char** name, int *len);
 struct cell *get_cell(struct cursor *cells, u16 index);
+struct attribute *get_attr(struct cursor *attributes, u16 index);
 
 #endif /* PROTOVERSE_PARSE_H */

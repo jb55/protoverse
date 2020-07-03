@@ -21,4 +21,7 @@ int pull_data(struct cursor *cursor, unsigned char *data, int len);
 int pull_byte(struct cursor *cursor, unsigned char *c);
 int push_byte(struct cursor *cursor, unsigned char c);
 
+int push_str(struct cursor *cursor, const char *str);
+int push_sized_str(struct cursor *cursor, const char *str, int len);
+
 #endif

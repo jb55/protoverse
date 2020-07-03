@@ -94,3 +94,14 @@ void *index_cursor(struct cursor *cursor, u16 index, int elem_size)
 
 	return (void*)p;
 }
+
+
+int push_sized_str(struct cursor *cursor, const char *str, int len)
+{
+	return push_data(cursor, (u8*)str, len);
+}
+
+int push_str(struct cursor *cursor, const char *str)
+{
+	return push_data(cursor, (u8*)str, strlen(str));
+}
