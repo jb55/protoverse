@@ -2,6 +2,8 @@
 #include "describe.h"
 #include <assert.h>
 #include <stdio.h>
+#include <ctype.h>
+#include <string.h>
 
 #define ADJ_PUSHED 1
 #define ADJ_NOT_PUSHED 2
@@ -13,6 +15,26 @@ struct describe {
 	struct parser *parsed;
 	struct cursor *strs;
 };
+
+static int push_sized_word(struct cursor *strs, const char *str, int len)
+{
+	int ok;
+
+	if (strs->p-1 >= strs->start && !isspace(*(strs->p-1))) {
+		ok = push_str(strs, " ");
+		if (!ok) return 0;
+	}
+
+	ok = push_sized_str(strs, str, len);
+	if (!ok) return 0;
+
+	return 1;
+}
+
+static int push_word(struct cursor *strs, const char *str)
+{
+	return push_sized_word(strs, str, strlen(str));
+}
 
 static int push_adjective(struct cursor *strs, struct attribute *attr)
 {
@@ -73,7 +95,7 @@ static int push_adjectives(struct describe *desc)
 
 		if (adjs > 0) {
 			if (adjs == adj_count-1)
-				push_str(desc->strs, " and");
+				push_word(desc->strs, "and");
 			else if (adjs != adj_count-1)
 				push_str(desc->strs, ",");
 
@@ -87,29 +109,38 @@ static int push_adjectives(struct describe *desc)
 	return 1;
 }
 
+static int find_attr(struct cursor *attrs, struct cell *cell,
+		     enum attribute_type type, struct attribute **attr)
+{
+	int i;
+
+	for (i = 0; i < cell->n_attributes; i++) {
+		*attr = get_attr(attrs, cell->attributes[i]);
+		assert(*attr);
+
+		if ((*attr)->type == type)
+			return 1;
+	}
+
+	return 0;
+}
+
 static int push_made_of(struct describe *desc)
 {
 	struct attribute *attr;
-	int i, ok;
+	int ok;
 
-	for (i = 0; i < desc->cell->n_attributes; i++) {
-		attr = get_attr(desc->parsed->attributes,
-				desc->cell->attributes[i]);
-		assert(attr);
+	ok = find_attr(desc->parsed->attributes, desc->cell,
+		       A_MATERIAL, &attr);
+	if (!ok) return 2;
 
-		if (attr->type == A_MATERIAL) {
-			ok = push_str(desc->strs, " made of ");
-			if (!ok) return 0;
+	ok = push_word(desc->strs, "made of");
+	if (!ok) return 0;
 
-			ok = push_sized_str(desc->strs,
-					    attr->data.str.ptr,
-					    attr->data.str.len);
-			if (!ok) return 0;
-			return 1;
-		}
-	}
-
-	return 2;
+	ok = push_sized_word(desc->strs, attr->data.str.ptr,
+			       attr->data.str.len);
+	if (!ok) return 0;
+	return 1;
 }
 
 static int push_named(struct describe *desc)
@@ -123,11 +154,34 @@ static int push_named(struct describe *desc)
 	if (name_len == 0)
 		return 1;
 
-	ok = push_str(desc->strs, " named ");
+	ok = push_word(desc->strs, "named");
 	if (!ok) return 0;
 
-	ok = push_sized_str(desc->strs, name, name_len);
+	ok = push_sized_word(desc->strs, name, name_len);
 	if (!ok) return 0;
+
+	return 1;
+}
+
+static int push_shape(struct describe *desc)
+{
+	struct attribute *attr;
+	int ok;
+
+	ok = find_attr(desc->parsed->attributes, desc->cell, A_SHAPE, &attr);
+	if (!ok) return 2;
+
+	switch (attr->data.shape) {
+	case SHAPE_RECTANGLE:
+		push_word(desc->strs, "rectangular");
+		break;
+	case SHAPE_CIRCLE:
+		push_word(desc->strs, "circular");
+		break;
+	case SHAPE_SQUARE:
+		push_word(desc->strs, "square");
+		break;
+	}
 
 	return 1;
 }
@@ -143,7 +197,10 @@ static int describe_room(struct describe *desc)
 	ok = push_adjectives(desc);
 	if (!ok) return 0;
 
-	ok = push_str(desc->strs, " room");
+	ok = push_shape(desc);
+	if (!ok) return 0;
+
+	ok = push_word(desc->strs, "room");
 	if (!ok) return 0;
 
 	ok = push_made_of(desc);
