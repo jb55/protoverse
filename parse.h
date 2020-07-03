@@ -46,6 +46,13 @@ enum attribute_type {
 	A_HEIGHT,
 	A_LOCATION,
 	A_SHAPE,
+	A_STATE,
+};
+
+enum cell_state {
+	STATE_ON,
+	STATE_OFF,
+	STATE_SLEEPING,
 };
 
 enum shape {

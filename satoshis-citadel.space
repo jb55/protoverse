@@ -17,4 +17,6 @@
          (chair (id welcome-desk-chair)
                 (name "fancy"))
          (light (location ceiling)
+                (name "ceiling")
+                (state off)
                 (shape circle))))

@@ -94,10 +94,14 @@ static int push_adjectives(struct describe *desc)
 			continue;
 
 		if (adjs > 0) {
-			if (adjs == adj_count-1)
-				push_word(desc->strs, "and");
-			else if (adjs != adj_count-1)
-				push_str(desc->strs, ",");
+			if (adjs == adj_count-1) {
+				ok = push_word(desc->strs, "and");
+				if (!ok) return 0;
+			}
+			else if (adjs != adj_count-1) {
+				ok = push_str(desc->strs, ",");
+				if (!ok) return 0;
+			}
 
 		}
 
@@ -191,7 +195,7 @@ static int describe_room(struct describe *desc)
 	int ok;
 
 	/* TODO: temp buffers for determining a(n) things */
-	ok = push_str(desc->strs, "a(n)");
+	ok = push_str(desc->strs, "There is a(n)");
 	if (!ok) return 0;
 
 	ok = push_adjectives(desc);
@@ -239,8 +243,18 @@ static int describe_amount(struct describe *desc, int nobjs)
 	return 1;
 }
 
-static int describe_object_name(struct cursor *strs, struct cell *cell)
+static int describe_object_name(struct cursor *strs, struct cursor *attrs, struct cell *cell)
 {
+	int ok;
+	const char *name;
+	int name_len;
+
+	cell_name(attrs, cell, &name, &name_len);
+	if (name_len > 0) {
+		ok = push_sized_word(strs, name, name_len);
+		if (!ok) return 0;
+	}
+
 	return push_word(strs, cell->type == C_OBJECT
 			  ? object_type_str(cell->obj_type)
 			  : cell_type_str(cell->type));
@@ -252,18 +266,6 @@ static int describe_group(struct describe *desc)
 	struct cell *cell;
 
 	nobjs = desc->cell->n_children;
-
-	ok = push_word(desc->strs, "There");
-	if (!ok) return 0;
-
-	if (nobjs == 1) {
-		ok = push_word(desc->strs, "is");
-		if (!ok) return 0;
-	}
-	else {
-		ok = push_word(desc->strs, "are");
-		if (!ok) return 0;
-	}
 
 	ok = describe_amount(desc, nobjs);
 
@@ -299,7 +301,7 @@ static int describe_group(struct describe *desc)
 
 		}
 
-		ok = describe_object_name(desc->strs, cell);
+		ok = describe_object_name(desc->strs, desc->parsed->attributes, cell);
 		if (!ok) return 0;
 	}
 
@@ -351,10 +353,16 @@ int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs
 	ok = describe_cell(cell, parsed, strs);
 	if (!ok) return 0;
 
-	push_str(strs, ".\n");
+	ok = push_str(strs, ".\n");
+	if (!ok) return 0;
 
 	if (cell->n_children == 0)
 		return 1;
+
+	if (cell->type == C_ROOM || cell->type == C_SPACE) {
+		ok = push_word(strs, "It contains");
+		if (!ok) return 0;
+	}
 
 	/* TODO: for each cell ? for now we just care about the group */
 	cell = get_cell(parsed->cells, cell->children[0]);

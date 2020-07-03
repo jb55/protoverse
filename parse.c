@@ -52,6 +52,7 @@ static const char *attr_type_str(enum attribute_type type)
 	case A_SHAPE: return "shape";
 	case A_TYPE: return "type";
 	case A_WIDTH: return "width";
+	case A_STATE: return "state";
 	}
 
 	return "unknown";
@@ -939,6 +940,9 @@ static int parse_attribute(struct token_cursor *tokens, struct attribute *attr)
 	if (ok) goto close;
 
 	ok = parse_str_attr(&temp, attr, "location", A_LOCATION, T_SYMBOL);
+	if (ok) goto close;
+
+	ok = parse_str_attr(&temp, attr, "state", A_STATE, T_SYMBOL);
 	if (ok) goto close;
 
 	ok = parse_size(&temp, attr);
