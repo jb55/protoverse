@@ -212,10 +212,98 @@ static int describe_room(struct describe *desc)
 	return 1;
 }
 
+static int describe_amount(struct describe *desc, int nobjs)
+{
+	int ok;
+
+	if (nobjs == 1) {
+		ok = push_word(desc->strs, "a single");
+		if (!ok) return 0;
+	} else if (nobjs == 2) {
+		ok = push_word(desc->strs, "a couple");
+		if (!ok) return 0;
+	} else if (nobjs == 3) {
+		ok = push_word(desc->strs, "three");
+		if (!ok) return 0;
+	} else if (nobjs == 4) {
+		ok = push_word(desc->strs, "four");
+		if (!ok) return 0;
+	} else if (nobjs == 5) {
+		ok = push_word(desc->strs, "five");
+		if (!ok) return 0;
+	} else {
+		ok = push_word(desc->strs, "many");
+		if (!ok) return 0;
+	}
+
+	return 1;
+}
+
+static int describe_object_name(struct cursor *strs, struct cell *cell)
+{
+	return push_word(strs, cell->type == C_OBJECT
+			  ? object_type_str(cell->obj_type)
+			  : cell_type_str(cell->type));
+}
+
 static int describe_group(struct describe *desc)
 {
-	(void)desc;
-	return 0;
+	int i, ok, nobjs;
+	struct cell *cell;
+
+	nobjs = desc->cell->n_children;
+
+	ok = push_word(desc->strs, "There");
+	if (!ok) return 0;
+
+	if (nobjs == 1) {
+		ok = push_word(desc->strs, "is");
+		if (!ok) return 0;
+	}
+	else {
+		ok = push_word(desc->strs, "are");
+		if (!ok) return 0;
+	}
+
+	ok = describe_amount(desc, nobjs);
+
+	ok = push_word(desc->strs, "object");
+	if (!ok) return 0;
+
+	if (nobjs > 1) {
+		ok = push_str(desc->strs, "s:");
+		if (!ok) return 0;
+	}
+	else {
+		push_str(desc->strs, ":");
+		if (!ok) return 0;
+	}
+
+	ok = push_word(desc->strs, "a");
+	if (!ok) return 0;
+
+	for (i = 0; i < nobjs; i++) {
+		cell = get_cell(desc->parsed->cells,
+				desc->cell->children[i]);
+		assert(cell);
+
+		if (i > 0) {
+			if (i == nobjs-1) {
+				ok = push_word(desc->strs, "and");
+				if (!ok) return 0;
+			}
+			else if (i != nobjs-1) {
+				ok = push_str(desc->strs, ",");
+				if (!ok) return 0;
+			}
+
+		}
+
+		ok = describe_object_name(desc->strs, cell);
+		if (!ok) return 0;
+	}
+
+	return 1;
 }
 
 static int describe_object(struct describe *desc)
@@ -250,4 +338,27 @@ int describe_cell(struct cell *cell, struct parser *parsed, struct cursor *strbu
 	}
 
 	return 1;
+}
+
+
+int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs, int max_depth, int depth)
+{
+	int ok;
+
+	if (depth > max_depth)
+		return 1;
+
+	ok = describe_cell(cell, parsed, strs);
+	if (!ok) return 0;
+
+	push_str(strs, ".\n");
+
+	if (cell->n_children == 0)
+		return 1;
+
+	/* TODO: for each cell ? for now we just care about the group */
+	cell = get_cell(parsed->cells, cell->children[0]);
+	assert(cell);
+
+	return describe_cells(cell, parsed, strs, max_depth, depth+1);
 }

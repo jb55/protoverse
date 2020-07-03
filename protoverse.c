@@ -108,7 +108,7 @@ static int describe(struct parser *parser, u16 root_cell)
 
 	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
 
-	describe_cell(cell, parser, &strs);
+	describe_cells(cell, parser, &strs, 2, 0);
 
 	printf("\n\ndescription\n-----------\n\n%s\n", strbuf);
 
