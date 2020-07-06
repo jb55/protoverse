@@ -2,8 +2,13 @@
 #include "io.h"
 #include "parse.h"
 #include "describe.h"
+#include "serve.h"
+#include "client.h"
 
 #include <assert.h>
+#include <string.h>
+
+#define streq(a, b) strcmp(a,b) == 0
 
 static void print_all_cells(struct parser *parser)
 {
@@ -108,9 +113,20 @@ static int describe(struct parser *parser, u16 root_cell)
 
 	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
 
-	describe_cells(cell, parser, &strs, 2, 0);
+	describe_cells(cell, parser, &strs, 10, 0);
 
 	printf("\n\ndescription\n-----------\n\n%s\n", strbuf);
+
+	return 1;
+}
+
+static int usage(void)
+{
+	printf("usage: protoverse <command> [args]\n\n");
+	printf("   COMMANDS\n\n");
+	printf("       parse file.space\n");
+	printf("       serve file.space\n");
+	printf("       client\n");
 
 	return 1;
 }
@@ -118,18 +134,35 @@ static int describe(struct parser *parser, u16 root_cell)
 int main(int argc, const char *argv[])
 {
 	const char *space;
+	const char *cmd;
 	struct parser parser;
 	u16 root;
 	int ok;
 
-	space = argc == 2 ? argv[1] : "satoshis-citadel.space";
+	if (argc < 2)
+		return usage();
 
-	ok = parse_file(&parser, space, &root);
-	if (!ok) return 1;
+	cmd = argv[1];
 
-	print_cell_tree(&parser, root, 0);
+	if (streq(cmd, "parse")) {
+		if (argc != 3)
+			return usage();
+		space = argv[2];
+		ok = parse_file(&parser, space, &root);
+		if (!ok) return 1;
 
-	describe(&parser, root);
+		print_cell_tree(&parser, root, 0);
+
+		describe(&parser, root);
+	} else if (streq(cmd, "serve")) {
+		if (argc != 3)
+			return usage();
+		space = argv[2];
+		printf("serving protoverse on port 1988...\n");
+		protoverse_serve("127.0.0.1", 1988);
+	} else if (streq(cmd, "client")) {
+		protoverse_connect("127.0.0.1", 1988);
+	}
 
 	return 0;
 }
