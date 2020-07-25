@@ -5,17 +5,18 @@
       (name "Satoshi's Den")
       (width 10) (depth 10) (height 100)
       (group
-         (table
-            (id welcome-desk)
-            (name "welcome desk")
-            (material "marble")
-            (condition "clean")
-            (condition "new")
-            (width 1) (depth 2) (height 1)
-            (location center)
-            (light (name "desk")))
+         (table (id welcome-desk)
+                (name "welcome desk")
+                (material "marble")
+                (condition "clean")
+                (condition "new")
+                (width 1) (depth 2) (height 1)
+                (location center)
+                (light (name "desk")))
+
          (chair (id welcome-desk-chair)
                 (name "fancy"))
+
          (light (location ceiling)
                 (name "ceiling")
                 (state off)
