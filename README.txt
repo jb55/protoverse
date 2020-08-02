@@ -1,0 +1,42 @@
+
+PROTOVERSE
+
+Protoverse is a metaverse protocol. At a high level, protoverse is an
+abstract virtual space. It is designed to be accessible and open to
+everyone. It achieves this by describing the world abstractly like so:
+
+
+    (room (shape rectangle)
+          (condition "clean")
+          (material "gold")
+          (name "Satoshi's Den")
+          (width 10) (depth 10) (height 100)
+          (group
+            (table (id welcome-desk)
+                   (name "welcome desk")
+                   (material "marble")
+                   (condition "new")
+                   (width 1) (depth 2) (height 1)
+                   (light (name "desk")))
+
+            (chair (id welcome-desk-chair)
+                   (name "fancy"))
+
+            (light (location ceiling)
+                   (name "ceiling")
+                   (state off)
+                   (shape circle))))
+
+
+Since this is an abstract description, we can "render" it in many
+different ways. For example, with natural language:
+
+  $ ./protoverse parse example.space
+
+  There is a(n) clean rectangular room made of gold named Satoshi's
+  Den. It contains three objects: a welcome desk table, fancy chair
+  and ceiling light.
+
+This is important for accessibility. If we want the metaverse to be
+open to everyone, we need some way to describe what is going on in
+this abstract space without a visual rendering.
