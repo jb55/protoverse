@@ -1,0 +1,224 @@
+
+#include "net.h"
+#include "cursor.h"
+#include "varint.h"
+
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <stdio.h>
+#include <string.h>
+
+static int push_fetch_packet(struct cursor *c, struct fetch_data_packet *fetch)
+{
+	return push_prefixed_str(c, fetch->path);
+}
+
+/* TODO: CPU-independent encoding */
+static int push_chat_packet(struct cursor *c, struct chat_packet *chat)
+{
+	int ok;
+	ok = push_varint(c, chat->sender);
+	if (!ok) return 0;
+
+	return push_prefixed_str(c, chat->message);
+}
+
+static int pull_chat_packet(struct cursor *c, struct cursor *buf, struct chat_packet *chat)
+{
+	int ok;
+
+	ok = pull_varint(c, &chat->sender);
+	if (!ok) return 0;
+
+	return pull_prefixed_str(c, buf, &chat->message);
+}
+
+static int pull_fetch_packet(struct cursor *c, struct cursor *buf, struct fetch_data_packet *fetch)
+{
+	return pull_prefixed_str(c, buf, &fetch->path);
+}
+
+int send_packet(int sockfd, struct sockaddr *to_addr, int to_addr_len, struct packet *packet)
+{
+	static unsigned char buf[0xFFFF];
+	int ok, len;
+
+	len = push_packet(buf, sizeof(buf), packet);
+	if (!len) return 0;
+
+	ok = sendto(sockfd, buf, len, MSG_CONFIRM, to_addr, to_addr_len);
+
+	if (ok != len) {
+		printf("sendto: sent %d != packet_len %d\n", ok, len);
+		return 0;
+	}
+
+	return 1;
+}
+
+static int push_envelope(struct cursor *cursor, enum packet_type type, int len)
+{
+	int ok;
+	int env_len;
+
+	ok = push_varint(cursor, (int)type);
+	if (!ok) return 0;
+
+	env_len = ok;
+
+	ok = push_varint(cursor, len);
+
+	env_len += ok;
+
+	return env_len;
+}
+
+static int pull_envelope(struct cursor *cursor, enum packet_type *type, int *len)
+{
+	int ok, env_len;
+	ok = pull_varint(cursor, (int*)type);
+	if (!ok) return 0;
+
+	if (*type >= PKT_NUM_TYPES)
+		return 0;
+
+	env_len = ok;
+
+	ok = pull_varint(cursor, len);
+	if (!ok) return 0;
+
+	env_len += ok;
+
+	return env_len;
+}
+
+static int push_packet_data(struct cursor *c, struct packet *packet)
+{
+	switch (packet->type) {
+	case PKT_FETCH_DATA:
+		return push_fetch_packet(c, &packet->data.fetch);
+		break;
+	case PKT_CHAT:
+		return push_chat_packet(c, &packet->data.chat);
+		break;
+	case PKT_NUM_TYPES:
+		return 0;
+	}
+
+	return 0;
+}
+
+int push_packet(unsigned char *buf, int bufsize, struct packet *packet)
+{
+	struct cursor cursor;
+	struct cursor envelope_cursor;
+	int len, ok, envelope_size;
+	envelope_size = VARINT_MAX_LEN * 2;
+
+	make_cursor(buf, buf + envelope_size, &envelope_cursor);
+	make_cursor(buf + envelope_size, buf + bufsize, &cursor);
+
+	ok = push_packet_data(&cursor, packet);
+	if (!ok) return 0;
+
+	len = cursor.p - cursor.start;
+
+	ok = push_envelope(&envelope_cursor, packet->type, len);
+	if (!ok) return 0;
+
+	memmove(buf + ok, cursor.start, len);
+
+	return len + ok;
+}
+
+
+static int pull_packet_data(struct cursor *c, struct cursor *buf,
+			    struct packet *packet, int len)
+{
+	(void)c;
+	(void)len;
+	switch (packet->type) {
+	case PKT_FETCH_DATA:
+		return pull_fetch_packet(c, buf, &packet->data.fetch);
+	case PKT_CHAT:
+		return pull_chat_packet(c, buf, &packet->data.chat);
+	case PKT_NUM_TYPES:
+		break;
+	}
+
+	return 0;
+}
+
+int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet)
+{
+	int ok, env_size, len, capacity_left;
+
+	env_size = pull_envelope(c, &packet->type, &len);
+	if (!env_size) return 0;
+
+	capacity_left = cursor_remaining_capacity(c) - 1;
+	if (len > capacity_left) {
+		printf("sanity: packet larger (%d) than remaining buffer size: %d", len, capacity_left);
+		return 0;
+	}
+
+	ok = pull_packet_data(c, buf, packet, len);
+	if (!ok) return 0;
+
+	return len + env_size;
+}
+
+static int packet_chat_eq(struct chat_packet *a, struct chat_packet *b)
+{
+	/* fail if either is null but not both 0 or both not 0 */
+	if ((a->message == 0) ^ (b->message == 0))
+		return 0;
+
+	return a->sender == b->sender && !strcmp(a->message, b->message);
+}
+
+static int packet_fetch_eq(struct fetch_data_packet *a,
+		    struct fetch_data_packet *b)
+{
+	if ((a->path == 0) ^ (b->path == 0))
+		return 0;
+
+	return !strcmp(a->path, b->path);
+}
+
+int packet_eq(struct packet *a, struct packet *b)
+{
+	if (a->type != b->type)
+		return 0;
+
+	switch (a->type) {
+	case PKT_CHAT:
+		return packet_chat_eq(&a->data.chat, &b->data.chat);
+	case PKT_FETCH_DATA:
+		return packet_fetch_eq(&a->data.fetch, &b->data.fetch);
+	case PKT_NUM_TYPES:
+		return 0;
+	}
+
+	return 0;
+}
+
+
+void print_packet(struct packet *packet)
+{
+	switch (packet->type) {
+	case PKT_CHAT:
+		printf("(chat (sender %d) (message \"%s\"))\n",
+		       packet->data.chat.sender,
+		       packet->data.chat.message);
+		return;
+	case PKT_FETCH_DATA:
+		printf("(fetch)\n");
+		return;
+	case PKT_NUM_TYPES:
+		break;
+	}
+
+	printf("(unknown)\n");
+}
