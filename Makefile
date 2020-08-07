@@ -18,7 +18,7 @@ test: test.c $(OBJS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 check: test
-	./test
+	@./test
 
 TAGS: fake
 	etags *.c *.h > $@

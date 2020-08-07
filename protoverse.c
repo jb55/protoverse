@@ -82,7 +82,6 @@ static int parse_file(struct parser *parser, const char *filename, u16 *root)
 		return 0;
 	}
 
-
 	ok = tokenize_cells(file_buf, count, &tokens);
 
 	if (!ok) {

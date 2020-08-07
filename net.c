@@ -228,7 +228,8 @@ void print_packet(struct packet *packet)
 		       packet->data.chat.message);
 		return;
 	case PKT_FETCH_DATA:
-		printf("(fetch)\n");
+		printf("(fetch (path \"%s\"))\n",
+		       packet->data.fetch.path);
 		return;
 	case PKT_NUM_TYPES:
 		break;
