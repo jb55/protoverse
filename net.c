@@ -185,8 +185,8 @@ int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet)
 
 static int packet_chat_eq(struct chat_packet *a, struct chat_packet *b)
 {
-	/* fail if either is null but not both 0 or both not 0 */
-	if ((a->message == 0) ^ (b->message == 0))
+	/* fail if either is 0 but not both 0 or both not 0 */
+	if (!a->message ^ !b->message)
 		return 0;
 
 	return a->sender == b->sender && !strcmp(a->message, b->message);
@@ -195,7 +195,7 @@ static int packet_chat_eq(struct chat_packet *a, struct chat_packet *b)
 static int packet_fetch_eq(struct fetch_data_packet *a,
 		    struct fetch_data_packet *b)
 {
-	if ((a->path == 0) ^ (b->path == 0))
+	if (!a->path ^ !b->path)
 		return 0;
 
 	return !strcmp(a->path, b->path);
