@@ -31,7 +31,7 @@ struct packet {
 };
 
 int send_packet(int fd, struct sockaddr *to_addr, int to_addr_len, struct packet *packet);
-int recv_packet(int fd, struct packet *packet);
+int recv_packet(int fd, struct cursor *buf, struct packet *packet);
 
 int push_packet(unsigned char *buf, int bufsize, struct packet *packet);
 int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet);

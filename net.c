@@ -54,7 +54,21 @@ int send_packet(int sockfd, struct sockaddr *to_addr, int to_addr_len, struct pa
 		return 0;
 	}
 
-	return 1;
+	return ok;
+}
+
+int recv_packet(int sockfd, struct cursor *buf, struct packet *packet)
+{
+	static unsigned char tmp[0xFFFF];
+	struct cursor tmp_cursor;
+	struct sockaddr addr;
+	socklen_t addrlen;
+
+	recvfrom(sockfd, tmp, sizeof(tmp), 0, &addr, &addrlen);
+
+	make_cursor(tmp, tmp + sizeof(tmp), &tmp_cursor);
+
+	return pull_packet(&tmp_cursor, buf, packet);
 }
 
 static int push_envelope(struct cursor *cursor, enum packet_type type, int len)

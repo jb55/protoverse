@@ -10,6 +10,7 @@
 
 #include "client.h"
 #include "cursor.h"
+#include "net.h"
 
 int inet_aton(const char *cp, struct in_addr *inp);
 
@@ -21,6 +22,7 @@ int protoverse_connect(const char *server_ip_str, int port)
 	struct in_addr server_in_addr;
 	struct sockaddr_in server_addr;
 	struct cursor cursor;
+	struct packet packet;
 	ssize_t sent;
 	const char msg[] = "hello, world";
 
@@ -41,15 +43,15 @@ int protoverse_connect(const char *server_ip_str, int port)
 	server_addr.sin_addr = server_in_addr;
 
 	printf("sending '%s' to %s\n", msg, server_ip_str);
-	sent = sendto(sockfd, buf, sizeof(msg), MSG_CONFIRM,
-		      (struct sockaddr*)&server_addr,
-		      sizeof(server_addr));
 
-	printf("does this work?\n");
+	packet.type = PKT_CHAT;
+	packet.data.chat.message = "hello, world";
+	packet.data.chat.sender = 1;
 
-	if (sent != sizeof(msg)) {
-		printf("expected to send %ld, sent %ld instead\n",
-		       sizeof(msg), sent);
+	sent = send_packet(sockfd, (struct sockaddr*)&server_addr,
+			   sizeof(server_addr), &packet);
+
+	if (!sent) {
 		exit(1);
 	}
 

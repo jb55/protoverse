@@ -8,19 +8,22 @@
 #include <errno.h>
 
 #include "serve.h"
+#include "net.h"
 
 int inet_aton(const char *cp, struct in_addr *inp);
 
 int protoverse_serve(const char *bind_addr_str, int port)
 {
-	int fd;
+	static unsigned char buf_[1024];
+
 	struct in_addr my_addr;
 	struct sockaddr_in bind_addr;
-	struct sockaddr addr;
-	socklen_t addrlen;
-	ssize_t recv_len;
-	static char buf[1024];
-	int err;
+	struct packet packet;
+	struct cursor buf;
+
+	int err, ok, fd;
+
+	make_cursor(buf_, buf_ + sizeof(buf_), &buf);
 
 	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
 		printf("socket creation failed: %s\n", strerror(errno));
@@ -45,10 +48,13 @@ int protoverse_serve(const char *bind_addr_str, int port)
 	}
 
 	while (1) {
-		recv_len = recvfrom(fd, buf, sizeof(buf), 0, &addr,
-				    &addrlen);
+		ok = recv_packet(fd, &buf, &packet);
+		if (!ok) {
+			printf("malformed packet\n");
+			continue;
+		}
 
-		printf("got '%.*s'\n", (int)recv_len, buf);
+		print_packet(&packet);
 	}
 }
 
