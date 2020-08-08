@@ -137,6 +137,7 @@ int main(int argc, const char *argv[])
 	const char *space;
 	const char *cmd;
 	struct parser parser;
+	struct protoverse_server server;
 	u16 root;
 	int ok;
 
@@ -160,7 +161,12 @@ int main(int argc, const char *argv[])
 			return usage();
 		space = argv[2];
 		printf("serving protoverse on port 1988...\n");
-		protoverse_serve("127.0.0.1", 1988);
+
+		server.path = "";
+		server.port = 1988;
+		server.bind = "127.0.0.1";
+
+		protoverse_serve(&server);
 	} else if (streq(cmd, "client")) {
 		protoverse_connect("127.0.0.1", 1988);
 	}

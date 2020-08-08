@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static int push_fetch_packet(struct cursor *c, struct fetch_data_packet *fetch)
+static int push_fetch_packet(struct cursor *c, struct fetch_packet *fetch)
 {
 	return push_prefixed_str(c, fetch->path);
 }
@@ -34,12 +34,12 @@ static int pull_chat_packet(struct cursor *c, struct cursor *buf, struct chat_pa
 	return pull_prefixed_str(c, buf, &chat->message);
 }
 
-static int pull_fetch_packet(struct cursor *c, struct cursor *buf, struct fetch_data_packet *fetch)
+static int pull_fetch_packet(struct cursor *c, struct cursor *buf, struct fetch_packet *fetch)
 {
 	return pull_prefixed_str(c, buf, &fetch->path);
 }
 
-int send_packet(int sockfd, struct sockaddr *to_addr, int to_addr_len, struct packet *packet)
+int send_packet(int sockfd, struct sockaddr_in *to_addr, struct packet *packet)
 {
 	static unsigned char buf[0xFFFF];
 	int ok, len;
@@ -47,7 +47,9 @@ int send_packet(int sockfd, struct sockaddr *to_addr, int to_addr_len, struct pa
 	len = push_packet(buf, sizeof(buf), packet);
 	if (!len) return 0;
 
-	ok = sendto(sockfd, buf, len, 0, to_addr, to_addr_len);
+	ok = sendto(sockfd, buf, len, 0,
+		    (struct sockaddr*)to_addr,
+		    sizeof(struct sockaddr_in));
 
 	if (ok != len) {
 		printf("sendto: sent %d != packet_len %d\n", ok, len);
@@ -57,15 +59,13 @@ int send_packet(int sockfd, struct sockaddr *to_addr, int to_addr_len, struct pa
 	return ok;
 }
 
-int recv_packet(int sockfd, struct cursor *buf, struct packet *packet)
+int recv_packet(int sockfd, struct cursor *buf, struct sockaddr_in *from, struct packet *packet)
 {
 	static unsigned char tmp[0xFFFF];
 	struct cursor tmp_cursor;
-	struct sockaddr addr;
-	socklen_t addrlen;
+	socklen_t size;
 
-	recvfrom(sockfd, tmp, sizeof(tmp), 0, &addr, &addrlen);
-
+	recvfrom(sockfd, tmp, sizeof(tmp), 0, (struct sockaddr*)from, &size);
 	make_cursor(tmp, tmp + sizeof(tmp), &tmp_cursor);
 
 	return pull_packet(&tmp_cursor, buf, packet);

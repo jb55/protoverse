@@ -33,7 +33,7 @@ int main(int argc, char *argv[])
 	}
 
 	packet.type = PKT_CHAT;
-	packet.data.chat.sender = 1;
+	packet.data.chat.sender = 0xFFFF;
 	packet.data.chat.message = "hello there";
 
 	pushed[0] = push_packet(bufs[0], sizeof(bufs[0]), &packet);

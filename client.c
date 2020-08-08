@@ -44,14 +44,12 @@ int protoverse_connect(const char *server_ip_str, int port)
 	packet.data.chat.message = "hello, world";
 	packet.data.chat.sender = 0xFFFFFF;
 
-	send_packet(sockfd, (struct sockaddr*)&server_addr,
-		    sizeof(server_addr), &packet);
+	send_packet(sockfd, &server_addr, &packet);
 
 	packet.type = PKT_FETCH_DATA;
 	packet.data.fetch.path = "/some/room.space";
 
-	send_packet(sockfd, (struct sockaddr*)&server_addr,
-		    sizeof(server_addr), &packet);
+	send_packet(sockfd, &server_addr, &packet);
 
 	return 1;
 }
