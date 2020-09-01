@@ -10,6 +10,7 @@
 
 #define streq(a, b) strcmp(a,b) == 0
 
+/*
 static void print_all_cells(struct parser *parser)
 {
 	struct cell *cell;
@@ -30,6 +31,7 @@ static void print_all_cells(struct parser *parser)
 		}
 	}
 }
+*/
 
 static int print_cell_tree(struct parser *parser, u16 root, int depth)
 {

@@ -39,6 +39,7 @@ union token {
 };
 
 
+/*
 static const char *attr_type_str(enum attribute_type type)
 {
 	switch (type) {
@@ -57,6 +58,7 @@ static const char *attr_type_str(enum attribute_type type)
 
 	return "unknown";
 }
+*/
 
 static const char *token_error_string(enum token_error err)
 {
@@ -95,6 +97,7 @@ struct attribute *get_attr(struct cursor *attributes, u16 index)
 					       sizeof(struct attribute));
 }
 
+/*
 static const char *shape_str(enum shape shape)
 {
 	switch (shape) {
@@ -105,6 +108,7 @@ static const char *shape_str(enum shape shape)
 
 	return "unknown";
 }
+
 
 static void print_attribute(struct attribute *attr)
 {
@@ -119,7 +123,6 @@ static void print_attribute(struct attribute *attr)
 		break;
 	default:
 		break;
-		/* TODO: finish print_attribute */
 	}
 
 }
@@ -137,6 +140,7 @@ static void print_attributes(struct cursor *attributes, struct cell *cell)
 		print_attribute(attr);
 	}
 }
+*/
 
 void print_cell(struct cursor *attributes, struct cell *cell)
 {

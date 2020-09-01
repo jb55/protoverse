@@ -47,7 +47,7 @@ int send_packet(int sockfd, struct sockaddr *to_addr, int to_addr_len, struct pa
 	len = push_packet(buf, sizeof(buf), packet);
 	if (!len) return 0;
 
-	ok = sendto(sockfd, buf, len, MSG_CONFIRM, to_addr, to_addr_len);
+	ok = sendto(sockfd, buf, len, 0, to_addr, to_addr_len);
 
 	if (ok != len) {
 		printf("sendto: sent %d != packet_len %d\n", ok, len);
