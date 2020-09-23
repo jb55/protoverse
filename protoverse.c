@@ -66,8 +66,7 @@ static int parse_file(struct parser *parser, const char *filename, u16 *root)
 	struct cursor attributes;
 	struct cursor cells;
 
-	size_t count;
-	int ok;
+	int count, ok;
 
 	parser->tokens = &tokens;
 	parser->attributes = &attributes;

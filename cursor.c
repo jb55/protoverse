@@ -50,6 +50,26 @@ int push_byte(struct cursor *cursor, u8 c)
 	return 1;
 }
 
+int pull_data_into_cursor(struct cursor *cursor,
+			  struct cursor *dest,
+			  unsigned char **data,
+			  int len)
+{
+	int ok;
+
+	if (dest->p + len >= dest->end) {
+		printf("not enough room in dest buffer\n");
+		return 0;
+	}
+
+	ok = pull_data(cursor, dest->p, len);
+	if (!ok) return 0;
+
+	*data = dest->p;
+	dest->p += len;
+
+	return 1;
+}
 
 int pull_data(struct cursor *cursor, u8 *data, int len)
 {
@@ -122,7 +142,7 @@ int pull_varint(struct cursor *cursor, int *n)
 
 		/* is_last */
 		if ((b & 0x80) == 0) {
-			return 1;
+			return i+1;
 		}
 
 		if (i == 4) return 0;
@@ -184,11 +204,8 @@ int pull_prefixed_str(struct cursor *cursor, struct cursor *dest_buf, const char
 		return 0;
 	}
 
-	ok = pull_data(cursor, dest_buf->p, len);
+	ok = pull_data_into_cursor(cursor, dest_buf, (unsigned char**)str, len);
 	if (!ok) return 0;
-
-	*str = (char*)dest_buf->p;
-	dest_buf->p += len;
 
 	ok = push_byte(dest_buf, 0);
 

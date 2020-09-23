@@ -5,6 +5,9 @@
 #include "varint.h"
 
 #include <sys/types.h>
+#include <assert.h>
+#include <error.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdio.h>
@@ -28,7 +31,7 @@ static int pull_fetch_response_packet(struct cursor *c, struct cursor *buf,
 	if (!ok) return 0;
 	ok = pull_varint(c, &resp->data_len);
 	if (!ok) return 0;
-	return pull_data(c, resp->data, resp->data_len);
+	return pull_data_into_cursor(c, buf, &resp->data, resp->data_len);
 }
 
 static int push_fetch_packet(struct cursor *c, struct fetch_packet *fetch)
@@ -61,6 +64,7 @@ static int pull_fetch_packet(struct cursor *c, struct cursor *buf, struct fetch_
 	return pull_prefixed_str(c, buf, &fetch->path);
 }
 
+
 int send_packet(int sockfd, struct sockaddr_in *to_addr, struct packet *packet)
 {
 	static unsigned char buf[0xFFFF];
@@ -69,12 +73,10 @@ int send_packet(int sockfd, struct sockaddr_in *to_addr, struct packet *packet)
 	len = push_packet(buf, sizeof(buf), packet);
 	if (!len) return 0;
 
-	ok = sendto(sockfd, buf, len, 0,
-		    (struct sockaddr*)to_addr,
-		    sizeof(struct sockaddr_in));
+	ok = sendto(sockfd, buf, len, 0, (struct sockaddr*)to_addr, sizeof(*to_addr));
 
 	if (ok != len) {
-		printf("sendto: sent %d != packet_len %d\n", ok, len);
+		printf("sendto: sent %d != packet_len %d - %s\n", ok, len, strerror(errno));
 		return 0;
 	}
 
@@ -85,12 +87,14 @@ int recv_packet(int sockfd, struct cursor *buf, struct sockaddr_in *from, struct
 {
 	static unsigned char tmp[0xFFFF];
 	struct cursor tmp_cursor;
-	socklen_t size;
+	socklen_t size = sizeof(*from);
+	int bytes;
 
-	recvfrom(sockfd, tmp, sizeof(tmp), 0, (struct sockaddr*)from, &size);
+	bytes = recvfrom(sockfd, tmp, sizeof(tmp), 0, (struct sockaddr*)from, &size);
+	assert(size == sizeof(*from));
 	make_cursor(tmp, tmp + sizeof(tmp), &tmp_cursor);
 
-	return pull_packet(&tmp_cursor, buf, packet);
+	return pull_packet(&tmp_cursor, buf, packet, bytes);
 }
 
 static int push_envelope(struct cursor *cursor, enum packet_type type, int len)
@@ -189,12 +193,19 @@ static int pull_packet_data(struct cursor *c, struct cursor *buf,
 	return 0;
 }
 
-int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet)
+int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet,
+		int received_bytes)
 {
 	int ok, env_size, len, capacity_left;
 
 	env_size = pull_envelope(c, &packet->type, &len);
 	if (!env_size) return 0;
+
+	if (len + env_size != received_bytes) {
+		printf("invalid packet size. expected %d, got %d\n", len+env_size,
+		       received_bytes);
+		return 0;
+	}
 
 	capacity_left = cursor_remaining_capacity(c) - 1;
 	if (len > capacity_left) {

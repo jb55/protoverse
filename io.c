@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-int read_fd(FILE *fd, unsigned char *buf, size_t buflen, size_t *written)
+int read_fd(FILE *fd, unsigned char *buf, int buflen, int *written)
 {
 	unsigned char *p = buf;
 	int len = 0;
@@ -21,8 +21,7 @@ int read_fd(FILE *fd, unsigned char *buf, size_t buflen, size_t *written)
 }
 
 
-int read_file(const char *filename, unsigned char *buf, size_t buflen,
-	      size_t *written)
+int read_file(const char *filename, unsigned char *buf, int buflen, int *written)
 {
 	FILE *file = NULL;
 	int ok;
@@ -40,8 +39,8 @@ int read_file(const char *filename, unsigned char *buf, size_t buflen,
 }
 
 
-int read_file_or_stdin(const char *filename, unsigned char *buf,
-                       size_t buflen, size_t *written)
+int read_file_or_stdin(const char *filename, unsigned char *buf, int buflen,
+		       int *written)
 {
 	if (filename == NULL) {
 		return read_fd(stdin, buf, buflen, written);

@@ -21,6 +21,7 @@ int push_varint(struct cursor *cursor, int i);
 int push_data(struct cursor *cursor, unsigned char *data, int len);
 int push_byte(struct cursor *cursor, unsigned char c);
 
+int pull_data_into_cursor(struct cursor *cursor, struct cursor *dest, unsigned char **data, int len);
 int pull_data(struct cursor *cursor, unsigned char *data, int len);
 int pull_byte(struct cursor *cursor, unsigned char *c);
 int pull_int(struct cursor *cursor, int *i);

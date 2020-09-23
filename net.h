@@ -43,7 +43,7 @@ int send_packet(int fd, struct sockaddr_in *to_addr, struct packet *packet);
 int recv_packet(int sockfd, struct cursor *buf, struct sockaddr_in *from, struct packet *packet);
 
 int push_packet(unsigned char *buf, int bufsize, struct packet *packet);
-int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet);
+int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet, int received_bytes);
 
 int packet_eq(struct packet *a, struct packet *b);
 void print_packet(struct packet *packet);

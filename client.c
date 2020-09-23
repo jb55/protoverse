@@ -45,11 +45,16 @@ int protoverse_connect(const char *server_ip_str, int port)
 	packet.data.chat.sender = 0xFFFFFF;
 
 	send_packet(sockfd, &server_addr, &packet);
+	recv_packet(sockfd, &cursor, &server_addr, &packet);
+	print_packet(&packet);
 
 	packet.type = PKT_FETCH_DATA;
-	packet.data.fetch.path = "/some/room.space";
+	packet.data.fetch.path = "TAGS";
 
 	send_packet(sockfd, &server_addr, &packet);
+	recv_packet(sockfd, &cursor, &server_addr, &packet);
+
+	print_packet(&packet);
 
 	return 1;
 }
