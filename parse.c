@@ -1,5 +1,7 @@
 
+#include "util.h"
 #include "parse.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
@@ -771,14 +773,6 @@ struct cell *get_cell(struct cursor *cells, u16 index)
 					  sizeof(struct cell));
 }
 
-
-static int memeq(void *buf, int buf_len, void *buf2, int buf2_len)
-{
-	if (buf_len != buf2_len)
-		return 0;
-
-	return memcmp(buf, buf2, buf_len) == 0;
-}
 
 static int symbol_eq(struct tok_str *a, const char *b, int b_len)
 {

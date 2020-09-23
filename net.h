@@ -20,7 +20,7 @@ struct fetch_packet {
 struct fetch_response_packet {
 	const char *path;
 	int data_len;
-	const unsigned char *data;
+	unsigned char *data;
 };
 
 struct chat_packet {

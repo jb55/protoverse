@@ -1,6 +1,7 @@
 
 #include "net.h"
 #include "cursor.h"
+#include "util.h"
 #include "varint.h"
 
 #include <sys/types.h>
@@ -8,6 +9,27 @@
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
+
+static int push_fetch_response_packet(struct cursor *c, struct fetch_response_packet *resp)
+{
+	int ok;
+	ok = push_prefixed_str(c, resp->path);
+	if (!ok) return 0;
+	ok = push_varint(c, resp->data_len);
+	if (!ok) return 0;
+	return push_data(c, resp->data, resp->data_len);
+}
+
+static int pull_fetch_response_packet(struct cursor *c, struct cursor *buf,
+				      struct fetch_response_packet *resp)
+{
+	int ok;
+	ok = pull_prefixed_str(c, buf, &resp->path);
+	if (!ok) return 0;
+	ok = pull_varint(c, &resp->data_len);
+	if (!ok) return 0;
+	return pull_data(c, resp->data, resp->data_len);
+}
 
 static int push_fetch_packet(struct cursor *c, struct fetch_packet *fetch)
 {
@@ -112,10 +134,10 @@ static int push_packet_data(struct cursor *c, struct packet *packet)
 	switch (packet->type) {
 	case PKT_FETCH_DATA:
 		return push_fetch_packet(c, &packet->data.fetch);
-		break;
+	case PKT_FETCH_DATA_RESPONSE:
+		return push_fetch_response_packet(c, &packet->data.fetch_response);
 	case PKT_CHAT:
 		return push_chat_packet(c, &packet->data.chat);
-		break;
 	case PKT_NUM_TYPES:
 		return 0;
 	}
@@ -155,6 +177,9 @@ static int pull_packet_data(struct cursor *c, struct cursor *buf,
 	switch (packet->type) {
 	case PKT_FETCH_DATA:
 		return pull_fetch_packet(c, buf, &packet->data.fetch);
+	case PKT_FETCH_DATA_RESPONSE:
+		return pull_fetch_response_packet(c, buf,
+						  &packet->data.fetch_response);
 	case PKT_CHAT:
 		return pull_chat_packet(c, buf, &packet->data.chat);
 	case PKT_NUM_TYPES:
@@ -192,13 +217,21 @@ static int packet_chat_eq(struct chat_packet *a, struct chat_packet *b)
 	return a->sender == b->sender && !strcmp(a->message, b->message);
 }
 
-static int packet_fetch_eq(struct fetch_data_packet *a,
-		    struct fetch_data_packet *b)
+static int packet_fetch_eq(struct fetch_packet *a, struct fetch_packet *b)
 {
 	if (!a->path ^ !b->path)
 		return 0;
 
 	return !strcmp(a->path, b->path);
+}
+
+static int packet_fetch_resp_eq(struct fetch_response_packet *a,
+				struct fetch_response_packet *b)
+{
+	if (!a->path ^ !b->path)
+		return 0;
+
+	return memeq(a->data, a->data_len, b->data, b->data_len);
 }
 
 int packet_eq(struct packet *a, struct packet *b)
@@ -211,6 +244,9 @@ int packet_eq(struct packet *a, struct packet *b)
 		return packet_chat_eq(&a->data.chat, &b->data.chat);
 	case PKT_FETCH_DATA:
 		return packet_fetch_eq(&a->data.fetch, &b->data.fetch);
+	case PKT_FETCH_DATA_RESPONSE:
+		return packet_fetch_resp_eq(&a->data.fetch_response,
+					    &b->data.fetch_response);
 	case PKT_NUM_TYPES:
 		return 0;
 	}
@@ -226,6 +262,11 @@ void print_packet(struct packet *packet)
 		printf("(chat (sender %d) (message \"%s\"))\n",
 		       packet->data.chat.sender,
 		       packet->data.chat.message);
+		return;
+	case PKT_FETCH_DATA_RESPONSE:
+		printf("(fetch-resp (path \"%s\") (data %d))\n",
+			packet->data.fetch_response.path,
+			packet->data.fetch_response.data_len);
 		return;
 	case PKT_FETCH_DATA:
 		printf("(fetch (path \"%s\"))\n",
