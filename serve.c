@@ -23,7 +23,7 @@ struct file_cache {
 };
 
 static int load_data(struct cursor *buf, const char *path,
-		     int *data_len, const unsigned char **data)
+		     int *data_len, unsigned char **data)
 {
 	/* TODO: better file cache */
 	static struct file_cache file_cache[MAX_CACHED_FILES] = {0};
