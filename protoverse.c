@@ -161,7 +161,6 @@ int main(int argc, const char *argv[])
 		space = argv[2];
 		printf("serving protoverse on port 1988...\n");
 
-		server.path = "";
 		server.port = 1988;
 		server.bind = "127.0.0.1";
 

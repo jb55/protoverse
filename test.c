@@ -31,7 +31,7 @@ static void test_packet_serialization(struct packet packet)
 	pushed[0] = push_packet(bufs[0], sizeof(bufs[0]), &packet);
 	assert(pushed[0]);
 
-	pulled = pull_packet(&cursors[0], &cursors[1], &packet_out);
+	pulled = pull_packet(&cursors[0], &cursors[1], &packet_out, pushed[0]);
 	assert(pulled);
 
 	pushed[1] = push_packet(bufs[2], sizeof(bufs[2]), &packet_out);
