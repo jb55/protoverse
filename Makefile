@@ -5,8 +5,13 @@ OBJS = io.o parse.o cursor.o describe.o serve.o client.o net.o varint.o util.o
 
 all: protoverse libprotoverse.a
 
+%.o: %.c %.h
+	@echo "cc $<"
+	@$(CC) -c -o $@ $(CPPFLAGS) $(CFLAGS) $<
+
 protoverse: protoverse.c $(OBJS)
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+	@echo "ld $@"
+	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 libprotoverse.a: $(OBJS)
 	ar rcs $@ $^
