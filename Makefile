@@ -1,7 +1,7 @@
 
 CFLAGS = -Wno-error=unused-function -O1 -g -std=c89 -Wall -Wextra -Werror -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wmissing-declarations -Wdeclaration-after-statement
 
-OBJS = io.o parse.o cursor.o describe.o serve.o client.o net.o varint.o util.o
+OBJS = src/io.o src/parse.o src/cursor.o src/describe.o src/serve.o src/client.o src/net.o src/varint.o src/util.o
 
 all: protoverse libprotoverse.a
 
@@ -9,7 +9,7 @@ all: protoverse libprotoverse.a
 	@echo "cc $<"
 	@$(CC) -c -o $@ $(CPPFLAGS) $(CFLAGS) $<
 
-protoverse: protoverse.c $(OBJS)
+protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"
 	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
@@ -17,9 +17,9 @@ libprotoverse.a: $(OBJS)
 	ar rcs $@ $^
 
 clean:
-	rm -f protoverse *.o
+	rm -f protoverse test $(OBJS)
 
-test: test.c $(OBJS)
+test: src/test.c $(OBJS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 check: test
