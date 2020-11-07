@@ -25,6 +25,9 @@ test: test.c $(OBJS)
 check: test
 	@./test
 
+tags: fake
+	ctags *.c *.h > $@
+
 TAGS: fake
 	etags *.c *.h > $@
 
