@@ -125,9 +125,9 @@ struct token_cursor {
 };
 
 struct parser {
-	struct token_cursor *tokens;
-	struct cursor *attributes;
-	struct cursor *cells;
+	struct token_cursor tokens;
+	struct cursor attributes;
+	struct cursor cells;
 };
 
 int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root);

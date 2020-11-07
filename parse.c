@@ -1036,9 +1036,9 @@ static int push_cell(struct cursor *cells, struct cell *cell, u16 *cell_index)
 
 static void copy_parser(struct parser *from, struct parser *to)
 {
-	to->tokens = from->tokens;
-	to->cells = from->cells;
-	to->attributes = from->attributes;
+	copy_token_cursor(&from->tokens, &to->tokens);
+	copy_cursor(&from->cells, &to->cells);
+	copy_cursor(&from->attributes, &to->attributes);
 }
 
 static int push_cell_child(struct cell *parent, u16 child_ind)
@@ -1100,7 +1100,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 
 	/* 0 attributes returns 1, 1 attrs returns 2, etc
 	   0 is a real error, an attribute push overflow */
-	ok = parse_attributes(parser->tokens, parser->attributes, attr_inds);
+	ok = parse_attributes(&parser->tokens, &parser->attributes, attr_inds);
 	if (!ok) return 0;
 
 	tokdebug("parse_attributes %d\n", ok);
@@ -1115,7 +1115,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 	tokdebug("optional child cell in parse_cell_attrs\n");
 	ok = parse_cell(parser, &child_cell_index);
 	if (ok) {
-		child_cell = get_cell(parser->cells, child_cell_index);
+		child_cell = get_cell(&parser->cells, child_cell_index);
 		if (!child_cell) return 0;
 		tokdebug("parse_cell_attrs push child cell\n");
 		ok = push_cell_child(cell, child_cell_index);
@@ -1126,7 +1126,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 		tokdebug("no child cells found\n");
 	}
 
-	ok = push_cell(parser->cells, cell, index);
+	ok = push_cell(&parser->cells, cell, index);
 	if (!ok) return 0;
 
 	return 1;
@@ -1138,20 +1138,17 @@ static int parse_cell_by_name(struct parser *parser,
 			      enum cell_type type)
 {
 	int ok;
-	struct token_cursor temp;
 	struct parser backtracked;
 	struct cell cell;
 	u16 ind;
 
 	init_cell(&cell);
 
-	copy_token_cursor(parser->tokens, &temp);
 	copy_parser(parser, &backtracked);
-	backtracked.tokens = &temp;
 
 	cell.type = type;
 
-	ok = parse_symbol(&temp, name);
+	ok = parse_symbol(&backtracked.tokens, name);
 	if (!ok) return 0;
 
 	ok = parse_cell_attrs(&backtracked, &ind, &cell);
@@ -1160,7 +1157,7 @@ static int parse_cell_by_name(struct parser *parser,
 	if (index)
 		*index = ind;
 
-	copy_token_cursor(&temp, parser->tokens);
+	copy_parser(&backtracked, parser);
 
 	return 1;
 }
@@ -1178,24 +1175,21 @@ static int parse_group(struct parser *parser, u16 *index)
 	u16 child_ind;
 
 	struct parser backtracked;
-	struct token_cursor temp;
 	struct cell group;
 	struct cell *child_cell;
 
 	init_cell(&group);
 
-	copy_token_cursor(parser->tokens, &temp);
 	copy_parser(parser, &backtracked);
-	backtracked.tokens = &temp;
 
-	ok = parse_symbol(&temp, "group");
+	ok = parse_symbol(&backtracked.tokens, "group");
 	if (!ok) return 0;
 
 	while (1) {
 		ok = parse_cell(&backtracked, &child_ind);
 		if (!ok) break;
 
-		child_cell = get_cell(parser->cells, child_ind);
+		child_cell = get_cell(&backtracked.cells, child_ind);
 		if (child_cell == NULL) {
 			printf("UNUSUAL: group get_cell was NULL\n");
 			return 0;
@@ -1215,10 +1209,10 @@ static int parse_group(struct parser *parser, u16 *index)
 
 	group.type = C_GROUP;
 
-	ok = push_cell(parser->cells, &group, index);
+	ok = push_cell(&backtracked.cells, &group, index);
 	if (!ok) return 0;
 
-	copy_token_cursor(&temp, parser->tokens);
+	copy_parser(&backtracked, parser);
 
 	return ncells;
 }
@@ -1238,7 +1232,6 @@ static struct object_def object_defs[] = {
 static int parse_object(struct parser *parser, u16 *index)
 {
 	int ok, i;
-	struct token_cursor temp;
 	struct parser backtracked;
 	struct tok_str str;
 	struct object_def *def;
@@ -1248,11 +1241,9 @@ static int parse_object(struct parser *parser, u16 *index)
 	init_cell(&cell);
 	cell.type = C_OBJECT;
 
-	copy_token_cursor(parser->tokens, &temp);
 	copy_parser(parser, &backtracked);
-	backtracked.tokens = &temp;
 
-	ok = pull_symbol_token(&temp, &str);
+	ok = pull_symbol_token(&backtracked.tokens, &str);
 	if (!ok) return 0;
 
 	for (i = 0; i < ARRAY_SIZE(object_defs); i++) {
@@ -1271,7 +1262,7 @@ static int parse_object(struct parser *parser, u16 *index)
 	if (index)
 		*index = ind;
 
-	copy_token_cursor(&temp, parser->tokens);
+	copy_parser(&backtracked, parser);
 
 	return 1;
 }
@@ -1279,15 +1270,12 @@ static int parse_object(struct parser *parser, u16 *index)
 int parse_cell(struct parser *parser, u16 *index)
 {
 	int ok;
-	struct token_cursor temp;
 	struct parser backtracked;
 
 	/* mostly needed for parse_open and parse_close */
-	copy_token_cursor(parser->tokens, &temp);
 	copy_parser(parser, &backtracked);
-	backtracked.tokens = &temp;
 
-	ok = parse_open(&temp);
+	ok = parse_open(&backtracked.tokens);
 	if (!ok) {
 		tokdebug("parse_open failed in parse_cell\n");
 		return 0;
@@ -1298,6 +1286,8 @@ int parse_cell(struct parser *parser, u16 *index)
 		tokdebug("got parse_group\n");
 		goto close;
 	}
+
+	/* print_current_token(&backtracked.tokens); */
 
 	ok = parse_room(&backtracked, index);
 	if (ok) {
@@ -1310,10 +1300,10 @@ int parse_cell(struct parser *parser, u16 *index)
 
 	return 0;
 close:
-	ok = parse_close(&temp);
+	ok = parse_close(&backtracked.tokens);
 	if (!ok) return 0;
 
-	copy_token_cursor(&temp, parser->tokens);
+	copy_parser(&backtracked, parser);
 
 	return 1;
 }
@@ -1329,30 +1319,22 @@ int init_parser(struct parser *parser)
 	u8 *attrs_buf = calloc(1, attrs_size);
 	u8 *cells_buf = calloc(1, cells_size);
 
-	static struct token_cursor tokens;
-	static struct cursor attributes;
-	static struct cursor cells;
-
 	if (!token_buf) return 0;
 	if (!attrs_buf) return 0;
 	if (!cells_buf) return 0;
 
-	parser->tokens = &tokens;
-	parser->attributes = &attributes;
-	parser->cells = &cells;
-
-	make_cursor(cells_buf, cells_buf + cells_size, &cells);
-	make_cursor(attrs_buf, attrs_buf + attrs_size, &attributes);
-	make_token_cursor(token_buf, token_buf + tokens_size, &tokens);
+	make_cursor(cells_buf, cells_buf + cells_size, &parser->cells);
+	make_cursor(attrs_buf, attrs_buf + attrs_size, &parser->attributes);
+	make_token_cursor(token_buf, token_buf + tokens_size, &parser->tokens);
 
 	return 1;
 }
 
 int free_parser(struct parser *parser)
 {
-	free(parser->tokens->c.start);
-	free(parser->attributes->start);
-	free(parser->cells->start);
+	free(parser->tokens.c.start);
+	free(parser->attributes.start);
+	free(parser->cells.start);
 
 	return 1;
 }
@@ -1361,7 +1343,7 @@ int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root)
 {
 	int ok;
 
-	ok = tokenize_cells(file_buf, len, parser->tokens);
+	ok = tokenize_cells(file_buf, len, &parser->tokens);
 
 	if (!ok) {
 		printf("failed to tokenize\n");
@@ -1370,7 +1352,7 @@ int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root)
 
 	ok = parse_cell(parser, root);
 	if (!ok) {
-		print_token_error(parser->tokens);
+		print_token_error(&parser->tokens);
 		return 0;
 	}
 

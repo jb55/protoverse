@@ -6,6 +6,7 @@
 #include "client.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define streq(a, b) strcmp(a,b) == 0
@@ -37,14 +38,22 @@ static int print_cell_tree(struct parser *parser, u16 root, int depth)
 {
 	int i;
 
-	struct cell *cell = get_cell(parser->cells, root);
-	if (!cell) return 0;
+
+	struct cell *cell = get_cell(&parser->cells, root);
+	if (!cell) {
+		printf("no root cell...\n");
+		return 0;
+	}
+
+	/*  sanity TODO: configurable max depth */
+	if (depth > 255)
+		return 0;
 
 	for (i = 0; i < depth; i++) {
 		printf("  ");
 	}
 
-	print_cell(parser->attributes, cell);
+	print_cell(&parser->attributes, cell);
 
 	for (i = 0; i < cell->n_children; i++) {
 		print_cell_tree(parser, cell->children[i], depth+1);

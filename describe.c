@@ -61,7 +61,7 @@ static int count_adjectives(struct describe *desc)
 	int i;
 
 	for (i = 0, count = 0; i < desc->cell->n_attributes; i++) {
-		attr = get_attr(desc->parsed->attributes,
+		attr = get_attr(&desc->parsed->attributes,
 				desc->cell->attributes[i]);
 		assert(attr);
 
@@ -80,7 +80,7 @@ static int push_adjectives(struct describe *desc)
 	adj_count = count_adjectives(desc);
 
 	for (i = 0, adjs = 0; i < desc->cell->n_attributes; i++) {
-		attr = get_attr(desc->parsed->attributes,
+		attr = get_attr(&desc->parsed->attributes,
 				desc->cell->attributes[i]);
 		assert(attr);
 
@@ -128,7 +128,7 @@ static int push_made_of(struct describe *desc)
 	struct attribute *attr;
 	int ok;
 
-	ok = find_attr(desc->parsed->attributes, desc->cell,
+	ok = find_attr(&desc->parsed->attributes, desc->cell,
 		       A_MATERIAL, &attr);
 	if (!ok) return 2;
 
@@ -147,7 +147,7 @@ static int push_named(struct describe *desc)
 	int name_len;
 	int ok;
 
-	cell_name(desc->parsed->attributes, desc->cell, &name, &name_len);
+	cell_name(&desc->parsed->attributes, desc->cell, &name, &name_len);
 
 	if (name_len == 0)
 		return 1;
@@ -166,7 +166,7 @@ static int push_shape(struct describe *desc)
 	struct attribute *attr;
 	int ok;
 
-	ok = find_attr(desc->parsed->attributes, desc->cell, A_SHAPE, &attr);
+	ok = find_attr(&desc->parsed->attributes, desc->cell, A_SHAPE, &attr);
 	if (!ok) return 2;
 
 	switch (attr->data.shape) {
@@ -279,7 +279,7 @@ static int describe_group(struct describe *desc)
 	if (!ok) return 0;
 
 	for (i = 0; i < nobjs; i++) {
-		cell = get_cell(desc->parsed->cells,
+		cell = get_cell(&desc->parsed->cells,
 				desc->cell->children[i]);
 		assert(cell);
 
@@ -295,7 +295,7 @@ static int describe_group(struct describe *desc)
 
 		}
 
-		ok = describe_object_name(desc->strs, desc->parsed->attributes, cell);
+		ok = describe_object_name(desc->strs, &desc->parsed->attributes, cell);
 		if (!ok) return 0;
 	}
 
@@ -359,7 +359,7 @@ int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs
 	}
 
 	/* TODO: for each cell ? for now we just care about the group */
-	cell = get_cell(parsed->cells, cell->children[0]);
+	cell = get_cell(&parsed->cells, cell->children[0]);
 	assert(cell);
 
 	return describe_cells(cell, parsed, strs, max_depth, depth+1);
@@ -374,7 +374,7 @@ int describe(struct parser *parser, u16 root_cell)
 
 	strbuf[0] = 0;
 
-	cell = get_cell(parser->cells, root_cell);
+	cell = get_cell(&parser->cells, root_cell);
 
 	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
 
