@@ -10,9 +10,31 @@
 
 #include "client.h"
 #include "cursor.h"
+#include "describe.h"
 #include "net.h"
 
 int inet_aton(const char *cp, struct in_addr *inp);
+
+static int handle_data_response(struct parser *parser, const char *expected_path,
+				struct packet *packet)
+{
+	struct fetch_response_packet *resp = &packet->data.fetch_response;
+	u16 root;
+	int ok;
+
+	if (packet->type == PKT_FETCH_DATA_RESPONSE &&
+	    !strcmp(expected_path, resp->path))
+	{
+		ok = parse_buffer(parser, resp->data, resp->data_len, &root);
+		if (!ok) {
+			printf("could not parse space\n");
+			return 0;
+		}
+		describe(parser, root);
+	}
+
+	return 1;
+}
 
 int protoverse_connect(const char *server_ip_str, int port)
 {
@@ -23,7 +45,10 @@ int protoverse_connect(const char *server_ip_str, int port)
 	struct sockaddr_in server_addr;
 	struct cursor cursor;
 	struct packet packet;
+	const char *expected_path;
+	struct parser parser;
 
+	init_parser(&parser);
 	make_cursor(buf, buf + sizeof(buf), &cursor);
 
 	if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
@@ -46,15 +71,17 @@ int protoverse_connect(const char *server_ip_str, int port)
 
 	send_packet(sockfd, &server_addr, &packet);
 	recv_packet(sockfd, &cursor, &server_addr, &packet);
-	print_packet(&packet);
 
+	expected_path = "index.space";
 	packet.type = PKT_FETCH_DATA;
-	packet.data.fetch.path = "TAGS";
+	packet.data.fetch.path = expected_path;
 
 	send_packet(sockfd, &server_addr, &packet);
 	recv_packet(sockfd, &cursor, &server_addr, &packet);
 
-	print_packet(&packet);
+	handle_data_response(&parser, expected_path, &packet);
+
+	free_parser(&parser);
 
 	return 1;
 }
