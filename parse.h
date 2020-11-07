@@ -130,7 +130,10 @@ struct parser {
 	struct cursor *cells;
 };
 
-
+int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root);
+int parse_file(struct parser *parser, const char *filename, u16 *root);
+int init_parser(struct parser *parser);
+int free_parser(struct parser *parser);
 void print_cell(struct cursor *attributes, struct cell *cell);
 int tokenize_cells(unsigned char *buf, int buf_size, struct token_cursor *tokens);
 void make_token_cursor(u8 *start, u8 *end, struct token_cursor *cursor);

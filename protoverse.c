@@ -54,53 +54,6 @@ static int print_cell_tree(struct parser *parser, u16 root, int depth)
 	return 1;
 }
 
-static int parse_file(struct parser *parser, const char *filename, u16 *root)
-{
-	/* TODO: increase these limits */
-	static u8 file_buf[4096];
-	static u8 token_buf[2048];
-	static u8 attrs_buf[sizeof(struct attribute) * 1024];
-	static u8 cells_buf[sizeof(struct cell) * 1024];
-
-	struct token_cursor tokens;
-	struct cursor attributes;
-	struct cursor cells;
-
-	int count, ok;
-
-	parser->tokens = &tokens;
-	parser->attributes = &attributes;
-	parser->cells = &cells;
-
-	make_cursor(cells_buf, cells_buf + sizeof(cells_buf), &cells);
-	make_cursor(attrs_buf, attrs_buf + sizeof(attrs_buf), &attributes);
-	make_token_cursor(token_buf, token_buf + sizeof(token_buf), &tokens);
-
-	ok = read_file(filename, file_buf, sizeof(file_buf), &count);
-
-	if (!ok) {
-		printf("failed to load '%s'\n", filename);
-		return 0;
-	}
-
-	ok = tokenize_cells(file_buf, count, &tokens);
-
-	if (!ok) {
-		printf("failed to tokenize\n");
-		return 0;
-	}
-
-	assert(tokens.c.p == token_buf);
-
-	ok = parse_cell(parser, root);
-	if (!ok) {
-		print_token_error(&tokens);
-		return 0;
-	}
-
-	return 1;
-}
-
 static int usage(void)
 {
 	printf("usage: protoverse <command> [args]\n\n");
@@ -111,6 +64,8 @@ static int usage(void)
 
 	return 1;
 }
+
+
 
 int main(int argc, const char *argv[])
 {
@@ -129,6 +84,8 @@ int main(int argc, const char *argv[])
 	if (streq(cmd, "parse")) {
 		if (argc != 3)
 			return usage();
+		ok = init_parser(&parser);
+		if (!ok) return 1;
 		space = argv[2];
 		ok = parse_file(&parser, space, &root);
 		if (!ok) return 1;
@@ -136,6 +93,7 @@ int main(int argc, const char *argv[])
 		print_cell_tree(&parser, root, 0);
 
 		describe(&parser, root);
+		free_parser(&parser);
 	} else if (streq(cmd, "serve")) {
 		if (argc != 3)
 			return usage();
@@ -152,4 +110,3 @@ int main(int argc, const char *argv[])
 
 	return 0;
 }
-

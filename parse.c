@@ -1,6 +1,7 @@
 
 #include "util.h"
 #include "parse.h"
+#include "io.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1316,3 +1317,84 @@ close:
 
 	return 1;
 }
+
+
+int init_parser(struct parser *parser)
+{
+	int attrs_size = sizeof(struct attribute) * 1024;
+	int tokens_size = 2048;
+	int cells_size = sizeof(struct cell) * 1024;
+
+	u8 *token_buf = calloc(1, tokens_size);
+	u8 *attrs_buf = calloc(1, attrs_size);
+	u8 *cells_buf = calloc(1, cells_size);
+
+	static struct token_cursor tokens;
+	static struct cursor attributes;
+	static struct cursor cells;
+
+	if (!token_buf) return 0;
+	if (!attrs_buf) return 0;
+	if (!cells_buf) return 0;
+
+	parser->tokens = &tokens;
+	parser->attributes = &attributes;
+	parser->cells = &cells;
+
+	make_cursor(cells_buf, cells_buf + cells_size, &cells);
+	make_cursor(attrs_buf, attrs_buf + attrs_size, &attributes);
+	make_token_cursor(token_buf, token_buf + tokens_size, &tokens);
+
+	return 1;
+}
+
+int free_parser(struct parser *parser)
+{
+	free(parser->tokens->c.start);
+	free(parser->attributes->start);
+	free(parser->cells->start);
+
+	return 1;
+}
+
+int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root)
+{
+	int ok;
+
+	ok = tokenize_cells(file_buf, len, parser->tokens);
+
+	if (!ok) {
+		printf("failed to tokenize\n");
+		return 0;
+	}
+
+	ok = parse_cell(parser, root);
+	if (!ok) {
+		print_token_error(parser->tokens);
+		return 0;
+	}
+
+	return 1;
+}
+
+
+int parse_file(struct parser *parser, const char *filename, u16 *root)
+{
+	/* TODO: increase these limits */
+	int bufsize = 4096*4;
+	u8 *file_buf = calloc(1, bufsize);
+
+	int count, ok;
+
+	ok = read_file(filename, file_buf, bufsize, &count);
+
+	if (!ok) {
+		printf("failed to load '%s'\n", filename);
+		return 0;
+	}
+
+	ok = parse_buffer(parser, file_buf, count, root);
+	free(file_buf);
+	return ok;
+}
+
