@@ -101,25 +101,6 @@ static int parse_file(struct parser *parser, const char *filename, u16 *root)
 	return 1;
 }
 
-static int describe(struct parser *parser, u16 root_cell)
-{
-	static char strbuf[2048];
-	struct cursor strs;
-	struct cell *cell;
-
-	strbuf[0] = 0;
-
-	cell = get_cell(parser->cells, root_cell);
-
-	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
-
-	describe_cells(cell, parser, &strs, 10, 0);
-
-	printf("\n\ndescription\n-----------\n\n%s\n", strbuf);
-
-	return 1;
-}
-
 static int usage(void)
 {
 	printf("usage: protoverse <command> [args]\n\n");

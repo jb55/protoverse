@@ -10,12 +10,6 @@
 
 /* various functions used to describe the scene */
 
-struct describe {
-	struct cell *cell;
-	struct parser *parsed;
-	struct cursor *strs;
-};
-
 static int push_sized_word(struct cursor *strs, const char *str, int len)
 {
 	int ok;
@@ -369,4 +363,24 @@ int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs
 	assert(cell);
 
 	return describe_cells(cell, parsed, strs, max_depth, depth+1);
+}
+
+
+int describe(struct parser *parser, u16 root_cell)
+{
+	static char strbuf[2048];
+	struct cursor strs;
+	struct cell *cell;
+
+	strbuf[0] = 0;
+
+	cell = get_cell(parser->cells, root_cell);
+
+	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
+
+	describe_cells(cell, parser, &strs, 10, 0);
+
+	printf("\n\ndescription\n-----------\n\n%s\n", strbuf);
+
+	return 1;
 }
