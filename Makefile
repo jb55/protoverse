@@ -26,10 +26,10 @@ check: test
 	@./test
 
 tags: fake
-	ctags *.c *.h > $@
+	ctags src/*.c src/*.h > $@
 
 TAGS: fake
-	etags *.c *.h > $@
+	etags src/*.c src/*.h > $@
 
 
 .PHONY: fake
