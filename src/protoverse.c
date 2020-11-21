@@ -4,10 +4,12 @@
 #include "describe.h"
 #include "serve.h"
 #include "client.h"
+#include "wasm.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #define streq(a, b) strcmp(a,b) == 0
 
@@ -70,6 +72,7 @@ static int usage(void)
 	printf("       parse file.space\n");
 	printf("       serve file.space\n");
 	printf("       client\n");
+	printf("       run code.wasm\n");
 
 	return 1;
 }
@@ -78,12 +81,14 @@ static int usage(void)
 
 int main(int argc, const char *argv[])
 {
-	const char *space;
+	const char *space, *code_file;
 	const char *cmd;
+	unsigned char *wasm_data;
 	struct parser parser;
 	struct protoverse_server server;
 	u16 root;
 	int ok;
+	size_t len;
 
 	if (argc < 2)
 		return usage();
@@ -115,6 +120,18 @@ int main(int argc, const char *argv[])
 		protoverse_serve(&server);
 	} else if (streq(cmd, "client")) {
 		protoverse_connect("127.0.0.1", 1988);
+	} else if (streq(cmd, "run")) {
+		if (argc != 3)
+			return usage();
+		code_file = argv[2];
+		if (!map_file(code_file, &wasm_data, &len)) {
+			perror("mmap");
+			return 1;
+		}
+		if (!run_wasm(wasm_data, len)) {
+			return 2;
+		}
+		munmap(wasm_data, len);
 	}
 
 	return 0;

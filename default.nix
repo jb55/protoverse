@@ -2,5 +2,5 @@
 with pkgs;
 stdenv.mkDerivation {
   name = "protoverse";
-  nativeBuildInputs = [ gdb ];
+  nativeBuildInputs = [ gdb wabt ];
 }

@@ -9,6 +9,7 @@ struct cursor {
 };
 
 
+void *cursor_alloc(struct cursor *mem, unsigned long size);
 void copy_cursor(struct cursor *src, struct cursor *dest);
 int cursor_index(struct cursor *cursor, int elem_size);
 void make_cursor(unsigned char *start, unsigned char *end, struct cursor *cursor);

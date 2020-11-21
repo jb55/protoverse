@@ -6,6 +6,21 @@
 #include <stdio.h>
 #include <string.h>
 
+void *cursor_alloc(struct cursor *mem, unsigned long size)
+{
+	void *ret;
+
+	if (mem->p + size > mem->end) {
+		return NULL;
+	}
+
+	ret = mem->p;
+	memset(ret, 0, size);
+	mem->p += size;
+
+	return ret;
+}
+
 void copy_cursor(struct cursor *src, struct cursor *dest)
 {
 	dest->start = src->start;
@@ -40,7 +55,7 @@ int pull_byte(struct cursor *cursor, u8 *c)
 
 int push_byte(struct cursor *cursor, u8 c)
 {
-	if (cursor->p + 1 >= cursor->end) {
+	if (cursor->p + 1 > cursor->end) {
 		return 0;
 	}
 
@@ -57,7 +72,7 @@ int pull_data_into_cursor(struct cursor *cursor,
 {
 	int ok;
 
-	if (dest->p + len >= dest->end) {
+	if (dest->p + len > dest->end) {
 		printf("not enough room in dest buffer\n");
 		return 0;
 	}
@@ -73,7 +88,7 @@ int pull_data_into_cursor(struct cursor *cursor,
 
 int pull_data(struct cursor *cursor, u8 *data, int len)
 {
-	if (cursor->p + len >= cursor->end) {
+	if (cursor->p + len > cursor->end) {
 		return 0;
 	}
 

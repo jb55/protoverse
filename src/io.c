@@ -2,6 +2,10 @@
 #include "io.h"
 
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 int read_fd(FILE *fd, unsigned char *buf, int buflen, int *written)
 {
@@ -20,6 +24,20 @@ int read_fd(FILE *fd, unsigned char *buf, int buflen, int *written)
 	return 1;
 }
 
+int map_file(const char *filename, unsigned char **p, size_t *flen)
+{
+	struct stat st;
+	int des;
+	stat(filename, &st);
+	*flen = st.st_size;
+
+	des = open(filename, O_RDONLY);
+
+	*p = mmap(NULL, *flen, PROT_READ, MAP_PRIVATE, des, 0);
+	close(des);
+
+	return *p != MAP_FAILED;
+}
 
 int read_file(const char *filename, unsigned char *buf, int buflen, int *written)
 {

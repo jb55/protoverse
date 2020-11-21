@@ -1,5 +1,8 @@
 *.o
+.build-result
 /protoverse
 /libprotoverse.a
 /TAGS
 /test
+*.wasm
+/tags
