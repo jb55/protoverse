@@ -9,50 +9,6 @@ static const unsigned char WASM_MAGIC[] = {0,'a','s','m'};
 
 #define FUNC_TYPE_TAG 0x60
 
-struct resulttype {
-	unsigned char *valtypes; /* enum valtype */
-	int num_valtypes;
-};
-
-struct functype {
-	struct resulttype params;
-	struct resulttype result;
-};
-
-struct funcsec {
-	unsigned int *type_indices;
-	int num_indices;
-};
-
-struct typesec {
-	struct functype *functypes;
-	int num_functypes;
-};
-
-enum exportdesc {
-	export_func,
-	export_table,
-	export_mem,
-	export_global,
-};
-
-struct wexport {
-	const char *name;
-	unsigned int index;
-	enum exportdesc desc;
-};
-
-struct exportsec {
-	struct wexport *exports;
-	int num_exports;
-};
-
-struct module {
-	struct typesec type_section;
-	struct funcsec func_section;
-	struct exportsec export_section;
-};
-
 enum valtype {
 	i32 = 0x7F,
 	i64 = 0x7E,
@@ -81,11 +37,79 @@ enum section_tag {
 	num_sections,
 };
 
+struct resulttype {
+	unsigned char *valtypes; /* enum valtype */
+	int num_valtypes;
+};
+
+struct functype {
+	struct resulttype params;
+	struct resulttype result;
+};
+
+struct funcsec {
+	unsigned int *type_indices;
+	int num_indices;
+};
+
+struct typesec {
+	struct functype *functypes;
+	int num_functypes;
+};
+
+struct expr {
+	unsigned char *instrs;
+	int num_instrs;
+};
+
+struct local {
+	unsigned int n;
+	enum valtype valtype;
+};
+
+/* "code" */
+struct func {
+	unsigned char *code;
+	int code_len;
+	struct local *locals;
+	int num_locals;
+};
+
+struct codesec {
+	struct func *funcs;
+	int num_funcs;
+};
+
+enum exportdesc {
+	export_func,
+	export_table,
+	export_mem,
+	export_global,
+};
+
+struct wexport {
+	const char *name;
+	unsigned int index;
+	enum exportdesc desc;
+};
+
+struct exportsec {
+	struct wexport *exports;
+	int num_exports;
+};
+
+struct module {
+	struct typesec type_section;
+	struct funcsec func_section;
+	struct exportsec export_section;
+	struct codesec code_section;
+};
+
 struct section {
 	enum section_tag tag;
 };
 
-enum instr {
+enum instr_tag {
 	/* control instructions */
 	i_unreachable   = 0x00,
 	i_nop           = 0x01,
@@ -185,6 +209,33 @@ enum instr {
 
 	i_i32_clz       = 0x67,
 	/* TODO: more instrs */
+};
+
+enum blocktype_tag {
+	blocktype_empty,
+	blocktype_valtype,
+	blocktype_index,
+};
+
+struct blocktype {
+	enum blocktype_tag tag;
+	union {
+		enum valtype valtype;
+		unsigned int index;
+	};
+};
+
+struct block_instr {
+	struct blocktype blocktype;
+	struct instr *instrs;
+	int num_instrs;
+};
+
+struct instr {
+	enum instr_tag tag;
+	union {
+		struct block_instr block;
+	};
 };
 
 int run_wasm(unsigned char *wasm, unsigned long len);

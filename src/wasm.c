@@ -56,11 +56,11 @@ static void note_error_(struct wasm_parser *p, const char *fmt, ...)
 	err.pos = p->cur.p - p->cur.start;
 	err.next = NULL;
 
-	if (!push_str(&p->mem, buf)) {
+	if (!push_c_str(&p->mem, buf)) {
 		fprintf(stderr, "arena OOM when recording parse error, ");
-		fprintf(stderr, "mem->p at %ld, remaining %ld, strlen %ld\n", 
-				p->mem.p - p->mem.start, 
-				p->mem.end - p->mem.p, 
+		fprintf(stderr, "mem->p at %ld, remaining %ld, strlen %ld\n",
+				p->mem.p - p->mem.start,
+				p->mem.end - p->mem.p,
 				strlen(buf));
 		return;
 	}
@@ -69,9 +69,9 @@ static void note_error_(struct wasm_parser *p, const char *fmt, ...)
 
 	if (!push_data(&p->mem, (unsigned char*)&err, sizeof(err))) {
 		fprintf(stderr, "arena OOM when pushing data, ");
-		fprintf(stderr, "mem->p at %ld, remaining %ld, data size %ld\n", 
-				p->mem.p - p->mem.start, 
-				p->mem.end - p->mem.p, 
+		fprintf(stderr, "mem->p at %ld, remaining %ld, data size %ld\n",
+				p->mem.p - p->mem.start,
+				p->mem.end - p->mem.p,
 				sizeof(err));
 		return;
 	}
@@ -162,8 +162,23 @@ static void print_export_section(struct exportsec *exportsec)
 	printf("%d exports:\n", exportsec->num_exports);
 	for (i = 0; i < exportsec->num_exports; i++) {
 		printf("    ");
-		printf("%s %s\n", exportdesc_name(exportsec->exports[i].desc), 
+		printf("%s %s\n", exportdesc_name(exportsec->exports[i].desc),
 				exportsec->exports[i].name);
+	}
+}
+
+static void print_func(struct func *func)
+{
+	/* todo: print locals */
+	printf("%d bytes of code\n", func->code_len);
+}
+
+static void print_code_section(struct codesec *codesec)
+{
+	int i;
+
+	for (i = 0; i < codesec->num_funcs; i++) {
+		print_func(&codesec->funcs[i]);
 	}
 }
 
@@ -172,10 +187,25 @@ static void print_module(struct module *module)
 	print_type_section(&module->type_section);
 	print_func_section(&module->func_section);
 	print_export_section(&module->export_section);
+	print_code_section(&module->code_section);
 }
 
+static int is_valtype(unsigned char byte)
+{
+	switch ((enum valtype)byte) {
+		case i32:
+		case i64:
+		case f32:
+		case f64:
+			return 1;
+	}
+
+	return 0;
+}
+
+
 /* I DONT NEED THIS (yet?) */
-/* 
+/*
 static int leb128_write(struct cursor *write, unsigned int val)
 {
 	unsigned char byte;
@@ -254,24 +284,19 @@ static int parse_section_tag(struct cursor *cur, enum section_tag *section)
 	return 1;
 }
 
-static int parse_valtype(struct wasm_parser *p, unsigned char *valtype)
+static int parse_valtype(struct wasm_parser *p, enum valtype *valtype)
 {
 	unsigned char *start;
 
 	start = p->cur.p;
 
-	if (!pull_byte(&p->cur, valtype)) {
+	if (!pull_byte(&p->cur, (unsigned char*)valtype)) {
 		note_error(p, "valtype tag oob");
 		return 0;
 	}
 
-	switch ((enum valtype)*valtype) {
-	case i32:
-	case i64:
-	case f32:
-	case f64:
+	if (is_valtype(*valtype))
 		return 1;
-	}
 
 	p->cur.p = start;
 	note_error(p, "%c is not a valid valtype tag", *valtype);
@@ -281,7 +306,7 @@ static int parse_valtype(struct wasm_parser *p, unsigned char *valtype)
 static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 {
 	int i, elems;
-	unsigned char valtype;
+	enum valtype valtype;
 	unsigned char *start;
 
 	rt->num_valtypes = 0;
@@ -301,7 +326,7 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 			return 0;
 		}
 
-		if (!push_byte(&p->mem, valtype)) {
+		if (!push_byte(&p->mem, (unsigned char)valtype)) {
 			note_error(p, "valtype push data OOM #%d", i);
 			p->mem.p = start;
 			return 0;
@@ -343,7 +368,7 @@ static int parse_name(struct wasm_parser *p, const char **name)
 		return 0;
 	}
 
-	if (!pull_data_into_cursor(&p->cur, &p->mem, (unsigned char**)name, 
+	if (!pull_data_into_cursor(&p->cur, &p->mem, (unsigned char**)name,
 				bytes)) {
 		note_error(p, "name string");
 		return 0;
@@ -357,7 +382,7 @@ static int parse_name(struct wasm_parser *p, const char **name)
 	return 1;
 }
 
-static int parse_export_desc(struct wasm_parser *p, enum exportdesc *desc) 
+static int parse_export_desc(struct wasm_parser *p, enum exportdesc *desc)
 {
 	unsigned char byte;
 
@@ -399,7 +424,98 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 	return 1;
 }
 
-static int parse_export_section(struct wasm_parser *p, 
+static int parse_local(struct wasm_parser *p, struct local *local)
+{
+	if (!leb128_read(&p->cur, &local->n)) {
+		note_error(p, "n");
+		return 0;
+	}
+
+	if (!parse_valtype(p, &local->valtype)) {
+		note_error(p, "valtype");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_func(struct wasm_parser *p, struct func *func)
+{
+	unsigned int elems, size, i;
+	unsigned char *start;
+	struct local *locals;
+
+	if (!leb128_read(&p->cur, &size)) {
+		note_error(p, "code size");
+		return 0;
+	}
+
+	start = p->cur.p;
+
+	if (!leb128_read(&p->cur, &elems)) {
+		note_error(p, "num locals");
+		return 0;
+	}
+
+	locals = cursor_alloc(&p->mem, elems * sizeof(*locals));
+
+	if (!locals) {
+		note_error(p, "alloc locals");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_local(p, &locals[i])) {
+			note_error(p, "local #%d", i);
+			return 0;
+		}
+	}
+
+	func->code_len = size - (p->cur.p - start);
+
+	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code, 
+				func->code_len)) {
+		note_error(p, "code oom");
+		return 0;
+	}
+
+	assert(func->code[func->code_len-1] == i_end);
+
+	return 1;
+}
+
+static int parse_code_section(struct wasm_parser *p,
+		struct codesec *code_section)
+{
+	struct func *funcs;
+	unsigned int elems, i;
+
+	if (!leb128_read(&p->cur, &elems)) {
+		note_error(p, "code vec len");
+		return 0;
+	}
+
+	funcs = cursor_alloc(&p->mem, elems * sizeof(*funcs));
+
+	if (!funcs) {
+		fprintf(stderr, "could not allocate memory for code section\n");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_func(p, &funcs[i])) {
+			note_error(p, "func #%d", i);
+			return 0;
+		}
+	}
+
+	code_section->num_funcs = elems;
+	code_section->funcs = funcs;
+
+	return 1;
+}
+
+static int parse_export_section(struct wasm_parser *p,
 		struct exportsec *export_section)
 {
 	struct wexport *exports;
@@ -419,7 +535,7 @@ static int parse_export_section(struct wasm_parser *p,
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_export(p, &exports[i])) {
-			note_error(p, "export #%d");
+			note_error(p, "export #%d", i);
 			return 0;
 		}
 	}
@@ -430,7 +546,7 @@ static int parse_export_section(struct wasm_parser *p,
 	return 1;
 }
 
-static int parse_function_section(struct wasm_parser *p, 
+static int parse_function_section(struct wasm_parser *p,
 		struct funcsec *funcsec)
 {
 	unsigned int *indices;
@@ -476,7 +592,7 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 	}
 
 	functypes = cursor_alloc(&p->mem, elems * sizeof(struct functype));
-	
+
 	if (!functypes) {
 		/* can't use note_error because we're oom */
 		fprintf(stderr, "could not allocate memory for type section\n");
@@ -496,7 +612,7 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 	return 1;
 }
 
-static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag, 
+static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		unsigned int size)
 {
 	(void)size;
@@ -541,8 +657,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		note_error(p, "section_element parse not implemented");
 		return 0;
 	case section_code:
-		note_error(p, "section_code parse not implemented");
-		return 0;
+		if (!parse_code_section(p, &p->module.code_section)) {
+			note_error(p, "code section");
+			return 0;
+		}
+		return 1;
 	case section_data:
 		note_error(p, "section_data parse not implemented");
 		return 0;
@@ -595,7 +714,7 @@ static int parse_section(struct wasm_parser *p)
 
 	if (!parse_section_tag(&p->cur, &tag)) {
 		note_error(p, "section tag");
-		return 0;
+		return 2;
 	}
 
 	if (!leb128_read(&p->cur, &bytes)) {
@@ -624,12 +743,17 @@ static int parse_wasm(struct wasm_parser *p)
 	}
 
 	while (1) {
+		if (cursor_eof(&p->cur))
+			break;
+
 		if (!parse_section(p)) {
 			note_error(p, "section");
 			goto fail;
 		}
 	}
 
+	printf("module parse success!\n\n");
+	print_module(&p->module);
 	return 1;
 
 fail:
@@ -640,7 +764,7 @@ fail:
 	return 0;
 }
 
-int run_wasm(unsigned char *wasm, unsigned long len) 
+int run_wasm(unsigned char *wasm, unsigned long len)
 {
 	struct wasm_parser p;
 

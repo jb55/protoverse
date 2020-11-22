@@ -11,6 +11,7 @@ struct cursor {
 
 void *cursor_alloc(struct cursor *mem, unsigned long size);
 void copy_cursor(struct cursor *src, struct cursor *dest);
+int cursor_eof(struct cursor *src);
 int cursor_index(struct cursor *cursor, int elem_size);
 void make_cursor(unsigned char *start, unsigned char *end, struct cursor *cursor);
 int cursor_remaining_capacity(struct cursor *cursor);
@@ -30,6 +31,7 @@ int pull_varint(struct cursor *cursor, int *i);
 
 int push_prefixed_str(struct cursor *cursor, const char *str);
 int push_str(struct cursor *cursor, const char *str);
+int push_c_str(struct cursor *cursor, const char *str);
 int push_sized_str(struct cursor *cursor, const char *str, int len);
 
 int pull_prefixed_str(struct cursor *cursor, struct cursor *dest_buf, const char **str);

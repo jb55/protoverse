@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <string.h>
 
+int cursor_eof(struct cursor *c)
+{
+	return c->p == c->end;
+}
+
 void *cursor_alloc(struct cursor *mem, unsigned long size)
 {
 	void *ret;
@@ -197,6 +202,12 @@ int push_str(struct cursor *cursor, const char *str)
 {
 	return push_data(cursor, (u8*)str, strlen(str));
 }
+
+int push_c_str(struct cursor *cursor, const char *str)
+{
+	return push_str(cursor, str) && push_byte(cursor, 0);
+}
+
 
 /* TODO: push varint size */
 int push_prefixed_str(struct cursor *cursor, const char *str)
