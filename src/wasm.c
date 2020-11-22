@@ -304,7 +304,6 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 	typesec->functypes = NULL;
 
 	if (!leb128_read(&p->cur, &elems)) {
-		fprintf(stderr, "what\n");
 		note_error(p, "functypes vec len");
 		return 0;
 	}
@@ -340,7 +339,6 @@ static int parse_section_by_tag(struct wasm_parser *p,
 		return 0;
 	case section_type:
 		if (!parse_type_section(p, &p->module.type_section)) {
-			fprintf(stderr,"what\n");
 			note_error(p, "type section");
 			return 0;
 		}
