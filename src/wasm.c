@@ -391,6 +391,11 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 		return 0;
 	}
 
+	if (!leb128_read(&p->cur, &export->index)) {
+		note_error(p, "export index");
+		return 0;
+	}
+
 	return 1;
 }
 
