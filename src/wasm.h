@@ -19,13 +19,38 @@ struct functype {
 	struct resulttype result;
 };
 
+struct funcsec {
+	unsigned int *type_indices;
+	int num_indices;
+};
+
 struct typesec {
 	struct functype *functypes;
 	int num_functypes;
 };
 
+enum exportdesc {
+	export_func,
+	export_table,
+	export_mem,
+	export_global,
+};
+
+struct wexport {
+	const char *name;
+	unsigned int index;
+	enum exportdesc desc;
+};
+
+struct exportsec {
+	struct wexport *exports;
+	int num_exports;
+};
+
 struct module {
 	struct typesec type_section;
+	struct funcsec func_section;
+	struct exportsec export_section;
 };
 
 enum valtype {

@@ -123,13 +123,55 @@ static void print_functype(struct functype *ft)
 	printf("\n");
 }
 
-static void print_module(struct module *module)
+static void print_type_section(struct typesec *typesec)
 {
 	int i;
-	printf("%d functypes:\n", module->type_section.num_functypes);
-	for (i = 0; i < module->type_section.num_functypes; i++) {
-		print_functype(&module->type_section.functypes[i]);
+	printf("%d functypes:\n", typesec->num_functypes);
+	for (i = 0; i < typesec->num_functypes; i++) {
+		printf("    ");
+		print_functype(&typesec->functypes[i]);
 	}
+}
+
+static void print_func_section(struct funcsec *funcsec)
+{
+	int i;
+	printf("%d functions\n", funcsec->num_indices);
+	printf("    ");
+	for (i = 0; i < funcsec->num_indices; i++) {
+		printf("%d ", funcsec->type_indices[i]);
+	}
+	printf("\n");
+}
+
+static const char *exportdesc_name(enum exportdesc desc)
+{
+	switch (desc) {
+		case export_func: return "function";
+		case export_table: return "table";
+		case export_mem: return "memory";
+		case export_global: return "global";
+	}
+
+	return "unknown";
+}
+
+static void print_export_section(struct exportsec *exportsec)
+{
+	int i;
+	printf("%d exports:\n", exportsec->num_exports);
+	for (i = 0; i < exportsec->num_exports; i++) {
+		printf("    ");
+		printf("%s %s\n", exportdesc_name(exportsec->exports[i].desc), 
+				exportsec->exports[i].name);
+	}
+}
+
+static void print_module(struct module *module)
+{
+	print_type_section(&module->type_section);
+	print_func_section(&module->func_section);
+	print_export_section(&module->export_section);
 }
 
 /* I DONT NEED THIS (yet?) */
@@ -293,6 +335,126 @@ static int parse_func_type(struct wasm_parser *p, struct functype *func)
 	return 1;
 }
 
+static int parse_name(struct wasm_parser *p, const char **name)
+{
+	unsigned int bytes;
+	if (!leb128_read(&p->cur, &bytes)) {
+		note_error(p, "name len");
+		return 0;
+	}
+
+	if (!pull_data_into_cursor(&p->cur, &p->mem, (unsigned char**)name, 
+				bytes)) {
+		note_error(p, "name string");
+		return 0;
+	}
+
+	if (!push_byte(&p->mem, 0)) {
+		note_error(p, "name null byte");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_export_desc(struct wasm_parser *p, enum exportdesc *desc) 
+{
+	unsigned char byte;
+
+	if (!pull_byte(&p->cur, &byte)) {
+		note_error(p, "export desc byte eof");
+		return 0;
+	}
+
+	switch((enum exportdesc)byte) {
+	case export_func:
+	case export_table:
+	case export_mem:
+	case export_global:
+		*desc = (enum exportdesc)byte;
+		return 1;
+	}
+
+	note_error(p, "invalid tag: %x", byte);
+	return 0;
+}
+
+static int parse_export(struct wasm_parser *p, struct wexport *export)
+{
+	if (!parse_name(p, &export->name)) {
+		note_error(p, "export name");
+		return 0;
+	}
+
+	if (!parse_export_desc(p, &export->desc)) {
+		note_error(p, "export desc");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_export_section(struct wasm_parser *p, 
+		struct exportsec *export_section)
+{
+	struct wexport *exports;
+	unsigned int elems, i;
+
+	if (!leb128_read(&p->cur, &elems)) {
+		note_error(p, "export vec len");
+		return 0;
+	}
+
+	exports = cursor_alloc(&p->mem, elems * sizeof(*exports));
+
+	if (!exports) {
+		fprintf(stderr, "could not allocate memory for exports section\n");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_export(p, &exports[i])) {
+			note_error(p, "export #%d");
+			return 0;
+		}
+	}
+
+	export_section->num_exports = elems;
+	export_section->exports = exports;
+
+	return 1;
+}
+
+static int parse_function_section(struct wasm_parser *p, 
+		struct funcsec *funcsec)
+{
+	unsigned int *indices;
+	unsigned int i, elems;
+
+	if (!leb128_read(&p->cur, &elems)) {
+		note_error(p, "typeidx vec len");
+		return 0;
+	}
+
+	indices = cursor_alloc(&p->mem, elems * sizeof(*indices));
+
+	if (!indices) {
+		fprintf(stderr, "could not allocate memory for func section\n");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!leb128_read(&p->cur, &indices[i])) {
+			note_error(p, "typeidx #%d", i);
+			return 0;
+		}
+	}
+
+	funcsec->type_indices = indices;
+	funcsec->num_indices = elems;
+
+	return 1;
+}
 
 /* type section is just a vector of function types */
 static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
@@ -329,8 +491,8 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 	return 1;
 }
 
-static int parse_section_by_tag(struct wasm_parser *p, 
-		enum section_tag tag, unsigned int size)
+static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag, 
+		unsigned int size)
 {
 	(void)size;
 	switch (tag) {
@@ -347,8 +509,11 @@ static int parse_section_by_tag(struct wasm_parser *p,
 		note_error(p, "section_import parse not implemented");
 		return 0;
 	case section_function:
-		note_error(p, "section_function parse not implemented");
-		return 0;
+		if (!parse_function_section(p, &p->module.func_section)) {
+			note_error(p, "function section");
+			return 0;
+		}
+		return 1;
 	case section_table:
 		note_error(p, "section_table parse not implemented");
 		return 0;
@@ -359,8 +524,11 @@ static int parse_section_by_tag(struct wasm_parser *p,
 		note_error(p, "section_global parse not implemented");
 		return 0;
 	case section_export:
-		note_error(p, "section_export parse not implemented");
-		return 0;
+		if (!parse_export_section(p, &p->module.export_section)) {
+			note_error(p, "export section");
+			return 0;
+		}
+		return 1;
 	case section_start:
 		note_error(p, "section_start parse not implemented");
 		return 0;
