@@ -20,7 +20,7 @@ all: protoverse libprotoverse.a
 	@$(CC) -c -o $@ $(CPPFLAGS) $(CFLAGS) $<
 
 %.wasm: %.wat
-	wat2wasm $^
+	wat2wasm $^ -o $@
 
 protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"

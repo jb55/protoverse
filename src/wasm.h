@@ -208,7 +208,10 @@ enum instr_tag {
 	i_f64_ge        = 0x66,
 
 	i_i32_clz       = 0x67,
+
+	i_i32_add       = 0x6A,
 	/* TODO: more instrs */
+
 };
 
 enum blocktype_tag {

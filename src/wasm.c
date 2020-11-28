@@ -7,8 +7,10 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #define note_error(p, fmt, ...) note_error_(p, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
+#define interp_error(p, fmt, ...) interp_error_(p, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
 
 #define ERR_STACK_SIZE 16
 
@@ -18,11 +20,32 @@ struct parse_error {
 	struct parse_error *next;
 };
 
+struct val {
+	enum valtype type;
+	union {
+		int i32;
+		int64_t i64;
+		float f32;
+		double f64;
+	};
+};
+
 struct wasm_parser {
 	struct module module;
 	struct cursor cur;
 	struct cursor mem;
 	struct parse_error *errors;
+};
+
+struct wasm_interp {
+	struct module *module;
+	struct cursor cur;
+	struct cursor stack;
+	struct cursor mem;
+	struct parser_error *errors;
+
+	struct val *params;
+	int num_params;
 };
 
 #ifdef DEBUG
@@ -39,6 +62,87 @@ static void log_dbg_(const char *fmt, ...)
 #define log_dbg(...)
 #endif
 
+static int is_valtype(unsigned char byte)
+{
+	switch ((enum valtype)byte) {
+		case i32:
+		case i64:
+		case f32:
+		case f64:
+			return 1;
+	}
+
+	return 0;
+}
+
+
+static int sizeof_valtype(enum valtype valtype)
+{
+	switch (valtype) {
+	case i32: return 4;
+	case f32: return 4;
+	case i64: return 8;
+	case f64: return 8;
+	}
+
+	return 0;
+}
+
+static int stack_pushval(struct cursor *cur, struct val *val)
+{
+	if (!push_data(cur, (unsigned char*)&val->i32, sizeof_valtype(val->type)))
+		return 0;
+	return push_byte(cur, (unsigned char)val->type);
+}
+
+static int cursor_popbyte(struct cursor *cur, unsigned char *byte)
+{
+	if (cur->p - 1 < cur->start)
+		return 0;
+
+	cur->p--;
+	*byte = *cur->p;
+
+	return 1;
+}
+
+static int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
+{
+	if (cur->p - len < cur->start)
+		return 0;
+
+	cur->p = cur->p - len;
+
+	memcpy(dest, cur->p, len);
+
+	return 1;
+}
+
+static int stack_popval(struct cursor *cur, struct val *val)
+{
+	unsigned char byte;
+
+	if (!cursor_popbyte(cur, &byte))
+		return 0;
+
+	if (!is_valtype(byte))
+		return 0;
+
+	val->type = (enum valtype)byte;
+
+	return cursor_popdata(cur, (unsigned char*)&val->i32, sizeof_valtype(val->type));
+}
+
+static void interp_error_(struct wasm_interp *p, const char *fmt, ...)
+{
+	va_list ap;
+
+	(void)p;
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, "\n");
+	va_end(ap);
+}
 
 static void note_error_(struct wasm_parser *p, const char *fmt, ...)
 {
@@ -167,9 +271,20 @@ static void print_export_section(struct exportsec *exportsec)
 	}
 }
 
+static void print_local(struct local *local)
+{
+	printf("%d %s\n", local->n, valtype_name(local->valtype));
+}
+
 static void print_func(struct func *func)
 {
 	/* todo: print locals */
+	int i;
+
+	printf("func locals (%d): \n", func->num_locals);
+	for (i = 0; i < func->num_locals; i++) {
+		print_local(&func->locals[i]);
+	}
 	printf("%d bytes of code\n", func->code_len);
 }
 
@@ -188,19 +303,6 @@ static void print_module(struct module *module)
 	print_func_section(&module->func_section);
 	print_export_section(&module->export_section);
 	print_code_section(&module->code_section);
-}
-
-static int is_valtype(unsigned char byte)
-{
-	switch ((enum valtype)byte) {
-		case i32:
-		case i64:
-		case f32:
-		case f64:
-			return 1;
-	}
-
-	return 0;
 }
 
 
@@ -295,7 +397,7 @@ static int parse_valtype(struct wasm_parser *p, enum valtype *valtype)
 		return 0;
 	}
 
-	if (is_valtype(*valtype))
+	if (is_valtype((unsigned char)*valtype))
 		return 1;
 
 	p->cur.p = start;
@@ -471,9 +573,11 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 		}
 	}
 
+	func->locals = locals;
+	func->num_locals = elems;
 	func->code_len = size - (p->cur.p - start);
 
-	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code, 
+	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code,
 				func->code_len)) {
 		note_error(p, "code oom");
 		return 0;
@@ -764,6 +868,154 @@ fail:
 	return 0;
 }
 
+static int interp_i32_add(struct wasm_interp *interp)
+{
+	struct val a;
+	struct val b;
+	struct val c;
+
+	if (!stack_popval(&interp->stack, &a)) {
+		interp_error(interp, "pop first");
+		return 0;
+	}
+
+	if (!stack_popval(&interp->stack, &b)) {
+		interp_error(interp, "pop second");
+		return 0;
+	}
+
+	if (a.type != i32 || b.type != i32) {
+	        interp_error(interp, "i32_add type mismatch");
+	        return 0;
+	}
+
+	c.type = i32;
+	c.i32 = a.i32 + b.i32;
+
+	return stack_pushval(&interp->stack, &c);
+}
+
+static int interp_local_get(struct wasm_interp *interp)
+{
+	unsigned int index;
+
+	if (!leb128_read(&interp->cur, &index)) {
+		interp_error(interp, "index");
+		return 0;
+	}
+
+	if (index+1 > (unsigned int)interp->num_params) {
+		interp_error(interp, "invalid index");
+		return 0;
+	}
+
+	return stack_pushval(&interp->stack, &interp->params[index]);
+}
+
+static int interp_instr(struct wasm_interp *interp, unsigned char tag)
+{
+	switch (tag) {
+	case i_unreachable: return 1;
+	case i_nop: return 1;
+	case i_local_get: return interp_local_get(interp);
+	case i_i32_add: return interp_i32_add(interp);
+	default:
+		    interp_error(interp, "unhandled instruction %x", tag);
+		    return 0;
+	}
+
+	return 0;
+}
+
+static int interp_code(struct wasm_interp *interp)
+{
+	unsigned char tag;
+
+	for (;;) {
+		if (!pull_byte(&interp->cur, &tag)) {
+			interp_error(interp, "instr tag");
+			return 0;
+		}
+
+		if (tag == i_end)
+			break;
+
+		if (!interp_instr(interp, tag)) {
+			interp_error(interp, "interp instr");
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+#define STACK_SPACE 5242880
+#define MEM_SPACE 5242880
+
+static void print_stack(struct cursor *stack)
+{
+	struct val val;
+	int i;
+
+	i = 0;
+
+	for (i = 0; stack->p > stack->start; i++) {
+		stack_popval(stack, &val);
+		printf("[%d] ", i);
+		switch (val.type) {
+		case i32: printf("%d", val.i32); break;
+		case i64: printf("%ld", val.i64); break;
+		case f32: printf("%f", val.f32); break;
+		case f64: printf("%f", val.f64); break;
+		}
+		printf(":%s\n", valtype_name(val.type));
+	}
+}
+
+static int interp_module(struct module *module)
+{
+	int ok;
+	struct func *func;
+	struct wasm_interp interp;
+	static unsigned char *stack, *mem;
+
+	stack = malloc(STACK_SPACE);
+	mem = malloc(STACK_SPACE);
+
+	if (module->code_section.num_funcs == 0) {
+		printf("empty module\n");
+		return 0;
+	}
+	func = &module->code_section.funcs[0];
+
+	make_cursor(func->code, func->code + func->code_len, &interp.cur);
+	make_cursor(stack, stack + STACK_SPACE, &interp.stack);
+	make_cursor(mem, mem + MEM_SPACE, &interp.mem);
+
+	interp.params = cursor_alloc(&interp.mem, sizeof(struct val) * 32);
+
+	/* should be done when calling function? */
+	interp.params[0].type = i32;
+	interp.params[0].i32 = 1;
+
+	interp.params[1].type = i32;
+	interp.params[1].i32 = 2;
+
+	interp.num_params = 2;
+
+	ok = interp_code(&interp);
+
+	if (ok) {
+		printf("interp success!!\n");
+	}
+	printf("stack:\n");
+	print_stack(&interp.stack);
+
+	free(stack);
+	free(mem);
+	return ok;
+}
+
 int run_wasm(unsigned char *wasm, unsigned long len)
 {
 	struct wasm_parser p;
@@ -779,7 +1031,16 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 	make_cursor(wasm, wasm + len, &p.cur);
 	make_cursor(mem, mem + arena_size, &p.mem);
 
-	ok = parse_wasm(&p);
+	if (!parse_wasm(&p)) {
+		free(mem);
+		return 0;
+	}
+
+	if (!interp_module(&p.module)) {
+		free(mem);
+		return 0;
+	}
+
 	free(mem);
 	return ok;
 }
