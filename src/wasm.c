@@ -541,6 +541,24 @@ static int parse_local(struct wasm_parser *p, struct local *local)
 	return 1;
 }
 
+static int parse_vector(struct wasm_parser *p, unsigned int item_size,
+		unsigned int *elems, void **items)
+{
+	if (!leb128_read(&p->cur, elems)) {
+		note_error(p, "len");
+		return 0;
+	}
+
+	*items = cursor_alloc(&p->mem, *elems * item_size);
+
+	if (*items == NULL) {
+		note_error(p, "vector alloc oom");
+		return 0;
+	}
+
+	return 1;
+}
+
 static int parse_func(struct wasm_parser *p, struct func *func)
 {
 	unsigned int elems, size, i;
@@ -554,15 +572,8 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 
 	start = p->cur.p;
 
-	if (!leb128_read(&p->cur, &elems)) {
-		note_error(p, "num locals");
-		return 0;
-	}
-
-	locals = cursor_alloc(&p->mem, elems * sizeof(*locals));
-
-	if (!locals) {
-		note_error(p, "alloc locals");
+	if (!parse_vector(p, sizeof(*locals), &elems, (void**)&locals)) {
+		note_error(p, "locals");
 		return 0;
 	}
 
@@ -594,15 +605,8 @@ static int parse_code_section(struct wasm_parser *p,
 	struct func *funcs;
 	unsigned int elems, i;
 
-	if (!leb128_read(&p->cur, &elems)) {
-		note_error(p, "code vec len");
-		return 0;
-	}
-
-	funcs = cursor_alloc(&p->mem, elems * sizeof(*funcs));
-
-	if (!funcs) {
-		fprintf(stderr, "could not allocate memory for code section\n");
+	if (!parse_vector(p, sizeof(*funcs), &elems, (void**)&funcs)) {
+		note_error(p, "funcs");
 		return 0;
 	}
 
@@ -625,12 +629,10 @@ static int parse_export_section(struct wasm_parser *p,
 	struct wexport *exports;
 	unsigned int elems, i;
 
-	if (!leb128_read(&p->cur, &elems)) {
-		note_error(p, "export vec len");
+	if (!parse_vector(p, sizeof(*exports), &elems, (void**)&exports)) {
+		note_error(p, "vector");
 		return 0;
 	}
-
-	exports = cursor_alloc(&p->mem, elems * sizeof(*exports));
 
 	if (!exports) {
 		fprintf(stderr, "could not allocate memory for exports section\n");
@@ -656,15 +658,8 @@ static int parse_function_section(struct wasm_parser *p,
 	unsigned int *indices;
 	unsigned int i, elems;
 
-	if (!leb128_read(&p->cur, &elems)) {
-		note_error(p, "typeidx vec len");
-		return 0;
-	}
-
-	indices = cursor_alloc(&p->mem, elems * sizeof(*indices));
-
-	if (!indices) {
-		fprintf(stderr, "could not allocate memory for func section\n");
+	if (!parse_vector(p, sizeof(*indices), &elems, (void**)&indices)) {
+		note_error(p, "indices");
 		return 0;
 	}
 
@@ -690,16 +685,8 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 	typesec->num_functypes = 0;
 	typesec->functypes = NULL;
 
-	if (!leb128_read(&p->cur, &elems)) {
-		note_error(p, "functypes vec len");
-		return 0;
-	}
-
-	functypes = cursor_alloc(&p->mem, elems * sizeof(struct functype));
-
-	if (!functypes) {
-		/* can't use note_error because we're oom */
-		fprintf(stderr, "could not allocate memory for type section\n");
+	if (!parse_vector(p, sizeof(*functypes), &elems, (void**)&functypes)) {
+		note_error(p, "functypes");
 		return 0;
 	}
 
