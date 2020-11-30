@@ -650,11 +650,6 @@ static int parse_export_section(struct wasm_parser *p,
 		return 0;
 	}
 
-	if (!exports) {
-		fprintf(stderr, "could not allocate memory for exports section\n");
-		return 0;
-	}
-
 	for (i = 0; i < elems; i++) {
 		if (!parse_export(p, &exports[i])) {
 			note_error(p, "export #%d", i);
