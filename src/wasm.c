@@ -260,6 +260,21 @@ static const char *exportdesc_name(enum exportdesc desc)
 	return "unknown";
 }
 
+static void print_import(struct import *import)
+{
+	printf("%s %s\n", import->module_name, import->name);
+}
+
+static void print_import_section(struct importsec *importsec)
+{
+	int i;
+	printf("%d imports:\n", importsec->num_imports);
+	for (i = 0; i < importsec->num_imports; i++) {
+		printf("    ");
+		print_import(&importsec->imports[i]);
+	}
+}
+
 static void print_export_section(struct exportsec *exportsec)
 {
 	int i;
@@ -301,6 +316,7 @@ static void print_module(struct module *module)
 {
 	print_type_section(&module->type_section);
 	print_func_section(&module->func_section);
+	print_import_section(&module->import_section);
 	print_export_section(&module->export_section);
 	print_code_section(&module->code_section);
 }
@@ -676,6 +692,162 @@ static int parse_function_section(struct wasm_parser *p,
 	return 1;
 }
 
+static int parse_mut(struct wasm_parser *p, enum mut *mut)
+{
+	if (consume_byte(&p->cur, mut_const)) {
+		*mut = mut_const;
+		return 1;
+	}
+
+	if (consume_byte(&p->cur, mut_var)) {
+		*mut = mut_var;
+		return 1;
+	}
+
+	note_error(p, "unknown mut %02x", *p->cur.p);
+	return 0;
+}
+
+static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
+{
+	if (!parse_valtype(p, &g->valtype)) {
+		note_error(p, "valtype");
+		return 0;
+	}
+
+	return parse_mut(p, &g->mut);
+}
+
+static int parse_limits(struct wasm_parser *p, struct limits *limits)
+{
+	unsigned char tag;
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "oob");
+		return 0;
+	}
+
+	if (tag != limit_min || tag != limit_min_max) {
+		note_error(p, "invalid tag %02x", tag);
+		return 0;
+	}
+
+	if (!leb128_read(&p->cur, &limits->min)) {
+		note_error(p, "min");
+		return 0;
+	}
+
+	if (tag == limit_min)
+		return 1;
+
+	if (!leb128_read(&p->cur, &limits->max)) {
+		note_error(p, "max");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_import_table(struct wasm_parser *p, struct limits *limits)
+{
+	if (!consume_byte(&p->cur, 0x70)) {
+		note_error(p, "elemtype != 0x70");
+		return 0;
+	}
+
+	if (!parse_limits(p, limits)) {
+		note_error(p, "limits");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
+{
+	unsigned char tag;
+
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "oom");
+		return 0;
+	}
+
+	desc->type = (enum import_type)tag;
+
+	switch (desc->type) {
+	case import_func:
+		if (!leb128_read(&p->cur, &desc->typeidx)) {
+			note_error(p, "typeidx");
+			return 0;
+		}
+		return 1;
+
+	case import_table:
+		return parse_import_table(p, &desc->tabletype);
+
+	case import_mem:
+		if (!parse_limits(p, &desc->memtype)) {
+			note_error(p, "memtype limits");
+			return 0;
+		}
+
+		return 1;
+
+	case import_global:
+		if (!parse_globaltype(p, &desc->globaltype)) {
+			note_error(p, "globaltype");
+			return 0;
+		}
+
+		return 1;
+	}
+
+	note_error(p, "unknown importdesc tag %02x", tag);
+	return 0;
+}
+
+static int parse_import(struct wasm_parser *p, struct import *import)
+{
+	if (!parse_name(p, &import->module_name)) {
+		note_error(p, "module name");
+		return 0;
+	}
+
+	if (!parse_name(p, &import->name)) {
+		note_error(p, "name");
+		return 0;
+	}
+
+	if (!parse_importdesc(p, &import->import_desc)) {
+		note_error(p, "desc");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_import_section(struct wasm_parser *p, struct importsec *importsec)
+{
+	unsigned int elems, i;
+	struct import *imports;
+
+	if (!parse_vector(p, sizeof(*imports), &elems, (void**)&imports)) {
+		note_error(p, "imports");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_import(p, &imports[i])) {
+			note_error(p, "import #%d", i);
+			return 0;
+		}
+	}
+
+	importsec->imports = imports;
+	importsec->num_imports = elems;
+
+	return 1;
+}
+
 /* type section is just a vector of function types */
 static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 {
@@ -718,8 +890,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		}
 		return 1;
 	case section_import:
-		note_error(p, "section_import parse not implemented");
-		return 0;
+		if (!parse_import_section(p, &p->module.import_section)) {
+			note_error(p, "import section");
+			return 0;
+		}
+		return 1;
 	case section_function:
 		if (!parse_function_section(p, &p->module.func_section)) {
 			note_error(p, "function section");

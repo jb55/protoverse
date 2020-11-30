@@ -16,9 +16,15 @@ enum valtype {
 	f64 = 0x7C,
 };
 
-enum limits {
+enum limit_type {
 	limit_min = 0x00,
 	limit_min_max = 0x01,
+};
+
+struct limits {
+	unsigned int min;
+	unsigned int max;
+	enum limit_type type;
 };
 
 enum section_tag {
@@ -55,6 +61,44 @@ struct funcsec {
 struct typesec {
 	struct functype *functypes;
 	int num_functypes;
+};
+
+enum import_type {
+	import_func,
+	import_table,
+	import_mem,
+	import_global,
+};
+
+enum mut {
+	mut_const,
+	mut_var,
+};
+
+struct globaltype {
+	enum valtype valtype;
+	enum mut mut;
+};
+
+struct importdesc {
+	enum import_type type;
+	union {
+		unsigned int typeidx;
+		struct limits tabletype;
+		struct limits memtype;
+		struct globaltype globaltype;
+	};
+};
+
+struct import {
+	const char *module_name;
+	const char *name;
+	struct importdesc import_desc;
+};
+
+struct importsec {
+	struct import *imports;
+	int num_imports;
 };
 
 struct expr {
@@ -101,6 +145,7 @@ struct exportsec {
 struct module {
 	struct typesec type_section;
 	struct funcsec func_section;
+	struct importsec import_section;
 	struct exportsec export_section;
 	struct codesec code_section;
 };
