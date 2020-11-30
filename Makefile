@@ -13,7 +13,12 @@ OBJS = src/io.o \
        src/parser.o \
        src/wasm.o
 
+WASMS = wasm/hello-c.wasm \
+	wasm/hello.wasm
+
 all: protoverse libprotoverse.a
+
+wasm: $(WASMS)
 
 %.o: %.c %.h
 	@echo "cc $<"
@@ -21,6 +26,9 @@ all: protoverse libprotoverse.a
 
 %.wasm: %.wat
 	wat2wasm $^ -o $@
+
+wasm/hello-c.wasm: wasm/hello-c.c
+	emcc $< -s WASM=1 -o $@
 
 protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"
@@ -30,7 +38,7 @@ libprotoverse.a: $(OBJS)
 	ar rcs $@ $^
 
 clean:
-	rm -f protoverse test $(OBJS) libprotoverse.a
+	rm -f protoverse test $(OBJS) libprotoverse.a $(WASMS)
 
 test: src/test.c $(OBJS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
