@@ -1,9 +1,8 @@
 
-CFLAGS = -Wno-error=unused-function -O1 -g -std=c89 -Wall -Wextra -Werror -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wmissing-declarations -Wdeclaration-after-statement
+CFLAGS = -Wno-error=unused-function -Ofast -std=gnu90 -Wall -Wextra -Werror -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wmissing-declarations -Wdeclaration-after-statement
 
 OBJS = src/io.o \
        src/parse.o \
-       src/cursor.o \
        src/describe.o \
        src/serve.o \
        src/client.o \
