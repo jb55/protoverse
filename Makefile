@@ -8,7 +8,6 @@ OBJS = src/io.o \
        src/client.o \
        src/net.o \
        src/varint.o \
-       src/util.o \
        src/parser.o \
        src/wasm.o
 
