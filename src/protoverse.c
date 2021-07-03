@@ -25,12 +25,14 @@ static void print_all_cells(struct parser *parser)
 	for (i = 0; i < ncells; i++) {
 		cell = get_cell(parser->cells, i);
 		print_cell(parser->attributes, cell);
+		printf("\n");
 
 		for (j = 0; j < cell->n_children; j++) {
 			cell = get_cell(parser->cells, cell->children[j]);
 			assert(cell);
 			printf("  ");
 			print_cell(parser->attributes, cell);
+			printf("\n");
 		}
 	}
 }
@@ -56,6 +58,7 @@ static int print_cell_tree(struct parser *parser, u16 root, int depth)
 	}
 
 	print_cell(&parser->attributes, cell);
+	printf("\n");
 
 	for (i = 0; i < cell->n_children; i++) {
 		print_cell_tree(parser, cell->children[i], depth+1);

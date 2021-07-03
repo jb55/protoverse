@@ -62,7 +62,7 @@ static void log_dbg_(const char *fmt, ...)
 #define log_dbg(...)
 #endif
 
-static int is_valtype(unsigned char byte)
+static inline int is_valtype(unsigned char byte)
 {
 	switch ((enum valtype)byte) {
 		case i32:
@@ -95,7 +95,7 @@ static int stack_pushval(struct cursor *cur, struct val *val)
 	return push_byte(cur, (unsigned char)val->type);
 }
 
-static int cursor_popbyte(struct cursor *cur, unsigned char *byte)
+static inline int cursor_popbyte(struct cursor *cur, unsigned char *byte)
 {
 	if (cur->p - 1 < cur->start)
 		return 0;
@@ -106,7 +106,7 @@ static int cursor_popbyte(struct cursor *cur, unsigned char *byte)
 	return 1;
 }
 
-static int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
+static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
 {
 	if (cur->p - len < cur->start)
 		return 0;

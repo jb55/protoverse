@@ -3,6 +3,8 @@
 #include "cursor.h"
 #include "util.h"
 #include "varint.h"
+#include "env.h"
+#include "entity.h"
 
 #include <sys/types.h>
 #include <assert.h>
@@ -13,7 +15,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static int push_fetch_response_packet(struct cursor *c, struct fetch_response_packet *resp)
+static int push_fetch_response_packet(struct cursor *c,
+		struct fetch_response_packet *resp)
 {
 	int ok;
 	ok = push_prefixed_str(c, resp->path);
@@ -40,23 +43,29 @@ static int push_fetch_packet(struct cursor *c, struct fetch_packet *fetch)
 }
 
 /* TODO: CPU-independent encoding */
-static int push_chat_packet(struct cursor *c, struct chat_packet *chat)
+static int push_message_packet(struct cursor *c, struct message_packet *msg)
 {
 	int ok;
-	ok = push_varint(c, chat->sender);
+	ok = push_varint(c, msg->type);
 	if (!ok) return 0;
 
-	return push_prefixed_str(c, chat->message);
+	ok = push_varint(c, msg->receiver);
+	if (!ok) return 0;
+
+	return push_prefixed_str(c, msg->message);
 }
 
-static int pull_chat_packet(struct cursor *c, struct cursor *buf, struct chat_packet *chat)
+static int pull_message_packet(struct cursor *c, struct cursor *buf, struct message_packet *msg)
 {
 	int ok;
 
-	ok = pull_varint(c, &chat->sender);
+	ok = pull_varint(c, &msg->type);
 	if (!ok) return 0;
 
-	return pull_prefixed_str(c, buf, &chat->message);
+	ok = pull_varint(c, &msg->receiver);
+	if (!ok) return 0;
+
+	return pull_prefixed_str(c, buf, &msg->message);
 }
 
 static int pull_fetch_packet(struct cursor *c, struct cursor *buf, struct fetch_packet *fetch)
@@ -73,10 +82,12 @@ int send_packet(int sockfd, struct sockaddr_in *to_addr, struct packet *packet)
 	len = push_packet(buf, sizeof(buf), packet);
 	if (!len) return 0;
 
-	ok = sendto(sockfd, buf, len, 0, (struct sockaddr*)to_addr, sizeof(*to_addr));
+	ok = sendto(sockfd, buf, len, 0, (struct sockaddr*)to_addr,
+			sizeof(*to_addr));
 
 	if (ok != len) {
-		printf("sendto: sent %d != packet_len %d - %s\n", ok, len, strerror(errno));
+		printf("sendto: sent %d != packet_len %d - %s\n", ok, len,
+				strerror(errno));
 		return 0;
 	}
 
@@ -90,7 +101,8 @@ int recv_packet(int sockfd, struct cursor *buf, struct sockaddr_in *from, struct
 	socklen_t size = sizeof(*from);
 	int bytes;
 
-	bytes = recvfrom(sockfd, tmp, sizeof(tmp), 0, (struct sockaddr*)from, &size);
+	bytes = recvfrom(sockfd, tmp, sizeof(tmp), 0, (struct sockaddr*)from,
+			&size);
 	assert(size == sizeof(*from));
 	make_cursor(tmp, tmp + sizeof(tmp), &tmp_cursor);
 
@@ -114,7 +126,8 @@ static int push_envelope(struct cursor *cursor, enum packet_type type, int len)
 	return env_len;
 }
 
-static int pull_envelope(struct cursor *cursor, enum packet_type *type, int *len)
+static int pull_envelope(struct cursor *cursor, enum packet_type *type,
+		int *len)
 {
 	int ok, env_len;
 	ok = pull_varint(cursor, (int*)type);
@@ -139,9 +152,10 @@ static int push_packet_data(struct cursor *c, struct packet *packet)
 	case PKT_FETCH_DATA:
 		return push_fetch_packet(c, &packet->data.fetch);
 	case PKT_FETCH_DATA_RESPONSE:
-		return push_fetch_response_packet(c, &packet->data.fetch_response);
-	case PKT_CHAT:
-		return push_chat_packet(c, &packet->data.chat);
+		return push_fetch_response_packet(c,
+				&packet->data.fetch_response);
+	case PKT_MESSAGE:
+		return push_message_packet(c, &packet->data.message);
 	case PKT_NUM_TYPES:
 		return 0;
 	}
@@ -184,8 +198,8 @@ static int pull_packet_data(struct cursor *c, struct cursor *buf,
 	case PKT_FETCH_DATA_RESPONSE:
 		return pull_fetch_response_packet(c, buf,
 						  &packet->data.fetch_response);
-	case PKT_CHAT:
-		return pull_chat_packet(c, buf, &packet->data.chat);
+	case PKT_MESSAGE:
+		return pull_message_packet(c, buf, &packet->data.message);
 	case PKT_NUM_TYPES:
 		break;
 	}
@@ -209,7 +223,8 @@ int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet,
 
 	capacity_left = cursor_remaining_capacity(c) - 1;
 	if (len > capacity_left) {
-		printf("sanity: packet larger (%d) than remaining buffer size: %d", len, capacity_left);
+		printf("sanity: packet larger (%d)"
+		       " than remaining buffer size: %d", len, capacity_left);
 		return 0;
 	}
 
@@ -219,13 +234,13 @@ int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet,
 	return len + env_size;
 }
 
-static int packet_chat_eq(struct chat_packet *a, struct chat_packet *b)
+static int packet_message_eq(struct message_packet *a, struct message_packet *b)
 {
 	/* fail if either is 0 but not both 0 or both not 0 */
 	if (!a->message ^ !b->message)
 		return 0;
 
-	return a->sender == b->sender && !strcmp(a->message, b->message);
+	return !strcmp(a->message, b->message);
 }
 
 static int packet_fetch_eq(struct fetch_packet *a, struct fetch_packet *b)
@@ -251,8 +266,8 @@ int packet_eq(struct packet *a, struct packet *b)
 		return 0;
 
 	switch (a->type) {
-	case PKT_CHAT:
-		return packet_chat_eq(&a->data.chat, &b->data.chat);
+	case PKT_MESSAGE:
+		return packet_message_eq(&a->data.message, &b->data.message);
 	case PKT_FETCH_DATA:
 		return packet_fetch_eq(&a->data.fetch, &b->data.fetch);
 	case PKT_FETCH_DATA_RESPONSE:
@@ -265,14 +280,30 @@ int packet_eq(struct packet *a, struct packet *b)
 	return 0;
 }
 
+static const char *entity_name(struct env *env, entity_id *id)
+{
+	struct entity *ent;
 
-void print_packet(struct packet *packet)
+	if (!(ent = get_resource(&env->entities, id))) {
+		return "unknown";
+	}
+
+	return ent->name;
+}
+
+static void print_message_packet(struct env *env, struct message_packet *msg)
+{
+	/* eventually print entity data from environment */
+	(void)env;
+	printf("(message (to %d) (msg '%s'))\n", msg->receiver,
+			msg->message);
+}
+
+void print_packet(struct env *env, struct packet *packet)
 {
 	switch (packet->type) {
-	case PKT_CHAT:
-		printf("(chat (sender %d) (message \"%s\"))\n",
-		       packet->data.chat.sender,
-		       packet->data.chat.message);
+	case PKT_MESSAGE:
+		print_message_packet(env, &packet->data.message);
 		return;
 	case PKT_FETCH_DATA_RESPONSE:
 		printf("(fetch-resp (path \"%s\") (data %d))\n",

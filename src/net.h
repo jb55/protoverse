@@ -4,13 +4,20 @@
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
+
 #include "cursor.h"
+#include "env.h"
 
 enum packet_type {
 	PKT_FETCH_DATA,
 	PKT_FETCH_DATA_RESPONSE,
-	PKT_CHAT,
+	PKT_MESSAGE,
 	PKT_NUM_TYPES,
+};
+
+enum message_type {
+	MSG_CHAT,
+	MSG_INTERACT,
 };
 
 struct fetch_packet {
@@ -23,15 +30,16 @@ struct fetch_response_packet {
 	unsigned char *data;
 };
 
-struct chat_packet {
-	int sender;
+struct message_packet {
+	int receiver;
+	int type;
 	const char *message;
 };
 
 union packet_data {
 	struct fetch_packet fetch;
 	struct fetch_response_packet fetch_response;
-	struct chat_packet chat;
+	struct message_packet message;
 };
 
 struct packet {
@@ -46,6 +54,6 @@ int push_packet(unsigned char *buf, int bufsize, struct packet *packet);
 int pull_packet(struct cursor *c, struct cursor *buf, struct packet *packet, int received_bytes);
 
 int packet_eq(struct packet *a, struct packet *b);
-void print_packet(struct packet *packet);
+void print_packet(struct env *env, struct packet *packet);
 
 #endif /* PROTOVERSE_NET_H */

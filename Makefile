@@ -1,5 +1,7 @@
 
-CFLAGS = -Wno-error=unused-function -Ofast -std=gnu90 -Wall -Wextra -Werror -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wmissing-declarations -Wdeclaration-after-statement
+CFLAGS = -Wno-error=unused-function -Ofast -std=gnu90 -Wall -Wextra -Werror \
+	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
+	 -Wmissing-declarations -Wdeclaration-after-statement
 
 OBJS = src/io.o \
        src/parse.o \
@@ -9,6 +11,7 @@ OBJS = src/io.o \
        src/net.o \
        src/varint.o \
        src/parser.o \
+       src/resource.o \
        src/wasm.o
 
 WASMS = wasm/hello-c.wasm \

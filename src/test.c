@@ -21,6 +21,7 @@ static void print_mem(unsigned char *a, int len)
 static void test_packet_serialization(struct packet packet)
 {
 	struct packet packet_out;
+	struct env env;
 	int pushed[2], pulled;
 
 	int i;
@@ -45,15 +46,14 @@ static void test_packet_serialization(struct packet packet)
 	assert(!memcmp(bufs[0], bufs[2], pulled));
 	assert(packet_eq(&packet, &packet_out));
 
-	print_packet(&packet);
+	print_packet(&env, &packet);
 }
 
 static void test_chat_packet_serialization(void)
 {
 	struct packet packet;
-	packet.type = PKT_CHAT;
-	packet.data.chat.sender = 0xFFFF;
-	packet.data.chat.message = "hello there";
+	packet.type = PKT_MESSAGE;
+	packet.data.message.message = "hello there";
 
 	printf("chat packet\n");
 	test_packet_serialization(packet);

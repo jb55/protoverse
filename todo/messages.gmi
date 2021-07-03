@@ -1,0 +1,16 @@
+
+# General verbs
+
+* Interact
+
+# Probe object verbs
+
+"describe" message
+
+* list object capabilities and messages
+
+## Example
+
+> describe lamp
+
+actions: switch

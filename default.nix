@@ -1,6 +1,4 @@
 { pkgs ? import <nixpkgs> {} }:
-with pkgs;
-stdenv.mkDerivation {
-  name = "protoverse";
-  nativeBuildInputs = [ gdb wabt emscripten ];
+pkgs.mkShell {
+  buildInputs = with pkgs; [ gdb wabt emscripten wasmtime ];
 }

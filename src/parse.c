@@ -163,7 +163,6 @@ void print_cell(struct cursor *attributes, struct cell *cell)
 	       : cell_type_str(cell->type));
 
 	/* print_attributes(attributes, cell); */
-	printf("\n");
 }
 
 

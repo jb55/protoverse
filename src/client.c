@@ -65,9 +65,8 @@ int protoverse_connect(const char *server_ip_str, int port)
 	server_addr.sin_port = port == 0 || port == -1 ? 1988 : port;
 	server_addr.sin_addr = server_in_addr;
 
-	packet.type = PKT_CHAT;
-	packet.data.chat.message = "hello, world";
-	packet.data.chat.sender = 0xFFFFFF;
+	packet.type = PKT_MESSAGE;
+	packet.data.message.message = "hello, world";
 
 	send_packet(sockfd, &server_addr, &packet);
 	recv_packet(sockfd, &cursor, &server_addr, &packet);

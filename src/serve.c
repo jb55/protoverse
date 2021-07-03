@@ -10,10 +10,12 @@
 #include <stdlib.h>
 
 #include "serve.h"
+#include "entity.h"
 #include "net.h"
 #include "io.h"
 
 #define MAX_CACHED_FILES 12
+#define MAX_ENTITIES 1048576
 
 int inet_aton(const char *cp, struct in_addr *inp);
 
@@ -62,6 +64,7 @@ static int make_fetch_response(struct cursor *buf,
 }
 
 static int handle_packet(int sockfd,
+			 struct env *env,
 			 struct cursor *buf,
 			 struct sockaddr_in *from,
 			 struct packet *packet)
@@ -69,9 +72,9 @@ static int handle_packet(int sockfd,
 	struct packet response;
 	int ok;
 
-	print_packet(packet);
+	print_packet(env, packet);
 	switch (packet->type) {
-	case PKT_CHAT:
+	case PKT_MESSAGE:
 		return send_packet(sockfd, from, packet);
 	case PKT_FETCH_DATA:
 		ok = make_fetch_response(buf, &response,
@@ -86,6 +89,17 @@ static int handle_packet(int sockfd,
 	}
 
 	return 0;
+}
+
+static void init_protoverse_server(struct protoverse_server *server)
+{
+	init_resource_manager(&server->env.entities, sizeof(struct entity),
+			1024, MAX_ENTITIES, "entity");
+}
+
+static void free_protoverse_server(struct protoverse_server *server)
+{
+	destroy_resource_manager(&server->env.entities);
 }
 
 int protoverse_serve(struct protoverse_server *server)
@@ -104,6 +118,9 @@ int protoverse_serve(struct protoverse_server *server)
 
 	buf_ = malloc(FILEBUF_SIZE);
 	make_cursor(buf_, buf_ + FILEBUF_SIZE, &buf);
+
+	/* initialize object storage, etc */
+	init_protoverse_server(server);
 
 	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
 		printf("socket creation failed: %s\n", strerror(errno));
@@ -133,14 +150,15 @@ int protoverse_serve(struct protoverse_server *server)
 			continue;
 		}
 
-		ok = handle_packet(fd, &buf, &from, &packet);
+		ok = handle_packet(fd, &server->env, &buf, &from, &packet);
 		if (!ok) {
 			printf("handle packet failed for ");
-			print_packet(&packet);
+			print_packet(&server->env, &packet);
 		}
 
 		buf.p = buf.start;
 	}
 
 	free(buf_);
+	free_protoverse_server(server);
 }

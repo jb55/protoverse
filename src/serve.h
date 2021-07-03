@@ -7,10 +7,12 @@
 				struct sockaddr_in *from,
 				struct packet *packet);
 				*/
+#include "env.h"
 
 struct protoverse_server {
 	const char *bind;
 	int port;
+	struct env env;
 
 	/*
 	void *closure;

@@ -1,8 +1,11 @@
 *.o
+.buildcmd
 .build-result
 /protoverse
 /libprotoverse.a
 /TAGS
+todo/report.txt
+todo/done.txt
 /test
 *.wasm
 /tags

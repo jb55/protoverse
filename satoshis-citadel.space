@@ -17,6 +17,8 @@
          (chair (id welcome-desk-chair)
                 (name "fancy"))
 
+         (chair (name "throne") (material "invisible"))
+
          (light (location ceiling)
                 (name "ceiling")
                 (state off)
