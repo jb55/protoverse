@@ -18,4 +18,16 @@ struct entity {
 	double pos[3];
 };
 
+static inline const char *entity_name(struct env *env, entity_id *id)
+{
+	struct entity *ent;
+
+	if (!(ent = get_resource(&env->entities, id))) {
+		return "unknown";
+	}
+
+	return ent->name;
+}
+
+
 #endif /* PROTOVERSE_ENTITY_H */

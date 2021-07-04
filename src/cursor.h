@@ -132,6 +132,11 @@ static inline int push_int(struct cursor *cursor, int i)
 	return push_data(cursor, (u8*)&i, sizeof(i));
 }
 
+static inline size_t cursor_count(struct cursor *cursor, size_t elem_size)
+{
+	return (cursor->p - cursor->start)/elem_size;
+}
+
 /* TODO: push_varint */
 static inline int push_varint(struct cursor *cursor, int n)
 {
@@ -192,7 +197,7 @@ static inline int push_u16(struct cursor *cursor, u16 i)
 	return push_data(cursor, (u8*)&i, sizeof(i));
 }
 
-static inline void *index_cursor(struct cursor *cursor, u16 index, int elem_size)
+static inline void *index_cursor(struct cursor *cursor, unsigned int index, int elem_size)
 {
 	u8 *p;
 	p = &cursor->start[elem_size * index];
@@ -253,5 +258,35 @@ static inline int cursor_remaining_capacity(struct cursor *cursor)
 {
 	return cursor->end - cursor->p;
 }
+
+
+#define max(a,b) ((a) > (b) ? (a) : (b))
+static inline void cursor_print_around(struct cursor *cur, int range)
+{
+	unsigned char *c;
+
+	c = max(cur->p - range, cur->start);
+	for (; c < cur->end && c < (cur->p + range); c++) {
+		if (*c < 32)
+			printf("%02x", *c);
+		else
+			printf("%c", *c);
+	}
+	printf("\n");
+
+	c = max(cur->p - range, cur->start);
+	for (; c < cur->end && c < (cur->p + range); c++) {
+		if (c == cur->p) {
+			printf("^");
+			continue;
+		}
+		if (*c < 32)
+			printf("  ");
+		else
+			printf(" ");
+	}
+	printf("\n");
+}
+#undef max
 
 #endif

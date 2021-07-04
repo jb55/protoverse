@@ -280,17 +280,6 @@ int packet_eq(struct packet *a, struct packet *b)
 	return 0;
 }
 
-static const char *entity_name(struct env *env, entity_id *id)
-{
-	struct entity *ent;
-
-	if (!(ent = get_resource(&env->entities, id))) {
-		return "unknown";
-	}
-
-	return ent->name;
-}
-
 static void print_message_packet(struct env *env, struct message_packet *msg)
 {
 	/* eventually print entity data from environment */

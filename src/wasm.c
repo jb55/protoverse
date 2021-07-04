@@ -13,6 +13,7 @@
 #define interp_error(p, fmt, ...) interp_error_(p, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
 
 #define ERR_STACK_SIZE 16
+#define NUM_LOCALS 0xFFFF
 
 struct parse_error {
 	int pos;
@@ -39,13 +40,15 @@ struct wasm_parser {
 
 struct wasm_interp {
 	struct module *module;
-	struct cursor cur;
-	struct cursor stack;
-	struct cursor mem;
-	struct parser_error *errors;
 
-	struct val *params;
-	int num_params;
+	struct cursor cur; /* code */
+	struct cursor code_stack; /* struct cursor */
+	struct cursor stack; /* struct val */
+	struct cursor mem; /* u8/mixed */
+	struct cursor locals;  /* struct val */
+	struct cursor locals_offsets; /* int */
+
+	struct parser_error *errors;
 };
 
 #ifdef DEBUG
@@ -88,11 +91,40 @@ static int sizeof_valtype(enum valtype valtype)
 	return 0;
 }
 
-static int stack_pushval(struct cursor *cur, struct val *val)
+static const char *valtype_name(enum valtype valtype)
 {
-	if (!push_data(cur, (unsigned char*)&val->i32, sizeof_valtype(val->type)))
+	switch (valtype) {
+	case i32: return "i32";
+	case i64: return "i64";
+	case f32: return "f32";
+	case f64: return "f64";
+	}
+
+	return "unk";
+}
+
+static void print_val(struct val *val)
+{
+	switch (val->type) {
+	case i32: printf("%d", val->i32); break;
+	case i64: printf("%ld", val->i64); break;
+	case f32: printf("%f", val->f32); break;
+	case f64: printf("%f", val->f64); break;
+	}
+	printf(":%s\n", valtype_name(val->type));
+}
+
+static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
+{
+	if (cur->p - len < cur->start)
 		return 0;
-	return push_byte(cur, (unsigned char)val->type);
+
+	cur->p -= len;
+
+	if (dest)
+		memcpy(dest, cur->p, len);
+
+	return 1;
 }
 
 static inline int cursor_popbyte(struct cursor *cur, unsigned char *byte)
@@ -106,31 +138,55 @@ static inline int cursor_popbyte(struct cursor *cur, unsigned char *byte)
 	return 1;
 }
 
-static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
+static inline int cursor_popval(struct cursor *cur, struct val *val)
 {
-	if (cur->p - len < cur->start)
-		return 0;
-
-	cur->p = cur->p - len;
-
-	memcpy(dest, cur->p, len);
-
-	return 1;
+	return cursor_popdata(cur, (unsigned char*)val, sizeof(*val));
 }
 
-static int stack_popval(struct cursor *cur, struct val *val)
+static void print_stack(struct cursor *stack)
 {
-	unsigned char byte;
+	struct val val;
+	int i;
+	u8 *p = stack->p;
 
-	if (!cursor_popbyte(cur, &byte))
+	for (i = 0; stack->p > stack->start; i++) {
+		cursor_popval(stack, &val);
+		printf("[%d] ", i);
+		print_val(&val);
+	}
+
+	stack->p = p;
+}
+
+static inline int cursor_pushval(struct cursor *cur, struct val *val)
+{
+	return push_data(cur, (unsigned char*)val, sizeof(*val));
+}
+
+static inline int cursor_pushcode(struct cursor *cur, struct cursor *code)
+{
+	return push_data(cur, (unsigned char*)code, sizeof(*code));
+}
+
+static inline int cursor_popcode(struct cursor *cur, struct cursor *code)
+{
+	return cursor_popdata(cur, (unsigned char*)code, sizeof(*code));
+}
+
+static inline int cursor_popint(struct cursor *cur, int *i)
+{
+	return cursor_popdata(cur, (unsigned char *)i, sizeof(int));
+}
+
+static inline int offset_stack_top(struct cursor *cur)
+{
+	int *p = (int*)cur->p;
+
+	if (cur->p == cur->start) {
 		return 0;
+	}
 
-	if (!is_valtype(byte))
-		return 0;
-
-	val->type = (enum valtype)byte;
-
-	return cursor_popdata(cur, (unsigned char*)&val->i32, sizeof_valtype(val->type));
+	return p[-1];
 }
 
 static void interp_error_(struct wasm_interp *p, const char *fmt, ...)
@@ -201,18 +257,6 @@ static void print_parse_backtrace(struct wasm_parser *p)
 	}
 }
 
-static const char *valtype_name(enum valtype valtype)
-{
-	switch (valtype) {
-	case i32: return "i32";
-	case i64: return "i64";
-	case f32: return "f32";
-	case f64: return "f64";
-	}
-
-	return "unk";
-}
-
 static void print_functype(struct functype *ft)
 {
 	int i;
@@ -281,8 +325,9 @@ static void print_export_section(struct exportsec *exportsec)
 	printf("%d exports:\n", exportsec->num_exports);
 	for (i = 0; i < exportsec->num_exports; i++) {
 		printf("    ");
-		printf("%s %s\n", exportdesc_name(exportsec->exports[i].desc),
-				exportsec->exports[i].name);
+		printf("%s %s %d\n", exportdesc_name(exportsec->exports[i].desc),
+				exportsec->exports[i].name,
+				exportsec->exports[i].index);
 	}
 }
 
@@ -1031,13 +1076,13 @@ static int interp_i32_add(struct wasm_interp *interp)
 	struct val b;
 	struct val c;
 
-	if (!stack_popval(&interp->stack, &a)) {
-		interp_error(interp, "pop first");
+	if (!cursor_popval(&interp->stack, &a)) {
+		interp_error(interp, "couldn't pop first val");
 		return 0;
 	}
 
-	if (!stack_popval(&interp->stack, &b)) {
-		interp_error(interp, "pop second");
+	if (!cursor_popval(&interp->stack, &b)) {
+		interp_error(interp, "couldn't pop second val");
 		return 0;
 	}
 
@@ -1049,24 +1094,242 @@ static int interp_i32_add(struct wasm_interp *interp)
 	c.type = i32;
 	c.i32 = a.i32 + b.i32;
 
-	return stack_pushval(&interp->stack, &c);
+	return cursor_pushval(&interp->stack, &c);
+}
+
+static inline struct val *get_local(struct wasm_interp *interp, int ind)
+{
+	struct val *p;
+	int offset = offset_stack_top(&interp->locals_offsets);
+
+	if (!(p = index_cursor(&interp->locals, offset + ind, sizeof(struct val)))) {
+		interp_error(interp, "%d local oob %d > %ld", ind, offset + ind,
+				interp->locals.end - interp->locals.start);
+		return NULL;
+	}
+	return p;
+}
+
+static inline int count_locals(struct wasm_interp *interp)
+{
+	int offset = offset_stack_top(&interp->locals_offsets);
+	int count = cursor_count(&interp->locals, sizeof(struct val));
+	return count - offset;
+}
+
+static int set_local(struct wasm_interp *interp, int ind, struct val *val)
+{
+	struct val *local;
+	int nlocals;
+
+	nlocals = count_locals(interp);
+
+	if (ind > nlocals) {
+		/* TODO: if we hit this then we need to push empty locals up to the index */
+		interp_error(interp, "local index out of order");
+		return 0;
+	}
+
+	if (ind < nlocals) {
+		printf("memsetting local %d\n", ind);
+		if (!(local = get_local(interp, ind))) {
+			return 0;
+		}
+		memcpy(local, val, sizeof(*val));
+		return 1;
+	}
+
+	printf("pushing local %d\n", ind);
+	cursor_pushval(&interp->locals, val);
+	assert(count_locals(interp) > 0);
+	return 1;
+}
+
+static int interp_local_set(struct wasm_interp *interp)
+{
+	struct val val;
+	unsigned int index;
+
+	if (!cursor_popval(&interp->stack, &val)) {
+		interp_error(interp, "pop");
+		return 0;
+	}
+
+	if (!leb128_read(&interp->cur, &index)) {
+		interp_error(interp, "read index");
+		return 0;
+	}
+
+	if (!set_local(interp, index, &val)) {
+		interp_error(interp, "set local");
+		return 0;
+	}
+
+	return 1;
 }
 
 static int interp_local_get(struct wasm_interp *interp)
 {
 	unsigned int index;
+	unsigned int nlocals;
+	struct val *val;
 
 	if (!leb128_read(&interp->cur, &index)) {
 		interp_error(interp, "index");
 		return 0;
 	}
 
-	if (index+1 > (unsigned int)interp->num_params) {
-		interp_error(interp, "invalid index");
+	nlocals = count_locals(interp);
+	if (index >= nlocals) {
+		interp_error(interp, "local %d not set (%d locals)", index,
+				nlocals);
 		return 0;
 	}
 
-	return stack_pushval(&interp->stack, &interp->params[index]);
+	if (!(val = get_local(interp, index))) {
+		interp_error(interp, "get local");
+		return 0;
+	}
+
+	return cursor_pushval(&interp->stack, val);
+}
+
+static inline void make_i32_val(struct val *val, int v)
+{
+	val->type = i32;
+	val->i32 = v;
+}
+
+static inline int interp_i32_const(struct wasm_interp *interp)
+{
+	struct val val;
+	unsigned int read;
+
+	if (!leb128_read(&interp->cur, &read)) {
+		interp_error(interp, "invalid constant value");
+		return 0;
+	}
+
+	make_i32_val(&val, read);
+
+	return cursor_pushval(&interp->stack, &val);
+}
+
+static inline struct func *get_function(struct module *module, int ind)
+{
+	if (ind >= module->code_section.num_funcs) {
+		return NULL;
+	}
+
+	return &module->code_section.funcs[ind];
+}
+
+static inline struct functype *get_function_type(struct module *module, int ind)
+{
+	if (ind >= module->type_section.num_functypes) {
+		return NULL;
+	}
+
+	return &module->type_section.functypes[ind];
+}
+
+static const char *get_function_name(struct module *module, unsigned int func_index)
+{
+	struct wexport *export;
+	int i;
+
+	for (i = 0; i < module->export_section.num_exports; i++) {
+		export = &module->export_section.exports[i];
+		if (export->index == func_index) {
+			return export->name;
+		}
+	}
+
+	return "unknown";
+}
+
+static int prepare_call(struct wasm_interp *interp, int func_index)
+{
+	int i;
+	struct functype *functype;
+	struct func *func;
+	struct val val;
+	enum valtype paramtype;
+	unsigned int offset;
+
+	if (!(func = get_function(interp->module, func_index))) {
+		interp_error(interp, "function %d oob/not found (%d funcs)",
+				func_index,
+				interp->module->code_section.num_funcs);
+		return 0;
+	}
+
+	/* record locals offset for indexing locals in the next function */
+	offset = cursor_count(&interp->locals, sizeof(struct val));
+	if (!push_int(&interp->locals_offsets, offset)) {
+		interp_error(interp, "push locals offset");
+		return 0;
+	}
+
+	/* get type signature to know how many locals to push as params */
+	if (!(functype = get_function_type(interp->module, func_index))) {
+		interp_error(interp, "get function type");
+		return 0;
+	}
+
+
+	/* push params as locals */
+	for (i = 0; i < functype->params.num_valtypes; i++) {
+		paramtype = (enum valtype)functype->params.valtypes[i];
+
+		if (!cursor_popval(&interp->stack, &val)) {
+			interp_error(interp, "not enough arguments for call");
+			return 0;
+		}
+
+		if (val.type != paramtype) {
+			interp_error(interp,
+				"call parameter %d type mismatch. got %s, expected %s",
+				i+1,
+				valtype_name(val.type),
+				valtype_name(paramtype));
+			return 0;
+		}
+
+		if (!cursor_pushval(&interp->locals, &val)) {
+			interp_error(interp, "push param local");
+			return 0;
+		}
+	}
+
+	/* update current function and push it to the codestack as well */
+	make_cursor(func->code, func->code + func->code_len, &interp->cur);
+	if (!cursor_pushcode(&interp->code_stack, &interp->cur)) {
+		interp_error(interp, "oob cursor_pushcode");
+		return 0;
+	}
+
+	return 1;
+}
+
+int interp_code(struct wasm_interp *interp);
+
+static int interp_call(struct wasm_interp *interp)
+{
+	unsigned int func_index;
+
+	if (!leb128_read(&interp->cur, &func_index)) {
+		interp_error(interp, "read func index");
+		return 0;
+	}
+
+	if (!prepare_call(interp, func_index)) {
+		interp_error(interp, "prepare");
+		return 0;
+	}
+
+	/* call the function! */
+	return interp_code(interp);
 }
 
 static int interp_instr(struct wasm_interp *interp, unsigned char tag)
@@ -1075,27 +1338,37 @@ static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 	case i_unreachable: return 1;
 	case i_nop: return 1;
 	case i_local_get: return interp_local_get(interp);
+	case i_local_set: return interp_local_set(interp);
 	case i_i32_add: return interp_i32_add(interp);
+	case i_i32_const: return interp_i32_const(interp);
+	case i_call: return interp_call(interp);
 	default:
-		    interp_error(interp, "unhandled instruction %x", tag);
+		    interp_error(interp, "unhandled instruction 0x%x", tag);
 		    return 0;
 	}
 
 	return 0;
 }
 
-static int interp_code(struct wasm_interp *interp)
+int interp_code(struct wasm_interp *interp)
 {
+	struct cursor code;
 	unsigned char tag;
+	int offset;
 
 	for (;;) {
 		if (!pull_byte(&interp->cur, &tag)) {
+			cursor_print_around(&interp->cur, 10);
 			interp_error(interp, "instr tag");
 			return 0;
 		}
 
-		if (tag == i_end)
+		if (tag == i_end) {
+			cursor_popcode(&interp->code_stack, &code);
+			cursor_popint(&interp->locals_offsets, &offset);
+			copy_cursor(&code, &interp->cur);
 			break;
+		}
 
 		if (!interp_instr(interp, tag)) {
 			interp_error(interp, "interp instr");
@@ -1108,63 +1381,81 @@ static int interp_code(struct wasm_interp *interp)
 
 #define STACK_SPACE 5242880
 #define MEM_SPACE 5242880
+#define LOCALS_SPACE 5242880
 
-static void print_stack(struct cursor *stack)
+static int find_function(struct module *module, const char *name)
 {
-	struct val val;
+	struct wexport *export;
 	int i;
 
-	i = 0;
-
-	for (i = 0; stack->p > stack->start; i++) {
-		stack_popval(stack, &val);
-		printf("[%d] ", i);
-		switch (val.type) {
-		case i32: printf("%d", val.i32); break;
-		case i64: printf("%ld", val.i64); break;
-		case f32: printf("%f", val.f32); break;
-		case f64: printf("%f", val.f64); break;
+	for (i = 0; i < module->export_section.num_exports; i++) {
+		export = &module->export_section.exports[i];
+		if (!strcmp(name, export->name)) {
+			return export->index;
 		}
-		printf(":%s\n", valtype_name(val.type));
 	}
+
+	return -1;
+}
+
+static int cursor_slice(struct cursor *mem, struct cursor *slice, size_t size)
+{
+	u8 *p;
+	if (!(p = cursor_alloc(mem, size))) {
+		return 0;
+	}
+	make_cursor(p, mem->p, slice);
+	return 1;
 }
 
 static int interp_module(struct module *module)
 {
-	int ok;
-	struct func *func;
+	int ok, func;
 	struct wasm_interp interp;
 	static unsigned char *stack, *mem;
 
+	interp.module = module;
+
 	stack = malloc(STACK_SPACE);
-	mem = malloc(STACK_SPACE);
+	mem = malloc(MEM_SPACE);
 
 	if (module->code_section.num_funcs == 0) {
-		printf("empty module\n");
+		interp_error(&interp, "empty module");
 		return 0;
 	}
-	func = &module->code_section.funcs[0];
-
-	make_cursor(func->code, func->code + func->code_len, &interp.cur);
 	make_cursor(stack, stack + STACK_SPACE, &interp.stack);
 	make_cursor(mem, mem + MEM_SPACE, &interp.mem);
 
-	interp.params = cursor_alloc(&interp.mem, sizeof(struct val) * 32);
+	if (!cursor_slice(&interp.mem, &interp.locals, sizeof(struct val) * NUM_LOCALS)) {
+		interp_error(&interp, "not enough memory for locals");
+		return 0;
+	}
 
-	/* should be done when calling function? */
-	interp.params[0].type = i32;
-	interp.params[0].i32 = 1;
+	if (!(cursor_slice(&interp.mem, &interp.locals_offsets, sizeof(int) * 255))) {
+		interp_error(&interp, "not enough memory for local offsets");
+		return 0;
+	}
 
-	interp.params[1].type = i32;
-	interp.params[1].i32 = 2;
+	if (!(cursor_slice(&interp.mem, &interp.code_stack, sizeof(struct cursor) * 255))) {
+		interp_error(&interp, "not enough memory for code stack");
+		return 0;
+	}
 
-	interp.num_params = 2;
+	func = find_function(module, "start");
+	if (func == -1) {
+		interp_error(&interp, "no start function found");
+		return 0;
+	}
 
-	ok = interp_code(&interp);
+	if (!prepare_call(&interp, func)) {
+		interp_error(&interp, "preparing start function");
+		return 0;
+	}
 
-	if (ok) {
+	if (interp_code(&interp)) {
 		printf("interp success!!\n");
 	}
+
 	printf("stack:\n");
 	print_stack(&interp.stack);
 

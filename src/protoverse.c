@@ -5,12 +5,15 @@
 #include "serve.h"
 #include "client.h"
 #include "wasm.h"
+#include "resource.h"
+#include "entity.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 
+#define MAX_ENTITIES 1048576
 #define streq(a, b) strcmp(a,b) == 0
 
 /*
@@ -68,6 +71,17 @@ static int print_cell_tree(struct parser *parser, u16 root, int depth)
 	return 1;
 }
 
+static void init_protoverse_server(struct protoverse_server *server)
+{
+	init_resource_manager(&server->env.entities, sizeof(struct entity),
+			1024, MAX_ENTITIES, "entity");
+}
+
+static void free_protoverse_server(struct protoverse_server *server)
+{
+	destroy_resource_manager(&server->env.entities);
+}
+
 static int usage(void)
 {
 	printf("usage: protoverse <command> [args]\n\n");
@@ -120,7 +134,9 @@ int main(int argc, const char *argv[])
 		server.port = 1988;
 		server.bind = "127.0.0.1";
 
+		init_protoverse_server(&server);
 		protoverse_serve(&server);
+		free_protoverse_server(&server);
 	} else if (streq(cmd, "client")) {
 		protoverse_connect("127.0.0.1", 1988);
 	} else if (streq(cmd, "run")) {

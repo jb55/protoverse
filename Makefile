@@ -1,5 +1,5 @@
 
-CFLAGS = -Wno-error=unused-function -Ofast -std=gnu90 -Wall -Wextra -Werror \
+CFLAGS = -Wno-error=unused-function -O1 -g -std=gnu90 -Wall -Wextra -Werror \
 	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
 	 -Wmissing-declarations -Wdeclaration-after-statement
 
@@ -29,7 +29,7 @@ wasm: $(WASMS)
 	wat2wasm $^ -o $@
 
 wasm/hello-c.wasm: wasm/hello-c.c
-	emcc $< -s WASM=1 -o $@
+	emcc -g $< -s WASM=1 -o $@
 
 protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"
