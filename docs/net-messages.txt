@@ -1,0 +1,6 @@
+
+General verbs
+=============
+
+- interact 
+- describe: list object capabilities and messages
