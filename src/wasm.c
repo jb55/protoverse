@@ -1,6 +1,7 @@
 
 #include "wasm.h"
 #include "parser.h"
+#include "debug.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -29,26 +30,6 @@ struct val {
 		float f32;
 		double f64;
 	};
-};
-
-struct wasm_parser {
-	struct module module;
-	struct cursor cur;
-	struct cursor mem;
-	struct parse_error *errors;
-};
-
-struct wasm_interp {
-	struct module *module;
-
-	struct cursor cur; /* code */
-	struct cursor code_stack; /* struct cursor */
-	struct cursor stack; /* struct val */
-	struct cursor mem; /* u8/mixed */
-	struct cursor locals;  /* struct val */
-	struct cursor locals_offsets; /* int */
-
-	struct parser_error *errors;
 };
 
 #ifdef DEBUG
@@ -108,12 +89,12 @@ static const char *valtype_name(enum valtype valtype)
 static void print_val(struct val *val)
 {
 	switch (val->type) {
-	case i32: printf("%d", val->i32); break;
-	case i64: printf("%ld", val->i64); break;
-	case f32: printf("%f", val->f32); break;
-	case f64: printf("%f", val->f64); break;
+	case i32: debug("%d", val->i32); break;
+	case i64: debug("%ld", val->i64); break;
+	case f32: debug("%f", val->f32); break;
+	case f64: debug("%f", val->f64); break;
 	}
-	printf(":%s\n", valtype_name(val->type));
+	debug(":%s\n", valtype_name(val->type));
 }
 
 static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
@@ -153,7 +134,7 @@ static void print_stack(struct cursor *stack)
 
 	for (i = 0; stack->p > stack->start; i++) {
 		cursor_popval(stack, &val);
-		printf("[%d] ", i);
+		debug("[%d] ", i);
 		print_val(&val);
 	}
 
@@ -275,21 +256,21 @@ static void print_functype(struct functype *ft)
 	int i;
 
 	for (i = 0; i < ft->params.num_valtypes; i++) {
-		printf("%s ", valtype_name(ft->params.valtypes[i]));
+		debug("%s ", valtype_name(ft->params.valtypes[i]));
 	}
-	printf("-> ");
+	debug("-> ");
 	for (i = 0; i < ft->result.num_valtypes; i++) {
-		printf("%s ", valtype_name(ft->result.valtypes[i]));
+		debug("%s ", valtype_name(ft->result.valtypes[i]));
 	}
-	printf("\n");
+	debug("\n");
 }
 
 static void print_type_section(struct typesec *typesec)
 {
 	int i;
-	printf("%d functypes:\n", typesec->num_functypes);
+	debug("%d functypes:\n", typesec->num_functypes);
 	for (i = 0; i < typesec->num_functypes; i++) {
-		printf("    ");
+		debug("    ");
 		print_functype(&typesec->functypes[i]);
 	}
 }
@@ -307,7 +288,8 @@ static void print_func_section(struct funcsec *funcsec)
 }
 */
 
-static const char *exportdesc_name(enum exportdesc desc)
+__attribute__((unused))
+static const char *exportdesc_name(enum exportdesc desc) 
 {
 	switch (desc) {
 		case export_func: return "function";
@@ -321,15 +303,16 @@ static const char *exportdesc_name(enum exportdesc desc)
 
 static void print_import(struct import *import)
 {
-	printf("%s %s\n", import->module_name, import->name);
+	(void)import;
+	debug("%s %s\n", import->module_name, import->name);
 }
 
 static void print_import_section(struct importsec *importsec)
 {
 	int i;
-	printf("%d imports:\n", importsec->num_imports);
+	debug("%d imports:\n", importsec->num_imports);
 	for (i = 0; i < importsec->num_imports; i++) {
-		printf("    ");
+		debug("    ");
 		print_import(&importsec->imports[i]);
 	}
 }
@@ -337,10 +320,10 @@ static void print_import_section(struct importsec *importsec)
 static void print_export_section(struct exportsec *exportsec)
 {
 	int i;
-	printf("%d exports:\n", exportsec->num_exports);
+	debug("%d exports:\n", exportsec->num_exports);
 	for (i = 0; i < exportsec->num_exports; i++) {
-		printf("    ");
-		printf("%s %s %d\n", exportdesc_name(exportsec->exports[i].desc),
+		debug("    ");
+		debug("%s %s %d\n", exportdesc_name(exportsec->exports[i].desc),
 				exportsec->exports[i].name,
 				exportsec->exports[i].index);
 	}
@@ -349,18 +332,18 @@ static void print_export_section(struct exportsec *exportsec)
 /*
 static void print_local(struct local *local)
 {
-	printf("%d %s\n", local->n, valtype_name(local->valtype));
+	debug("%d %s\n", local->n, valtype_name(local->valtype));
 }
 
 static void print_func(struct func *func)
 {
 	int i;
 
-	printf("func locals (%d): \n", func->num_locals);
+	debug("func locals (%d): \n", func->num_locals);
 	for (i = 0; i < func->num_locals; i++) {
 		print_local(&func->locals[i]);
 	}
-	printf("%d bytes of code\n", func->code_len);
+	debug("%d bytes of code\n", func->code_len);
 }
 
 static void print_code_section(struct codesec *codesec)
@@ -1052,7 +1035,7 @@ static int parse_section(struct wasm_parser *p)
 	return 1;
 }
 
-static int parse_wasm(struct wasm_parser *p)
+int parse_wasm(struct wasm_parser *p)
 {
 	if (!consume_bytes(&p->cur, WASM_MAGIC, sizeof(WASM_MAGIC))) {
 		note_error(p, "magic");
@@ -1074,14 +1057,14 @@ static int parse_wasm(struct wasm_parser *p)
 		}
 	}
 
-	printf("module parse success!\n\n");
+	debug("module parse success!\n\n");
 	print_module(&p->module);
 	return 1;
 
 fail:
-	printf("parse failure backtrace:\n");
+	debug("parse failure backtrace:\n");
 	print_parse_backtrace(p);
-	printf("\npartially parsed module:\n");
+	debug("\npartially parsed module:\n");
 	print_module(&p->module);
 	return 0;
 }
@@ -1172,7 +1155,7 @@ static int set_local(struct wasm_interp *interp, int ind, struct val *val)
 	}
 
 	if (ind < nlocals) {
-		printf("memsetting local %d\n", ind);
+		debug("memsetting local %d\n", ind);
 		if (!(local = get_local(interp, ind))) {
 			return 0;
 		}
@@ -1180,7 +1163,7 @@ static int set_local(struct wasm_interp *interp, int ind, struct val *val)
 		return 1;
 	}
 
-	printf("pushing local %d\n", ind);
+	debug("pushing local %d\n", ind);
 	cursor_pushval(&interp->locals, val);
 	assert(count_locals(interp) > 0);
 	return 1;
@@ -1383,7 +1366,8 @@ static int interp_call(struct wasm_interp *interp)
 
 static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 {
-	printf("executing 0x%x\n", tag);
+	interp->ops++;
+
 	switch (tag) {
 	case i_unreachable: return 1;
 	case i_nop: return 1;
@@ -1458,65 +1442,73 @@ static int cursor_slice(struct cursor *mem, struct cursor *slice, size_t size)
 	return 1;
 }
 
-static int interp_module(struct module *module)
+void wasm_interp_init(struct wasm_interp *interp)
 {
-	int ok, func;
-	struct wasm_interp interp;
 	static unsigned char *stack, *mem;
 
-	interp.module = module;
+	interp->ops = 0;
 
 	stack = malloc(STACK_SPACE);
 	mem = malloc(MEM_SPACE);
 
+	make_cursor(stack, stack + STACK_SPACE, &interp->stack);
+	make_cursor(mem, mem + MEM_SPACE, &interp->mem);
+}
+
+void wasm_interp_free(struct wasm_interp *interp)
+{
+	free(interp->stack.start);
+	free(interp->mem.start);
+}
+
+int interp_wasm_module(struct wasm_interp *interp, struct module *module)
+{
+	int ok, func;
+
+	interp->module = module;
+	interp->ops = 0;
+
 	if (module->code_section.num_funcs == 0) {
-		interp_error(&interp, "empty module");
-		return 0;
-	}
-	make_cursor(stack, stack + STACK_SPACE, &interp.stack);
-	make_cursor(mem, mem + MEM_SPACE, &interp.mem);
-
-	if (!cursor_slice(&interp.mem, &interp.locals, sizeof(struct val) * NUM_LOCALS)) {
-		interp_error(&interp, "not enough memory for locals");
+		interp_error(interp, "empty module");
 		return 0;
 	}
 
-	if (!(cursor_slice(&interp.mem, &interp.locals_offsets, sizeof(int) * 255))) {
-		interp_error(&interp, "not enough memory for local offsets");
-		return 0;
-	}
+	// reset cursors
+	interp->stack.p = interp->stack.start;
+	interp->mem.p = interp->mem.start;
 
-	if (!(cursor_slice(&interp.mem, &interp.code_stack, sizeof(struct cursor) * 255))) {
-		interp_error(&interp, "not enough memory for code stack");
-		return 0;
-	}
+	ok =
+	cursor_slice(&interp->mem, &interp->locals, sizeof(struct val) * NUM_LOCALS) &&
+	cursor_slice(&interp->mem, &interp->locals_offsets, sizeof(int) * 255) &&
+	cursor_slice(&interp->mem, &interp->code_stack, sizeof(struct cursor) * 255);
+
+	assert(ok);
 
 	func = find_function(module, "start");
 	if (func == -1) {
-		interp_error(&interp, "no start function found");
+		interp_error(interp, "no start function found");
 		return 0;
 	}
 
-	if (!prepare_call(&interp, func)) {
-		interp_error(&interp, "preparing start function");
+	if (!prepare_call(interp, func)) {
+		interp_error(interp, "preparing start function");
 		return 0;
 	}
 
-	if (interp_code(&interp)) {
-		printf("interp success!!\n");
+	if (interp_code(interp)) {
+		debug("interp success!!\n");
 	}
 
-	printf("stack:\n");
-	print_stack(&interp.stack);
+	debug("ops: %ld\nstack:\n", interp->ops);
+	print_stack(&interp->stack);
 
-	free(stack);
-	free(mem);
 	return ok;
 }
 
 int run_wasm(unsigned char *wasm, unsigned long len)
 {
 	struct wasm_parser p;
+	struct wasm_interp interp;
 
 	void *mem;
 	int ok, arena_size;
@@ -1534,10 +1526,9 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 		return 0;
 	}
 
-	if (!interp_module(&p.module)) {
-		free(mem);
-		return 0;
-	}
+	wasm_interp_init(&interp);
+	ok = interp_wasm_module(&interp, &p.module);
+	wasm_interp_free(&interp);
 
 	free(mem);
 	return ok;

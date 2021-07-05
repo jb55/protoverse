@@ -1,13 +1,16 @@
 
-#ifndef WASM
-#define WASM
+#ifndef PROTOVERSE_WASM_H
+#define PROTOVERSE_WASM_H
 
 static const unsigned char WASM_MAGIC[] = {0,'a','s','m'};
+
 #define WASM_VERSION 0x01
 #define MAX_U32_LEB128_BYTES 5
 #define MAX_U64_LEB128_BYTES 10
 
 #define FUNC_TYPE_TAG 0x60
+
+#include "cursor.h"
 
 enum valtype {
 	i32 = 0x7F,
@@ -140,14 +143,6 @@ struct wexport {
 struct exportsec {
 	struct wexport *exports;
 	int num_exports;
-};
-
-struct module {
-	struct typesec type_section;
-	struct funcsec func_section;
-	struct importsec import_section;
-	struct exportsec export_section;
-	struct codesec code_section;
 };
 
 struct section {
@@ -287,6 +282,40 @@ struct instr {
 	};
 };
 
-int run_wasm(unsigned char *wasm, unsigned long len);
+struct module {
+	struct typesec type_section;
+	struct funcsec func_section;
+	struct importsec import_section;
+	struct exportsec export_section;
+	struct codesec code_section;
+};
 
-#endif /* WASM */
+struct wasm_interp {
+	struct module *module;
+	size_t ops;
+
+	struct cursor cur; /* code */
+	struct cursor code_stack; /* struct cursor */
+	struct cursor stack; /* struct val */
+	struct cursor mem; /* u8/mixed */
+	struct cursor locals;  /* struct val */
+	struct cursor locals_offsets; /* int */
+
+	struct parser_error *errors;
+};
+
+struct wasm_parser {
+	struct module module;
+	struct cursor cur;
+	struct cursor mem;
+	struct parse_error *errors;
+};
+
+
+int run_wasm(unsigned char *wasm, unsigned long len);
+int parse_wasm(struct wasm_parser *p);
+void wasm_interp_init(struct wasm_interp *interp);
+void wasm_interp_free(struct wasm_interp *interp);
+int interp_wasm_module(struct wasm_interp *interp, struct module *module);
+
+#endif /* PROTOVERSE_WASM_H */
