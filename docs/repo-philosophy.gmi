@@ -1,0 +1,9 @@
+# Repo Philosophy
+
+The goal of this source repository is the be the "linux kernel" of the metaverse. Developers shouldn't have to deal with low level details of the metaverse, in the same sense that linux application developers shouldn't have to think about the details of TCP/IP when building their applications.
+
+This repository serves as the "monorepo" of the protoverse. This implies some goals of this repository:
+
+* Zero dependencies. Ideally we will avoid linking to openssl as well. The metaverse should move on from certificate authorities if possible, opting for a trust-on-first-use model instead. Ideally we would use something like the noise protocol for securing communications. We can support this at the protocol level if it makes sense.
+
+* Cross platform. We should try to support all platforms. Right now we're prototyping in linux, but the metaverse should be open and accesible to all platforms.

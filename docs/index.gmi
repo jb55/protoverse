@@ -1,0 +1,16 @@
+
+# Protoverse Documentation
+
+Here you will find various documentation about the protoverse.
+
+=> ./net-messages.gmi Network Messages
+=> ./repo-philosophy.gmi Protoverse source repository thoughts
+
+## References
+
+These docs are written in gemtext, a format used by the gemini protocol. If you're not sure what the gemini protocol is, check it out!
+
+=> gemini://gemini.circumlunar.space/docs/index.gmi gemini protocol
+=> https://gemini.circumlunar.space/docs/index.gmi gemini protocol (web)
+=> gemini://gemini.circumlunar.space/docs/gemtext.gmi gemtext format
+=> https://gemini.circumlunar.space/docs/gemtext.gmi gemtext format (web)
