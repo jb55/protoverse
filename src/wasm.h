@@ -255,6 +255,7 @@ enum instr_tag {
 	i_i32_clz       = 0x67,
 
 	i_i32_add       = 0x6A,
+	i_i32_sub       = 0x6B,
 	/* TODO: more instrs */
 
 };

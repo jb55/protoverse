@@ -3,12 +3,21 @@
 	      local.get $lhs
 	      local.get $rhs
 	      i32.add)
+	(func $sub (param $lhs i32) (param $rhs i32) (result i32)
+	      local.get $lhs
+	      local.get $rhs
+	      i32.sub
+	      )
 	(func $start (result i32)
 	      (local i32 i32)
 	      i32.const 65537
 	      local.set 0
 	      local.get 0
 	      i32.const 2
-	      call $add)
+	      call $add
+	      i32.const 3
+	      call $sub
+	      )
 	(export "start" (func $start))
-	(export "add" (func $add)))
+	(export "add" (func $add))
+	(export "sub" (func $sub)))

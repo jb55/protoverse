@@ -79,6 +79,7 @@ static inline int is_valtype(unsigned char byte)
 }
 
 
+/*
 static int sizeof_valtype(enum valtype valtype)
 {
 	switch (valtype) {
@@ -90,6 +91,7 @@ static int sizeof_valtype(enum valtype valtype)
 
 	return 0;
 }
+*/
 
 static const char *valtype_name(enum valtype valtype)
 {
@@ -168,6 +170,17 @@ static inline int cursor_pushcode(struct cursor *cur, struct cursor *code)
 	return push_data(cur, (unsigned char*)code, sizeof(*code));
 }
 
+static inline struct cursor *cursor_topcode(struct cursor *cur)
+{
+	assert(cur->p > cur->start);
+	return ((struct cursor*)cur->p) - 1;
+}
+
+static inline struct cursor *interp_codeptr(struct wasm_interp *interp)
+{
+	return cursor_topcode(&interp->code_stack);
+}
+
 static inline int cursor_popcode(struct cursor *cur, struct cursor *code)
 {
 	return cursor_popdata(cur, (unsigned char*)code, sizeof(*code));
@@ -186,7 +199,7 @@ static inline int offset_stack_top(struct cursor *cur)
 		return 0;
 	}
 
-	return p[-1];
+	return *(p - sizeof(*p));
 }
 
 static void interp_error_(struct wasm_interp *p, const char *fmt, ...)
@@ -281,6 +294,7 @@ static void print_type_section(struct typesec *typesec)
 	}
 }
 
+/*
 static void print_func_section(struct funcsec *funcsec)
 {
 	int i;
@@ -291,6 +305,7 @@ static void print_func_section(struct funcsec *funcsec)
 	}
 	printf("\n");
 }
+*/
 
 static const char *exportdesc_name(enum exportdesc desc)
 {
@@ -331,6 +346,7 @@ static void print_export_section(struct exportsec *exportsec)
 	}
 }
 
+/*
 static void print_local(struct local *local)
 {
 	printf("%d %s\n", local->n, valtype_name(local->valtype));
@@ -338,7 +354,6 @@ static void print_local(struct local *local)
 
 static void print_func(struct func *func)
 {
-	/* todo: print locals */
 	int i;
 
 	printf("func locals (%d): \n", func->num_locals);
@@ -356,14 +371,15 @@ static void print_code_section(struct codesec *codesec)
 		print_func(&codesec->funcs[i]);
 	}
 }
+*/
 
 static void print_module(struct module *module)
 {
 	print_type_section(&module->type_section);
-	print_func_section(&module->func_section);
+	//print_func_section(&module->func_section);
 	print_import_section(&module->import_section);
 	print_export_section(&module->export_section);
-	print_code_section(&module->code_section);
+	//print_code_section(&module->code_section);
 }
 
 
@@ -1070,29 +1086,54 @@ fail:
 	return 0;
 }
 
-static int interp_i32_add(struct wasm_interp *interp)
+static inline int interp_prep_binop(struct wasm_interp *interp, struct val *a,
+		struct val *b, struct val *c, enum valtype typ)
 {
-	struct val a;
-	struct val b;
-	struct val c;
+	c->type = typ;
 
-	if (!cursor_popval(&interp->stack, &a)) {
+	if (!cursor_popval(&interp->stack, a)) {
 		interp_error(interp, "couldn't pop first val");
 		return 0;
 	}
 
-	if (!cursor_popval(&interp->stack, &b)) {
+	if (!cursor_popval(&interp->stack, b)) {
 		interp_error(interp, "couldn't pop second val");
 		return 0;
 	}
 
-	if (a.type != i32 || b.type != i32) {
-	        interp_error(interp, "i32_add type mismatch");
+	if (a->type != typ || b->type != typ) {
+	        interp_error(interp, "type mismatch, %s != %s",
+			valtype_name(a->type), valtype_name(b->type));
 	        return 0;
 	}
 
-	c.type = i32;
+	return 1;
+}
+
+static int interp_i32_add(struct wasm_interp *interp)
+{
+	struct val a, b, c;
+
+	if (!interp_prep_binop(interp, &a, &b, &c, i32)) {
+		interp_error(interp, "add prep");
+		return 0;
+	}
+
 	c.i32 = a.i32 + b.i32;
+
+	return cursor_pushval(&interp->stack, &c);
+}
+
+static int interp_i32_sub(struct wasm_interp *interp)
+{
+	struct val a, b, c;
+
+	if (!interp_prep_binop(interp, &a, &b, &c, i32)) {
+		interp_error(interp, "sub prep");
+		return 0;
+	}
+
+	c.i32 = a.i32 - b.i32;
 
 	return cursor_pushval(&interp->stack, &c);
 }
@@ -1155,7 +1196,7 @@ static int interp_local_set(struct wasm_interp *interp)
 		return 0;
 	}
 
-	if (!leb128_read(&interp->cur, &index)) {
+	if (!leb128_read(interp_codeptr(interp), &index)) {
 		interp_error(interp, "read index");
 		return 0;
 	}
@@ -1174,7 +1215,7 @@ static int interp_local_get(struct wasm_interp *interp)
 	unsigned int nlocals;
 	struct val *val;
 
-	if (!leb128_read(&interp->cur, &index)) {
+	if (!leb128_read(interp_codeptr(interp), &index)) {
 		interp_error(interp, "index");
 		return 0;
 	}
@@ -1205,7 +1246,7 @@ static inline int interp_i32_const(struct wasm_interp *interp)
 	struct val val;
 	unsigned int read;
 
-	if (!leb128_read(&interp->cur, &read)) {
+	if (!leb128_read(interp_codeptr(interp), &read)) {
 		interp_error(interp, "invalid constant value");
 		return 0;
 	}
@@ -1226,6 +1267,11 @@ static inline struct func *get_function(struct module *module, int ind)
 
 static inline struct functype *get_function_type(struct module *module, int ind)
 {
+	if (ind >= module->func_section.num_indices) {
+		return NULL;
+	}
+
+	ind = module->func_section.type_indices[ind];
 	if (ind >= module->type_section.num_functypes) {
 		return NULL;
 	}
@@ -1233,6 +1279,7 @@ static inline struct functype *get_function_type(struct module *module, int ind)
 	return &module->type_section.functypes[ind];
 }
 
+/*
 static const char *get_function_name(struct module *module, unsigned int func_index)
 {
 	struct wexport *export;
@@ -1247,6 +1294,7 @@ static const char *get_function_name(struct module *module, unsigned int func_in
 
 	return "unknown";
 }
+*/
 
 static int prepare_call(struct wasm_interp *interp, int func_index)
 {
@@ -1254,6 +1302,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	struct functype *functype;
 	struct func *func;
 	struct val val;
+	struct cursor code;
 	enum valtype paramtype;
 	unsigned int offset;
 
@@ -1273,7 +1322,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 
 	/* get type signature to know how many locals to push as params */
 	if (!(functype = get_function_type(interp->module, func_index))) {
-		interp_error(interp, "get function type");
+		interp_error(interp, "couldn't get function type");
 		return 0;
 	}
 
@@ -1303,8 +1352,8 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	}
 
 	/* update current function and push it to the codestack as well */
-	make_cursor(func->code, func->code + func->code_len, &interp->cur);
-	if (!cursor_pushcode(&interp->code_stack, &interp->cur)) {
+	make_cursor(func->code, func->code + func->code_len, &code);
+	if (!cursor_pushcode(&interp->code_stack, &code)) {
 		interp_error(interp, "oob cursor_pushcode");
 		return 0;
 	}
@@ -1318,7 +1367,7 @@ static int interp_call(struct wasm_interp *interp)
 {
 	unsigned int func_index;
 
-	if (!leb128_read(&interp->cur, &func_index)) {
+	if (!leb128_read(interp_codeptr(interp), &func_index)) {
 		interp_error(interp, "read func index");
 		return 0;
 	}
@@ -1334,12 +1383,14 @@ static int interp_call(struct wasm_interp *interp)
 
 static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 {
+	printf("executing 0x%x\n", tag);
 	switch (tag) {
 	case i_unreachable: return 1;
 	case i_nop: return 1;
 	case i_local_get: return interp_local_get(interp);
 	case i_local_set: return interp_local_set(interp);
 	case i_i32_add: return interp_i32_add(interp);
+	case i_i32_sub: return interp_i32_sub(interp);
 	case i_i32_const: return interp_i32_const(interp);
 	case i_call: return interp_call(interp);
 	default:
@@ -1357,8 +1408,8 @@ int interp_code(struct wasm_interp *interp)
 	int offset;
 
 	for (;;) {
-		if (!pull_byte(&interp->cur, &tag)) {
-			cursor_print_around(&interp->cur, 10);
+		if (!pull_byte(interp_codeptr(interp), &tag)) {
+			cursor_print_around(interp_codeptr(interp), 10);
 			interp_error(interp, "instr tag");
 			return 0;
 		}
@@ -1366,7 +1417,6 @@ int interp_code(struct wasm_interp *interp)
 		if (tag == i_end) {
 			cursor_popcode(&interp->code_stack, &code);
 			cursor_popint(&interp->locals_offsets, &offset);
-			copy_cursor(&code, &interp->cur);
 			break;
 		}
 
