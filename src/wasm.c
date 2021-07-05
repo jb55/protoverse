@@ -317,6 +317,42 @@ static void print_import_section(struct importsec *importsec)
 	}
 }
 
+static void print_limits(struct limits *limits)
+{
+	switch (limits->type) {
+	case limit_min:
+		debug("%d", limits->min);
+		break;
+	case limit_min_max:
+		debug("%d-%d", limits->min, limits->max);
+		break;
+	}
+}
+
+static const char *reftype_name(enum reftype reftype)
+{
+	switch (reftype) {
+	case funcref: return "funcref";
+	case externref: return "externref";
+	}
+	return "unknown_reftype";
+}
+
+static void print_table_section(struct tablesec *section)
+{
+	int i;
+	struct table *table;
+
+	debug("%d tables:\n", section->num_tables);
+	for (i = 0; i < section->num_tables; i++) {
+		table = &section->tables[i];
+		debug("    ");
+		debug("%s: ", reftype_name(table->reftype));
+		print_limits(&table->limits);
+		debug("\n");
+	}
+}
+
 static void print_export_section(struct exportsec *exportsec)
 {
 	int i;
@@ -362,6 +398,7 @@ static void print_module(struct module *module)
 	//print_func_section(&module->func_section);
 	print_import_section(&module->import_section);
 	print_export_section(&module->export_section);
+	print_table_section(&module->table_section);
 	//print_code_section(&module->code_section);
 }
 
