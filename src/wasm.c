@@ -338,6 +338,20 @@ static const char *reftype_name(enum reftype reftype)
 	return "unknown_reftype";
 }
 
+static void print_memory_section(struct memsec *memory)
+{
+	int i;
+	struct limits *mem;
+
+	debug("%d memory:\n", memory->num_mems);
+	for (i = 0; i < memory->num_mems; i++) {
+		mem = &memory->mems[i];
+		debug("    ");
+		print_limits(mem);
+		debug("\n");
+	}
+}
+
 static void print_table_section(struct tablesec *section)
 {
 	int i;
@@ -399,6 +413,7 @@ static void print_module(struct module *module)
 	print_import_section(&module->import_section);
 	print_export_section(&module->export_section);
 	print_table_section(&module->table_section);
+	print_memory_section(&module->memory_section);
 	//print_code_section(&module->code_section);
 }
 
@@ -805,6 +820,30 @@ static int parse_table(struct wasm_parser *p, struct table *table)
 	return 1;
 }
 
+static int parse_memory_section(struct wasm_parser *p,
+		struct memsec *memory_section)
+{
+	struct limits *mems;
+	unsigned int elems, i;
+
+	if (!parse_vector(p, sizeof(*mems), &elems, (void**)&mems)) {
+		note_error(p, "mems vector");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_limits(p, &mems[i])) {
+			note_error(p, "memory #%d/%d", i+1, elems);
+			return 0;
+		}
+	}
+
+	memory_section->num_mems = elems;
+	memory_section->mems = mems;
+
+	return 1;
+}
+
 static int parse_table_section(struct wasm_parser *p,
 		struct tablesec *table_section)
 {
@@ -1040,8 +1079,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		}
 		return 1;
 	case section_memory:
-		note_error(p, "section_memory parse not implemented");
-		return 0;
+		if (!parse_memory_section(p, &p->module.memory_section)) {
+			note_error(p, "memory section");
+			return 0;
+		}
+		return 1;
 	case section_global:
 		note_error(p, "section_global parse not implemented");
 		return 0;

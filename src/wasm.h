@@ -71,6 +71,11 @@ struct tablesec {
 	int num_tables;
 };
 
+struct memsec {
+	struct limits *mems; /* memtype */
+	int num_mems;
+};
+
 struct funcsec {
 	unsigned int *type_indices;
 	int num_indices;
@@ -304,6 +309,7 @@ struct module {
 	struct exportsec export_section;
 	struct codesec code_section;
 	struct tablesec table_section;
+	struct memsec memory_section;
 };
 
 struct wasm_interp {
