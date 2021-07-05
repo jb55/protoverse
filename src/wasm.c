@@ -707,6 +707,91 @@ static int parse_export_section(struct wasm_parser *p,
 	return 1;
 }
 
+static int is_valid_reftype(unsigned char reftype)
+{
+	switch ((enum reftype)reftype) {
+		case funcref: return 1;
+		case externref: return 1;
+	}
+	return 0;
+}
+
+static int parse_limits(struct wasm_parser *p, struct limits *limits)
+{
+	unsigned char tag;
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "oob");
+		return 0;
+	}
+
+	if (tag != limit_min && tag != limit_min_max) {
+		note_error(p, "invalid tag %02x", tag);
+		return 0;
+	}
+
+	if (!leb128_read(&p->cur, &limits->min)) {
+		note_error(p, "min");
+		return 0;
+	}
+
+	if (tag == limit_min)
+		return 1;
+
+	if (!leb128_read(&p->cur, &limits->max)) {
+		note_error(p, "max");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_table(struct wasm_parser *p, struct table *table)
+{
+	unsigned char reftype;
+	if (!pull_byte(&p->cur, &reftype)) {
+		note_error(p, "reftype");
+		return 0;
+	}
+
+	if (!is_valid_reftype(reftype)) {
+		note_error(p, "invalid reftype: 0x%x", reftype);
+		return 0;
+	}
+
+	table->reftype = (enum reftype)reftype;
+
+	if (!parse_limits(p, &table->limits)) {
+		note_error(p, "limits");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_table_section(struct wasm_parser *p,
+		struct tablesec *table_section)
+{
+	struct table *tables;
+	unsigned int elems, i;
+
+	if (!parse_vector(p, sizeof(*tables), &elems, (void**)&tables)) {
+		note_error(p, "tables vector");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_table(p, &tables[i])) {
+			note_error(p, "table #%d/%d", i+1, elems);
+			return 0;
+		}
+	}
+
+	table_section->num_tables = elems;
+	table_section->tables = tables;
+
+	return 1;
+}
+
 static int parse_function_section(struct wasm_parser *p,
 		struct funcsec *funcsec)
 {
@@ -755,35 +840,6 @@ static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
 	}
 
 	return parse_mut(p, &g->mut);
-}
-
-static int parse_limits(struct wasm_parser *p, struct limits *limits)
-{
-	unsigned char tag;
-	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "oob");
-		return 0;
-	}
-
-	if (tag != limit_min || tag != limit_min_max) {
-		note_error(p, "invalid tag %02x", tag);
-		return 0;
-	}
-
-	if (!leb128_read(&p->cur, &limits->min)) {
-		note_error(p, "min");
-		return 0;
-	}
-
-	if (tag == limit_min)
-		return 1;
-
-	if (!leb128_read(&p->cur, &limits->max)) {
-		note_error(p, "max");
-		return 0;
-	}
-
-	return 1;
 }
 
 static int parse_import_table(struct wasm_parser *p, struct limits *limits)
@@ -941,8 +997,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		}
 		return 1;
 	case section_table:
-		note_error(p, "section_table parse not implemented");
-		return 0;
+		if (!parse_table_section(p, &p->module.table_section)) {
+			note_error(p, "table section");
+			return 0;
+		}
+		return 1;
 	case section_memory:
 		note_error(p, "section_memory parse not implemented");
 		return 0;

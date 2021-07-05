@@ -46,6 +46,11 @@ enum section_tag {
 	num_sections,
 };
 
+enum reftype {
+	funcref   = 0x70,
+	externref = 0x6F,
+};
+
 struct resulttype {
 	unsigned char *valtypes; /* enum valtype */
 	int num_valtypes;
@@ -54,6 +59,16 @@ struct resulttype {
 struct functype {
 	struct resulttype params;
 	struct resulttype result;
+};
+
+struct table {
+	enum reftype reftype;
+	struct limits limits;
+};
+
+struct tablesec {
+	struct table *tables;
+	int num_tables;
 };
 
 struct funcsec {
@@ -288,6 +303,7 @@ struct module {
 	struct importsec import_section;
 	struct exportsec export_section;
 	struct codesec code_section;
+	struct tablesec table_section;
 };
 
 struct wasm_interp {
