@@ -6,8 +6,10 @@ metaverse. Developers shouldn't have to deal with low level details of the
 metaverse, in the same sense that linux application developers shouldn't have
 to think about the details of TCP/IP when building their applications.
 
-This repository serves as the "monorepo" of the protoverse. This implies some
-goals of this repository:
+This repository serves as the "monorepo" of the protoverse.
+
+Goals
+-----
 
 * Zero dependencies. Ideally we will avoid linking to openssl as well. The
   metaverse should move on from certificate authorities if possible, opting for
