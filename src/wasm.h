@@ -19,6 +19,19 @@ enum valtype {
 	f64 = 0x7C,
 };
 
+enum ref_instr {
+	ref_null    = 0xD0,
+	ref_is_null = 0xD1,
+	ref_func    = 0xD2,
+};
+
+enum const_instr {
+	const_i32 = 0x41,
+	const_i64 = 0x42,
+	const_f32 = 0x43,
+	const_f64 = 0x44,
+};
+
 enum limit_type {
 	limit_min = 0x00,
 	limit_min_max = 0x01,
@@ -81,6 +94,21 @@ struct funcsec {
 	int num_indices;
 };
 
+enum mut {
+	mut_const,
+	mut_var,
+};
+
+struct globaltype {
+	enum valtype valtype;
+	enum mut mut;
+};
+
+struct globalsec {
+	struct global *globals;
+	int num_globals;
+};
+
 struct typesec {
 	struct functype *functypes;
 	int num_functypes;
@@ -91,16 +119,6 @@ enum import_type {
 	import_table,
 	import_mem,
 	import_global,
-};
-
-enum mut {
-	mut_const,
-	mut_var,
-};
-
-struct globaltype {
-	enum valtype valtype;
-	enum mut mut;
 };
 
 struct importdesc {
@@ -125,8 +143,13 @@ struct importsec {
 };
 
 struct expr {
-	unsigned char *instrs;
-	int num_instrs;
+	unsigned char *code;
+	int code_len;
+};
+
+struct global {
+	struct globaltype type;
+	struct expr init;
 };
 
 struct local {
@@ -136,8 +159,7 @@ struct local {
 
 /* "code" */
 struct func {
-	unsigned char *code;
-	int code_len;
+	struct expr code;
 	struct local *locals;
 	int num_locals;
 };
@@ -310,6 +332,7 @@ struct module {
 	struct codesec code_section;
 	struct tablesec table_section;
 	struct memsec memory_section;
+	struct globalsec global_section;
 };
 
 struct wasm_interp {

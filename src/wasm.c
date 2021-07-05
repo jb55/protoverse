@@ -698,15 +698,15 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 
 	func->locals = locals;
 	func->num_locals = elems;
-	func->code_len = size - (p->cur.p - start);
+	func->code.code_len = size - (p->cur.p - start);
 
-	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code,
-				func->code_len)) {
+	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code.code,
+				func->code.code_len)) {
 		note_error(p, "code oom");
 		return 0;
 	}
 
-	assert(func->code[func->code_len-1] == i_end);
+	assert(func->code.code[func->code.code_len-1] == i_end);
 
 	return 1;
 }
@@ -735,6 +735,35 @@ static int parse_code_section(struct wasm_parser *p,
 	return 1;
 }
 
+static int is_valid_reftype(unsigned char reftype)
+{
+	switch ((enum reftype)reftype) {
+		case funcref: return 1;
+		case externref: return 1;
+	}
+	return 0;
+}
+
+static int parse_reftype(struct wasm_parser *p, enum reftype *reftype)
+{
+	u8 tag;
+
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "reftype");
+		return 0;
+	}
+
+	if (!is_valid_reftype(tag)) {
+		note_error(p, "invalid reftype: 0x%x", reftype);
+		return 0;
+	}
+
+	*reftype = (enum reftype)tag;
+
+	return 1;
+}
+
+
 static int parse_export_section(struct wasm_parser *p,
 		struct exportsec *export_section)
 {
@@ -757,15 +786,6 @@ static int parse_export_section(struct wasm_parser *p,
 	export_section->exports = exports;
 
 	return 1;
-}
-
-static int is_valid_reftype(unsigned char reftype)
-{
-	switch ((enum reftype)reftype) {
-		case funcref: return 1;
-		case externref: return 1;
-	}
-	return 0;
 }
 
 static int parse_limits(struct wasm_parser *p, struct limits *limits)
@@ -799,23 +819,198 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 
 static int parse_table(struct wasm_parser *p, struct table *table)
 {
-	unsigned char reftype;
-	if (!pull_byte(&p->cur, &reftype)) {
+	if (!parse_reftype(p, &table->reftype)) {
 		note_error(p, "reftype");
 		return 0;
 	}
-
-	if (!is_valid_reftype(reftype)) {
-		note_error(p, "invalid reftype: 0x%x", reftype);
-		return 0;
-	}
-
-	table->reftype = (enum reftype)reftype;
 
 	if (!parse_limits(p, &table->limits)) {
 		note_error(p, "limits");
 		return 0;
 	}
+
+	return 1;
+}
+
+static inline int is_valid_ref_instr(u8 tag)
+{
+	switch ((enum ref_instr)tag) {
+	case ref_null: return 1;
+	case ref_is_null: return 1;
+	case ref_func: return 1;
+	}
+	return 0;
+}
+
+static inline int is_valid_const_instr(u8 tag)
+{
+	switch ((enum const_instr)tag) {
+	case const_i32: return 1;
+	case const_i64: return 1;
+	case const_f32: return 1;
+	case const_f64: return 1;
+	}
+	return 0;
+}
+
+static int parse_const_instr(struct wasm_parser *p)
+{
+	u8 tag;
+	unsigned int n;
+
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "tag");
+		return 0;
+	}
+
+	if (!is_valid_const_instr(tag)) {
+		note_error(p, "invalid const instr tag 0x%x", tag);
+		p->cur.p--;
+		return 0;
+	}
+
+	switch ((enum const_instr)tag) {
+	case const_i32:
+	case const_i64:
+		if (!leb128_read(&p->cur, &n)) {
+			note_error(p, "couldn't read integer");
+			return 0;
+		}
+		break;
+	case const_f32:
+	case const_f64:
+		note_error(p, "TODO parse float constants");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_ref_instr(struct wasm_parser *p)
+{
+	u8 tag;
+	unsigned int idx;
+
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "tag");
+		return 0;
+	}
+
+	if (!is_valid_ref_instr(tag)) {
+		//note_error(p, "invalid ref instr tag 0x%x", tag);
+		p->cur.p--;
+		return 0;
+	}
+
+	switch ((enum ref_instr)tag) {
+	case ref_null:
+		if (!parse_reftype(p, (enum reftype*)&tag)) {
+			note_error(p, "invalid ref.null instr reftype 0x%x", tag);
+			return 0;
+		}
+		break;
+
+	case ref_is_null:
+		break;
+	
+	case ref_func:
+		if (!leb128_read(&p->cur, &idx)) {
+			note_error(p, "invalid ref.func idx");
+			return 0;
+		}
+		break;
+	}
+
+	return 1;
+}
+
+static inline int parse_const_expr(struct wasm_parser *p)
+{
+	return parse_ref_instr(p) || parse_const_instr(p);
+}
+
+static int parse_const_exprs(struct wasm_parser *p, struct expr *code)
+{
+	code->code = p->cur.p;
+
+	while (p->cur.p < p->cur.end) {
+		if (*p->cur.p == i_end) {
+			p->cur.p++;
+			code->code_len = p->cur.p - code->code;
+			return 1;
+		}
+
+		if (!parse_const_expr(p)) {
+			note_error(p, "no constant expr found");
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+static int parse_mut(struct wasm_parser *p, enum mut *mut)
+{
+	if (consume_byte(&p->cur, mut_const)) {
+		*mut = mut_const;
+		return 1;
+	}
+
+	if (consume_byte(&p->cur, mut_var)) {
+		*mut = mut_var;
+		return 1;
+	}
+
+	note_error(p, "unknown mut %02x", *p->cur.p);
+	return 0;
+}
+
+static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
+{
+	if (!parse_valtype(p, &g->valtype)) {
+		note_error(p, "valtype");
+		return 0;
+	}
+
+	return parse_mut(p, &g->mut);
+}
+
+static int parse_global(struct wasm_parser *p,
+		struct global *global)
+{
+	if (!parse_globaltype(p, &global->type)) {
+		note_error(p, "type");
+		return 0;
+	}
+
+	if (!parse_const_exprs(p, &global->init)) {
+		note_error(p, "init code");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int parse_global_section(struct wasm_parser *p,
+		struct globalsec *global_section)
+{
+	struct global *globals;
+	unsigned int elems, i;
+
+	if (!parse_vector(p, sizeof(*globals), &elems, (void**)&globals)) {
+		note_error(p, "globals vector");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_global(p, &globals[i])) {
+			note_error(p, "global #%d/%d", i+1, elems);
+			return 0;
+		}
+	}
+
+	global_section->num_globals = elems;
+	global_section->globals = globals;
 
 	return 1;
 }
@@ -890,32 +1085,6 @@ static int parse_function_section(struct wasm_parser *p,
 	funcsec->num_indices = elems;
 
 	return 1;
-}
-
-static int parse_mut(struct wasm_parser *p, enum mut *mut)
-{
-	if (consume_byte(&p->cur, mut_const)) {
-		*mut = mut_const;
-		return 1;
-	}
-
-	if (consume_byte(&p->cur, mut_var)) {
-		*mut = mut_var;
-		return 1;
-	}
-
-	note_error(p, "unknown mut %02x", *p->cur.p);
-	return 0;
-}
-
-static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
-{
-	if (!parse_valtype(p, &g->valtype)) {
-		note_error(p, "valtype");
-		return 0;
-	}
-
-	return parse_mut(p, &g->mut);
 }
 
 static int parse_import_table(struct wasm_parser *p, struct limits *limits)
@@ -1085,8 +1254,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		}
 		return 1;
 	case section_global:
-		note_error(p, "section_global parse not implemented");
-		return 0;
+		if (!parse_global_section(p, &p->module.global_section)) {
+			note_error(p, "global section");
+			return 0;
+		}
+		return 1;
 	case section_export:
 		if (!parse_export_section(p, &p->module.export_section)) {
 			note_error(p, "export section");
@@ -1473,7 +1645,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	}
 
 	/* update current function and push it to the codestack as well */
-	make_cursor(func->code, func->code + func->code_len, &code);
+	make_cursor(func->code.code, func->code.code + func->code.code_len, &code);
 	if (!cursor_pushcode(&interp->code_stack, &code)) {
 		interp_error(interp, "oob cursor_pushcode");
 		return 0;
