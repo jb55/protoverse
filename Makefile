@@ -1,5 +1,5 @@
 
-CFLAGS = -Wno-error=unused-function -DDEBUG -O2 -g -std=gnu90 -Wall -Wextra -Werror \
+CFLAGS = -Wno-error=unused-function -O2 -g -std=gnu90 -Wall -Wextra -Werror \
 	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
 	 -Wmissing-declarations -Wdeclaration-after-statement
 
@@ -43,7 +43,7 @@ bench: src/bench.c $(OBJS)
 	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 clean:
-	rm -f protoverse test $(OBJS) libprotoverse.a $(WASMS)
+	rm -f protoverse test $(OBJS) libprotoverse.a
 
 test: src/test.c $(OBJS)
 	@echo "ld $@"

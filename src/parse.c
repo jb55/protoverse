@@ -42,7 +42,7 @@ union token {
 };
 
 
-/*
+#ifdef DEBUG
 static const char *attr_type_str(enum attribute_type type)
 {
 	switch (type) {
@@ -61,7 +61,7 @@ static const char *attr_type_str(enum attribute_type type)
 
 	return "unknown";
 }
-*/
+#endif
 
 static const char *token_error_string(enum token_error err)
 {
@@ -656,6 +656,7 @@ static int pull_token(struct token_cursor *tokens,
 }
 
 #ifdef DEBUG
+/*
 static void print_token_data(union token *token, enum token_type type)
 {
 	switch (type) {
@@ -702,6 +703,7 @@ static void print_current_token(struct token_cursor *tokens)
 	print_token_data(&token, type);
 	printf("\n");
 }
+*/
 #endif
 
 /*
