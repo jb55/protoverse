@@ -1722,6 +1722,20 @@ static inline void make_i32_val(struct val *val, int v)
 	val->i32 = v;
 }
 
+static inline int interp_i32_gt_u(struct wasm_interp *interp)
+{
+	struct val a, b, c;
+
+	if (!interp_prep_binop(interp, &a, &b, &c, i32)) {
+		interp_error(interp, "gt_u prep");
+		return 0;
+	}
+
+	c.i32 = (unsigned int)a.i32 > (unsigned int)b.i32;
+
+	return cursor_pushval(&interp->stack, &c);
+}
+
 static inline int interp_i32_const(struct wasm_interp *interp)
 {
 	struct val val;
@@ -1864,6 +1878,7 @@ static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 	case i_i32_add: return interp_i32_add(interp);
 	case i_i32_sub: return interp_i32_sub(interp);
 	case i_i32_const: return interp_i32_const(interp);
+	case i_i32_gt_u: return interp_i32_gt_u(interp);
 	case i_call: return interp_call(interp);
 	default:
 		    interp_error(interp, "unhandled instruction 0x%x", tag);
