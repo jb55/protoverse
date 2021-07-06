@@ -324,7 +324,34 @@ struct instr {
 	};
 };
 
+enum datamode {
+	datamode_active,
+	datamode_passive,
+};
+
+struct wdata_active {
+	int mem_index;
+	struct expr offset_expr;
+};
+
+struct wdata {
+	struct wdata_active active;
+	unsigned char *bytes;
+	int bytes_len;
+	enum datamode mode;
+};
+
+struct datasec {
+	struct wdata *datas;
+	int num_datas;
+};
+
+struct startsec {
+	int start_fn;
+};
+
 struct module {
+	unsigned int parsed;
 	struct typesec type_section;
 	struct funcsec func_section;
 	struct importsec import_section;
@@ -333,6 +360,8 @@ struct module {
 	struct tablesec table_section;
 	struct memsec memory_section;
 	struct globalsec global_section;
+	struct startsec start_section;
+	struct datasec data_section;
 };
 
 struct wasm_interp {

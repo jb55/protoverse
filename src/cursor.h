@@ -267,10 +267,7 @@ static inline void cursor_print_around(struct cursor *cur, int range)
 
 	c = max(cur->p - range, cur->start);
 	for (; c < cur->end && c < (cur->p + range); c++) {
-		if (*c < 32)
-			printf("%02x", *c);
-		else
-			printf("%c", *c);
+		printf("%02x", *c);
 	}
 	printf("\n");
 
@@ -280,10 +277,7 @@ static inline void cursor_print_around(struct cursor *cur, int range)
 			printf("^");
 			continue;
 		}
-		if (*c < 32)
-			printf("  ");
-		else
-			printf(" ");
+		printf("  ");
 	}
 	printf("\n");
 }

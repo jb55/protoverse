@@ -89,12 +89,12 @@ static const char *valtype_name(enum valtype valtype)
 static void print_val(struct val *val)
 {
 	switch (val->type) {
-	case i32: debug("%d", val->i32); break;
-	case i64: debug("%ld", val->i64); break;
-	case f32: debug("%f", val->f32); break;
-	case f64: debug("%f", val->f64); break;
+	case i32: printf("%d", val->i32); break;
+	case i64: printf("%ld", val->i64); break;
+	case f32: printf("%f", val->f32); break;
+	case f64: printf("%f", val->f64); break;
 	}
-	debug(":%s\n", valtype_name(val->type));
+	printf(":%s\n", valtype_name(val->type));
 }
 
 static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
@@ -108,6 +108,12 @@ static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int le
 		memcpy(dest, cur->p, len);
 
 	return 1;
+}
+
+static inline int was_section_parsed(struct module *module,
+	enum section_tag section)
+{
+	return module->parsed & (1 << section);
 }
 
 static inline int cursor_popbyte(struct cursor *cur, unsigned char *byte)
@@ -134,7 +140,7 @@ static void print_stack(struct cursor *stack)
 
 	for (i = 0; stack->p > stack->start; i++) {
 		cursor_popval(stack, &val);
-		debug("[%d] ", i);
+		printf("[%d] ", i);
 		print_val(&val);
 	}
 
@@ -256,40 +262,39 @@ static void print_functype(struct functype *ft)
 	int i;
 
 	for (i = 0; i < ft->params.num_valtypes; i++) {
-		debug("%s ", valtype_name(ft->params.valtypes[i]));
+		printf("%s ", valtype_name(ft->params.valtypes[i]));
 	}
-	debug("-> ");
+	printf("-> ");
 	for (i = 0; i < ft->result.num_valtypes; i++) {
-		debug("%s ", valtype_name(ft->result.valtypes[i]));
+		printf("%s ", valtype_name(ft->result.valtypes[i]));
 	}
-	debug("\n");
+	printf("\n");
 }
 
 static void print_type_section(struct typesec *typesec)
 {
 	int i;
-	debug("%d functypes:\n", typesec->num_functypes);
+	printf("%d functypes:\n", typesec->num_functypes);
 	for (i = 0; i < typesec->num_functypes; i++) {
-		debug("    ");
+		printf("    ");
 		print_functype(&typesec->functypes[i]);
 	}
 }
 
-/*
 static void print_func_section(struct funcsec *funcsec)
 {
-	int i;
 	printf("%d functions\n", funcsec->num_indices);
+	/*
 	printf("    ");
 	for (i = 0; i < funcsec->num_indices; i++) {
 		printf("%d ", funcsec->type_indices[i]);
 	}
 	printf("\n");
+	*/
 }
-*/
 
 __attribute__((unused))
-static const char *exportdesc_name(enum exportdesc desc) 
+static const char *exportdesc_name(enum exportdesc desc)
 {
 	switch (desc) {
 		case export_func: return "function";
@@ -304,15 +309,15 @@ static const char *exportdesc_name(enum exportdesc desc)
 static void print_import(struct import *import)
 {
 	(void)import;
-	debug("%s %s\n", import->module_name, import->name);
+	printf("%s %s\n", import->module_name, import->name);
 }
 
 static void print_import_section(struct importsec *importsec)
 {
 	int i;
-	debug("%d imports:\n", importsec->num_imports);
+	printf("%d imports:\n", importsec->num_imports);
 	for (i = 0; i < importsec->num_imports; i++) {
-		debug("    ");
+		printf("    ");
 		print_import(&importsec->imports[i]);
 	}
 }
@@ -321,10 +326,10 @@ static void print_limits(struct limits *limits)
 {
 	switch (limits->type) {
 	case limit_min:
-		debug("%d", limits->min);
+		printf("%d", limits->min);
 		break;
 	case limit_min_max:
-		debug("%d-%d", limits->min, limits->max);
+		printf("%d-%d", limits->min, limits->max);
 		break;
 	}
 }
@@ -343,12 +348,12 @@ static void print_memory_section(struct memsec *memory)
 	int i;
 	struct limits *mem;
 
-	debug("%d memory:\n", memory->num_mems);
+	printf("%d memory:\n", memory->num_mems);
 	for (i = 0; i < memory->num_mems; i++) {
 		mem = &memory->mems[i];
-		debug("    ");
+		printf("    ");
 		print_limits(mem);
-		debug("\n");
+		printf("\n");
 	}
 }
 
@@ -357,23 +362,44 @@ static void print_table_section(struct tablesec *section)
 	int i;
 	struct table *table;
 
-	debug("%d tables:\n", section->num_tables);
+	printf("%d tables:\n", section->num_tables);
 	for (i = 0; i < section->num_tables; i++) {
 		table = &section->tables[i];
-		debug("    ");
-		debug("%s: ", reftype_name(table->reftype));
+		printf("    ");
+		printf("%s: ", reftype_name(table->reftype));
 		print_limits(&table->limits);
-		debug("\n");
+		printf("\n");
 	}
+}
+
+static const char *get_function_name(struct module *module, unsigned int func_index)
+{
+	struct wexport *export;
+	int i;
+
+	for (i = 0; i < module->export_section.num_exports; i++) {
+		export = &module->export_section.exports[i];
+		if (export->index == func_index) {
+			return export->name;
+		}
+	}
+
+	return "unknown";
+}
+
+static void print_start_section(struct module *module)
+{
+	int fn = module->start_section.start_fn;
+	printf("start function: %d <%s>\n", fn, get_function_name(module, fn));
 }
 
 static void print_export_section(struct exportsec *exportsec)
 {
 	int i;
-	debug("%d exports:\n", exportsec->num_exports);
+	printf("%d exports:\n", exportsec->num_exports);
 	for (i = 0; i < exportsec->num_exports; i++) {
-		debug("    ");
-		debug("%s %s %d\n", exportdesc_name(exportsec->exports[i].desc),
+		printf("    ");
+		printf("%s %s %d\n", exportdesc_name(exportsec->exports[i].desc),
 				exportsec->exports[i].name,
 				exportsec->exports[i].index);
 	}
@@ -395,26 +421,85 @@ static void print_func(struct func *func)
 	}
 	debug("%d bytes of code\n", func->code_len);
 }
+*/
+
+static void print_global_section(struct globalsec *section)
+{
+	printf("%d globals\n", section->num_globals);
+}
+
 
 static void print_code_section(struct codesec *codesec)
 {
-	int i;
-
+	printf("%d code segments\n", codesec->num_funcs);
+	/*
 	for (i = 0; i < codesec->num_funcs; i++) {
 		print_func(&codesec->funcs[i]);
 	}
+	*/
 }
-*/
+
+static void print_data_section(struct datasec *section)
+{
+	printf("%d data segments\n", section->num_datas);
+}
+
+static void print_section(struct module *module, enum section_tag section)
+{
+	switch (section) {
+	case section_custom:
+		printf("TODO: print custom section\n");
+		break;
+	case section_type:
+		print_type_section(&module->type_section);
+		break;
+	case section_import:
+		print_import_section(&module->import_section);
+		break;
+	case section_function:
+		print_func_section(&module->func_section);
+		break;
+	case section_table:
+		print_table_section(&module->table_section);
+		break;
+	case section_memory:
+		print_memory_section(&module->memory_section);
+		break;
+	case section_global:
+		print_global_section(&module->global_section);
+		break;
+	case section_export:
+		print_export_section(&module->export_section);
+		break;
+	case section_start:
+		print_start_section(module);
+		break;
+	case section_element:
+		printf("TODO: print element section\n");
+		break;
+	case section_code:
+		print_code_section(&module->code_section);
+		break;
+	case section_data:
+		print_data_section(&module->data_section);
+		break;
+	case num_sections:
+		assert(0);
+		break;
+	}
+}
 
 static void print_module(struct module *module)
 {
-	print_type_section(&module->type_section);
-	//print_func_section(&module->func_section);
-	print_import_section(&module->import_section);
-	print_export_section(&module->export_section);
-	print_table_section(&module->table_section);
-	print_memory_section(&module->memory_section);
-	//print_code_section(&module->code_section);
+	int i;
+	enum section_tag section;
+
+	for (i = 0; i < num_sections; i++) {
+		section = (enum section_tag)i;
+		if (was_section_parsed(module, section)) {
+			print_section(module, section);
+		}
+	}
 }
 
 
@@ -912,7 +997,7 @@ static int parse_ref_instr(struct wasm_parser *p)
 
 	case ref_is_null:
 		break;
-	
+
 	case ref_func:
 		if (!leb128_read(&p->cur, &idx)) {
 			note_error(p, "invalid ref.func idx");
@@ -924,23 +1009,23 @@ static int parse_ref_instr(struct wasm_parser *p)
 	return 1;
 }
 
-static inline int parse_const_expr(struct wasm_parser *p)
+static inline int parse_const_expr_instr(struct wasm_parser *p)
 {
 	return parse_ref_instr(p) || parse_const_instr(p);
 }
 
-static int parse_const_exprs(struct wasm_parser *p, struct expr *code)
+static int parse_const_expr(struct wasm_parser *p, struct expr *expr)
 {
-	code->code = p->cur.p;
+	expr->code = p->cur.p;
 
 	while (p->cur.p < p->cur.end) {
 		if (*p->cur.p == i_end) {
 			p->cur.p++;
-			code->code_len = p->cur.p - code->code;
+			expr->code_len = p->cur.p - expr->code;
 			return 1;
 		}
 
-		if (!parse_const_expr(p)) {
+		if (!parse_const_expr_instr(p)) {
 			note_error(p, "no constant expr found");
 			return 0;
 		}
@@ -983,7 +1068,7 @@ static int parse_global(struct wasm_parser *p,
 		return 0;
 	}
 
-	if (!parse_const_exprs(p, &global->init)) {
+	if (!parse_const_expr(p, &global->init)) {
 		note_error(p, "init code");
 		return 0;
 	}
@@ -1035,6 +1120,125 @@ static int parse_memory_section(struct wasm_parser *p,
 
 	memory_section->num_mems = elems;
 	memory_section->mems = mems;
+
+	return 1;
+}
+
+static int parse_start_section(struct wasm_parser *p,
+		struct startsec *start_section)
+{
+	if (!leb128_read(&p->cur, (unsigned int*)&start_section->start_fn)) {
+		note_error(p, "start_fn index");
+		return 0;
+	}
+
+	return 1;
+}
+
+static inline int parse_byte_vector(struct wasm_parser *p, unsigned char **data,
+		int *data_len)
+{
+	if (!leb128_read(&p->cur, (unsigned int*)data_len)) {
+		note_error(p, "len");
+		return 0;
+	}
+
+	if (p->cur.p + *data_len > p->cur.end) {
+		note_error(p, "byte vector overflow");
+		return 0;
+	}
+
+	*data = p->cur.p;
+	p->cur.p += *data_len;
+
+	return 1;
+}
+
+static int parse_wdata(struct wasm_parser *p, struct wdata *data)
+{
+	u8 tag;
+
+	if (!pull_byte(&p->cur, &tag)) {
+		note_error(p, "tag");
+		return 0;
+	}
+
+	if (tag > 2) {
+		cursor_print_around(&p->cur, 10);
+		note_error(p, "invalid datasegment tag: 0x%x", tag);
+		return 0;
+	}
+
+	switch (tag) {
+	case 0:
+		data->mode = datamode_active;
+		data->active.mem_index = 0;
+
+		if (!parse_const_expr(p, &data->active.offset_expr)) {
+			note_error(p, "const expr");
+			return 0;
+		}
+
+		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
+			note_error(p, "bytes vector");
+			return 0;
+		}
+
+		break;
+
+	case 1:
+		data->mode = datamode_passive;
+
+		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
+			note_error(p, "passive bytes vector");
+			return 0;
+		}
+
+		break;
+
+	case 2:
+		data->mode = datamode_active;
+
+		if (!leb128_read(&p->cur, (unsigned int*)&data->active.mem_index))  {
+			note_error(p, "read active data mem_index");
+			return 0;
+		}
+
+		if (!parse_const_expr(p, &data->active.offset_expr)) {
+			note_error(p, "read active data (w/ mem_index) offset_expr");
+			return 0;
+		}
+
+		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
+			note_error(p, "active (w/ mem_index) bytes vector");
+			return 0;
+		}
+
+		break;
+	}
+
+	return 1;
+}
+
+static int parse_data_section(struct wasm_parser *p, struct datasec *section)
+{
+	struct wdata *data;
+	unsigned int elems, i;
+
+	if (!parse_vector(p, sizeof(*data), &elems, (void**)&data)) {
+		note_error(p, "datas vector");
+		return 0;
+	}
+
+	for (i = 0; i < elems; i++) {
+		if (!parse_wdata(p, &data[i])) {
+			note_error(p, "data segment #%d/%d", i+1, elems);
+			return 0;
+		}
+	}
+
+	section->num_datas = elems;
+	section->datas = data;
 
 	return 1;
 }
@@ -1266,8 +1470,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		}
 		return 1;
 	case section_start:
-		note_error(p, "section_start parse not implemented");
-		return 0;
+		if (!parse_start_section(p, &p->module.start_section)) {
+			note_error(p, "start section");
+			return 0;
+		}
+		return 1;
 	case section_element:
 		note_error(p, "section_element parse not implemented");
 		return 0;
@@ -1278,8 +1485,11 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		}
 		return 1;
 	case section_data:
-		note_error(p, "section_data parse not implemented");
-		return 0;
+		if (!parse_data_section(p, &p->module.data_section)) {
+			note_error(p, "data section");
+			return 0;
+		}
+		return 1;
 	default:
 		note_error(p, "invalid section tag");
 		return 0;
@@ -1342,11 +1552,15 @@ static int parse_section(struct wasm_parser *p)
 		return 0;
 	}
 
+	p->module.parsed |= 1 << tag;
+
 	return 1;
 }
 
 int parse_wasm(struct wasm_parser *p)
 {
+	p->module.parsed = 0;
+
 	if (!consume_bytes(&p->cur, WASM_MAGIC, sizeof(WASM_MAGIC))) {
 		note_error(p, "magic");
 		goto fail;
@@ -1473,7 +1687,6 @@ static int set_local(struct wasm_interp *interp, int ind, struct val *val)
 		return 1;
 	}
 
-	debug("pushing local %d\n", ind);
 	cursor_pushval(&interp->locals, val);
 	assert(count_locals(interp) > 0);
 	return 1;
@@ -1549,13 +1762,20 @@ static inline int interp_i32_const(struct wasm_interp *interp)
 	return cursor_pushval(&interp->stack, &val);
 }
 
+static inline int get_import_offset(struct module *module)
+{
+	return !was_section_parsed(module, section_import) ? 0 :
+		module->import_section.num_imports;
+}
+
 static inline struct func *get_function(struct module *module, int ind)
 {
+	// TODO: imports
 	if (ind >= module->code_section.num_funcs) {
 		return NULL;
 	}
 
-	return &module->code_section.funcs[ind];
+	return &module->code_section.funcs[ind - get_import_offset(module)];
 }
 
 static inline struct functype *get_function_type(struct module *module, int ind)
@@ -1564,30 +1784,13 @@ static inline struct functype *get_function_type(struct module *module, int ind)
 		return NULL;
 	}
 
-	ind = module->func_section.type_indices[ind];
+	ind = module->func_section.type_indices[ind - get_import_offset(module)];
 	if (ind >= module->type_section.num_functypes) {
 		return NULL;
 	}
 
 	return &module->type_section.functypes[ind];
 }
-
-/*
-static const char *get_function_name(struct module *module, unsigned int func_index)
-{
-	struct wexport *export;
-	int i;
-
-	for (i = 0; i < module->export_section.num_exports; i++) {
-		export = &module->export_section.exports[i];
-		if (export->index == func_index) {
-			return export->name;
-		}
-	}
-
-	return "unknown";
-}
-*/
 
 static int prepare_call(struct wasm_interp *interp, int func_index)
 {
@@ -1742,6 +1945,15 @@ static int find_function(struct module *module, const char *name)
 	return -1;
 }
 
+static int find_start_function(struct module *module)
+{
+	if (module->parsed & (1 << section_start)) {
+		return module->start_section.start_fn;
+	}
+
+	return find_function(module, "start");
+}
+
 static int cursor_slice(struct cursor *mem, struct cursor *slice, size_t size)
 {
 	u8 *p;
@@ -1794,7 +2006,7 @@ int interp_wasm_module(struct wasm_interp *interp, struct module *module)
 
 	assert(ok);
 
-	func = find_function(module, "start");
+	func = find_start_function(module);
 	if (func == -1) {
 		interp_error(interp, "no start function found");
 		return 0;
