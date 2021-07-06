@@ -1568,7 +1568,7 @@ fail:
 	return 0;
 }
 
-static inline int interp_prep_binop(struct wasm_interp *interp, struct val *a,
+static int interp_prep_binop(struct wasm_interp *interp, struct val *a,
 		struct val *b, struct val *c, enum valtype typ)
 {
 	c->type = typ;
