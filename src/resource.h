@@ -2,7 +2,7 @@
 #ifndef RESOURCE_H
 #define RESOURCE_H
 
-#include "types.h"
+#include "typedefs.h"
 
 #define STATIC_UUID 0x5A51C00000000000
 

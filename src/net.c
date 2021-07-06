@@ -8,7 +8,6 @@
 
 #include <sys/types.h>
 #include <assert.h>
-#include <error.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>

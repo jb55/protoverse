@@ -10,7 +10,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 {
 	struct wasm_parser p;
 	void *mem;
-	int ok, arena_size, i, ops = 0;
+	int arena_size, i, ops = 0;
 	struct wasm_interp interp;
 	struct timespec t1, t2;
 	long nanos, ms;
@@ -48,7 +48,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 	wasm_interp_free(&interp);
 
 	free(mem);
-	return ok;
+	return 1;
 }
 
 int main(int argc, char *argv[])

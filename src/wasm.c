@@ -32,20 +32,6 @@ struct val {
 	};
 };
 
-#ifdef DEBUG
-static void log_dbg_(const char *fmt, ...)
-{
-	va_list ap;
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	va_end(ap);
-}
-
-#define log_dbg(...) log_dbg_(__VA_ARGS__)
-#else
-#define log_dbg(...)
-#endif
-
 static inline int is_valtype(unsigned char byte)
 {
 	switch ((enum valtype)byte) {
@@ -90,7 +76,7 @@ static void print_val(struct val *val)
 {
 	switch (val->type) {
 	case i32: printf("%d", val->i32); break;
-	case i64: printf("%ld", val->i64); break;
+	case i64: printf("%lld", val->i64); break;
 	case f32: printf("%f", val->f32); break;
 	case f64: printf("%f", val->f64); break;
 	}
@@ -114,17 +100,6 @@ static inline int was_section_parsed(struct module *module,
 	enum section_tag section)
 {
 	return module->parsed & (1 << section);
-}
-
-static inline int cursor_popbyte(struct cursor *cur, unsigned char *byte)
-{
-	if (cur->p - 1 < cur->start)
-		return 0;
-
-	cur->p--;
-	*byte = *cur->p;
-
-	return 1;
 }
 
 static inline int cursor_popval(struct cursor *cur, struct val *val)
