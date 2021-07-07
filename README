@@ -56,9 +56,8 @@ machine for the web, but it is general enough to use for cases beyond that.
 
 With WASM you can use any programming language to code the metaverse.
 protoverse comes with an embedded WASM interpreter that can execute WASM code.
-
-With WASM, you will be able to augment clients to render your space in greater
-detail, show HUD elements, create multiplayer games, etc.
+You will be able to augment clients to render your space in greater detail,
+show HUD elements, create multiplayer games, etc.
 
 You can already do a lot without client computation, for instance, your space
 could be served dynamically, which you could periodically fetch to get updated
