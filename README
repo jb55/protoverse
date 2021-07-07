@@ -33,13 +33,13 @@ different ways. For example, with natural language:
 
   $ ./protoverse parse example.space
 
-  There is a(n) clean rectangular room made of gold named Satoshi's
-  Den. It contains three objects: a welcome desk table, fancy chair
-  and ceiling light.
+  There is a(n) clean rectangular room made of gold named Satoshi's Den.
+  It contains three objects: a welcome desk table, fancy chair and
+  ceiling light.
 
-This is important for accessibility. If we want the metaverse to be
-open to everyone, we need some way to describe what is going on in
-this abstract space without a visual rendering.
+This is important for accessibility. If we want the metaverse to be open
+to everyone, we need some way to describe what is going on in this
+abstract space without a visual rendering.
 
 Another reason we prefer a high level description is that we want objects
 in the metaverse to be friendly to our machine overlords. The metaverse
