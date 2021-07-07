@@ -41,62 +41,65 @@ This is important for accessibility. If we want the metaverse to be
 open to everyone, we need some way to describe what is going on in
 this abstract space without a visual rendering.
 
-Another reason we prefer a high level description is that we want objects in the
-metaverse to be friendly to our machine overlords. The metaverse should be
-easily programmable with scripts and bots. A high level description also allows
-us to reload the space quickly, while keeping higher level-of-detail bits cached
-from previous loads.
+Another reason we prefer a high level description is that we want objects
+in the metaverse to be friendly to our machine overlords. The metaverse
+should be easily programmable with scripts and bots. A high level
+description also allows us to reload the space quickly, while keeping
+higher level-of-detail bits cached from previous loads.
 
 
 PROGRAMMABILITY
 
-The protoverse uses WebAssembly (WASM [1]) to enable computation for clients
-interacting with the metaverse. WASM was originally devised as a generic virtual
-machine for the web, but it is general enough to use for cases beyond that.
+The protoverse uses WebAssembly (WASM [1]) to enable computation for
+clients interacting with the metaverse. WASM was originally devised as a
+generic virtual machine for the web, but it is general enough to use for
+cases beyond that.
 
 With WASM you can use any programming language to code the metaverse.
-protoverse comes with an embedded WASM interpreter that can execute WASM code.
-You will be able to augment clients to render your space in greater detail,
-show HUD elements, create multiplayer games, etc.
+protoverse comes with an embedded WASM interpreter that can execute WASM
+code.  You will be able to augment clients to render your space in
+greater detail, show HUD elements, create multiplayer games, etc.
 
-You can already do a lot without client computation, for instance, your space
-could be served dynamically, which you could periodically fetch to get updated
-description of the room. This would be equivalent to "refresh the page" on the
-web, except due to the level-of-detail nature of the protoverse, you wouldn't
-need to refetch the entire room. The client could cache models and other details
-that have been previously fetched.
+You can already do a lot without client computation, for instance, your
+space could be served dynamically, which you could periodically fetch to
+get updated description of the room. This would be equivalent to "refresh
+the page" on the web, except due to the level-of-detail nature of the
+protoverse, you wouldn't need to refetch the entire room. The client
+could cache models and other details that have been previously fetched.
 
 The default, high-level description of the room could include position
 information, so you will be able to see things that have moved when you
-"refetch" the state of the room. State updates like this could be a bit jarring,
-so most likely you wouldn't want to reload the room for position updates, these
-can be served via "object state/position update" network messages.
+"refetch" the state of the room. State updates like this could be a bit
+jarring, so most likely you wouldn't want to reload the room for position
+updates, these can be served via "object state/position update" network
+messages.
 
-What you do with these network messages could be handled automatically for
-simple cases by the client, but otherwise could be handled by WASM code served
-by the protoverse server.
+What you do with these network messages could be handled automatically
+for simple cases by the client, but otherwise could be handled by WASM
+code served by the protoverse server.
 
 
 THIS REPOSITORY
 
 The goal of this source repository is the be the "linux kernel" of the
-metaverse. Developers shouldn't have to deal with low level details of the
-metaverse, in the same sense that linux application developers shouldn't have
-to think about the details of TCP/IP when building their applications.
+metaverse. Developers shouldn't have to deal with low level details of
+the metaverse, in the same sense that linux application developers
+shouldn't have to think about the details of TCP/IP when building their
+applications.
 
 This repository serves as the "monorepo" of the protoverse.
 
 Goals:
 
-* Zero dependencies. Ideally we will avoid linking to openssl as well. The
-  metaverse should move on from certificate authorities if possible, opting for
-  a trust-on-first-use model instead. Ideally we would use something like the
-  noise protocol for securing communications. We can support this at the
-  protocol level if it makes sense.
+* Zero dependencies. Ideally we will avoid linking to openssl as well.
+  The metaverse should move on from certificate authorities if possible,
+  opting for a trust-on-first-use model instead. Ideally we would use
+  something like the noise protocol for securing communications. We can
+  support this at the protocol level if it makes sense.
 
 * Cross platform. We should try to support all platforms. Right now we're
-  prototyping in linux, but the metaverse should be open and accesible to all
-  platforms.
+  prototyping in linux, but the metaverse should be open and accesible to
+  all platforms.
 
 
 DOCUMENTATION
