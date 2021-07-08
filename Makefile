@@ -11,7 +11,6 @@ OBJS = src/io.o \
        src/net.o \
        src/varint.o \
        src/parser.o \
-       src/resource.o \
        src/wasm.o
 
 WASMS = wasm/hello-c.wasm \

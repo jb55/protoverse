@@ -73,13 +73,17 @@ static int print_cell_tree(struct parser *parser, u16 root, int depth)
 
 static void init_protoverse_server(struct protoverse_server *server)
 {
+	(void)server;
+	/*
 	init_resource_manager(&server->env.entities, sizeof(struct entity),
 			1024, MAX_ENTITIES, "entity");
+			*/
 }
 
 static void free_protoverse_server(struct protoverse_server *server)
 {
-	destroy_resource_manager(&server->env.entities);
+	(void)server;
+	//destroy_resource_manager(&server->env.entities);
 }
 
 static int usage(void)
