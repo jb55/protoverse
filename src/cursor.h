@@ -16,6 +16,33 @@ struct cursor {
 	unsigned char *end;
 };
 
+struct array {
+	struct cursor cur;
+	unsigned int elem_size;
+};
+
+static inline void make_cursor(u8 *start, u8 *end, struct cursor *cursor)
+{
+	cursor->start = start;
+	cursor->p = start;
+	cursor->end = end;
+}
+
+static inline void make_array(struct array *a, u8* start, u8 *end, unsigned int elem_size)
+{
+	make_cursor(start, end, &a->cur);
+	a->elem_size = elem_size;
+}
+
+static inline unsigned char *array_index(struct array *a, int ind)
+{
+	u8 *p = a->cur.start + a->elem_size * ind; 
+	if (unlikely(p >= a->cur.end)) {
+		return NULL;
+	}
+	return p;
+}
+
 static inline int cursor_eof(struct cursor *c)
 {
 	return c->p == c->end;
@@ -42,19 +69,6 @@ static inline void copy_cursor(struct cursor *src, struct cursor *dest)
 	dest->p = src->p;
 	dest->end = src->end;
 }
-
-static inline void make_cursor(u8 *start, u8 *end, struct cursor *cursor)
-{
-	cursor->start = start;
-	cursor->p = start;
-	cursor->end = end;
-}
-
-static inline int cursor_index(struct cursor *cursor, int elem_size)
-{
-	return (cursor->p - cursor->start) / elem_size;
-}
-
 
 static inline int pull_byte(struct cursor *cursor, u8 *c)
 {
@@ -113,11 +127,23 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 	return 1;
 }
 
+static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
+{
+	if (unlikely(cur->p - len < cur->start)) {
+		printf("cursor_pop oob\n");
+		return 0;
+	}
+	
+	cur->p -= len;
+	memcpy(cur->p, data, len);
 
-static inline int push_data(struct cursor *cursor, u8 *data, int len)
+	return 1;
+}
+
+static inline int cursor_push(struct cursor *cursor, u8 *data, int len)
 {
 	if (unlikely(cursor->p + len > cursor->end)) {
-		printf("push_data oob\n");
+		printf("cursor_push oob\n");
 		return 0;
 	}
 
@@ -127,9 +153,9 @@ static inline int push_data(struct cursor *cursor, u8 *data, int len)
 	return 1;
 }
 
-static inline int push_int(struct cursor *cursor, int i)
+static inline int cursor_push_int(struct cursor *cursor, int i)
 {
-	return push_data(cursor, (u8*)&i, sizeof(i));
+	return cursor_push(cursor, (u8*)&i, sizeof(i));
 }
 
 static inline size_t cursor_count(struct cursor *cursor, size_t elem_size)
@@ -192,9 +218,9 @@ static inline int pull_int(struct cursor *cursor, int *i)
 	return pull_data(cursor, (u8*)i, sizeof(*i));
 }
 
-static inline int push_u16(struct cursor *cursor, u16 i)
+static inline int cursor_push_u16(struct cursor *cursor, u16 i)
 {
-	return push_data(cursor, (u8*)&i, sizeof(i));
+	return cursor_push(cursor, (u8*)&i, sizeof(i));
 }
 
 static inline void *index_cursor(struct cursor *cursor, unsigned int index, int elem_size)
@@ -211,12 +237,12 @@ static inline void *index_cursor(struct cursor *cursor, unsigned int index, int 
 
 static inline int push_sized_str(struct cursor *cursor, const char *str, int len)
 {
-	return push_data(cursor, (u8*)str, len);
+	return cursor_push(cursor, (u8*)str, len);
 }
 
 static inline int push_str(struct cursor *cursor, const char *str)
 {
-	return push_data(cursor, (u8*)str, strlen(str));
+	return cursor_push(cursor, (u8*)str, strlen(str));
 }
 
 static inline int push_c_str(struct cursor *cursor, const char *str)

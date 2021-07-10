@@ -293,6 +293,39 @@ enum instr_tag {
 
 	i_i32_add       = 0x6A,
 	i_i32_sub       = 0x6B,
+	i_i32_mul       = 0x6C,
+	i_i32_div_s     = 0x6D,
+	i_i32_div_u     = 0x6E,
+	i_i32_rem_s     = 0x6F,
+	i_i32_rem_u     = 0x70,
+	i_i32_and       = 0x71,
+	i_i32_or        = 0x72,
+	i_i32_xor       = 0x73,
+	i_i32_shl       = 0x74,
+	i_i32_shr_s     = 0x75,
+	i_i32_shr_u     = 0x76,
+	i_i32_rotl      = 0x77,
+	i_i32_rotr      = 0x78,
+
+	i_i64_clz       = 0x79,
+	i_i64_ctz       = 0x7A,
+	i_i64_popcnt    = 0x7B,
+	i_i64_add       = 0x7C,
+	i_i64_sub       = 0x7D,
+	i_i64_mul       = 0x7E,
+	i_i64_div_s     = 0x7F,
+	i_i64_div_u     = 0x80,
+	i_i64_rem_s     = 0x81,
+	i_i64_rem_u     = 0x82,
+	i_i64_and       = 0x83,
+	i_i64_or        = 0x84,
+	i_i64_xor       = 0x85,
+	i_i64_shl       = 0x86,
+	i_i64_shr_s     = 0x87,
+	i_i64_shr_u     = 0x88,
+	i_i64_rotl      = 0x89,
+	i_i64_rotr      = 0x8A,
+
 	/* TODO: more instrs */
 
 };
@@ -307,20 +340,7 @@ struct blocktype {
 	enum blocktype_tag tag;
 	union {
 		enum valtype valtype;
-		unsigned int index;
-	};
-};
-
-struct block_instr {
-	struct blocktype blocktype;
-	struct instr *instrs;
-	int num_instrs;
-};
-
-struct instr {
-	enum instr_tag tag;
-	union {
-		struct block_instr block;
+		unsigned int type_index;
 	};
 };
 
@@ -364,16 +384,35 @@ struct module {
 	struct datasec data_section;
 };
 
+// make sure the struct is packed so that 
+struct label {
+	u32 instr_pos; // resolved status is stored in HOB of pos
+	u32 jump;
+};
+
+struct callframe {
+	struct cursor code;
+	int fn;
+};
+
 struct wasm_interp {
 	struct module *module;
 	size_t ops;
 
 	struct cursor cur; /* code */
-	struct cursor code_stack; /* struct cursor */
+	struct cursor callframes; /* struct cursor */
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
 	struct cursor locals;  /* struct val */
 	struct cursor locals_offsets; /* int */
+
+	struct array labels; /* struct labels */
+	struct array num_labels;
+
+	// resolve stack for the current function. every time a control
+	// instruction is encountered, the label index is pushed. When an
+	// instruction is popped, we can resolve the label
+	struct cursor resolver_stack; /* u32 */
 
 	struct parser_error *errors;
 };

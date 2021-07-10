@@ -23,7 +23,7 @@ static void print_all_cells(struct parser *parser)
 	int i, j;
 	int ncells;
 
-	ncells = cursor_index(parser->cells, sizeof(struct cell));
+	ncells = cursor_count(parser->cells, sizeof(struct cell));
 	printf("ncells %d\n", ncells);
 	for (i = 0; i < ncells; i++) {
 		cell = get_cell(parser->cells, i);

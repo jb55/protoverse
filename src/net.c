@@ -22,7 +22,7 @@ static int push_fetch_response_packet(struct cursor *c,
 	if (!ok) return 0;
 	ok = push_varint(c, resp->data_len);
 	if (!ok) return 0;
-	return push_data(c, resp->data, resp->data_len);
+	return cursor_push(c, resp->data, resp->data_len);
 }
 
 static int pull_fetch_response_packet(struct cursor *c, struct cursor *buf,

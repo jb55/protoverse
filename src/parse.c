@@ -259,7 +259,7 @@ static int push_token_data(struct token_cursor *tokens,
 			tokdebug("sym %.*s", str->len, str->data);
 		}
 #endif
-		ok = push_data(&tokens->c, token_data, token_data_size);
+		ok = cursor_push(&tokens->c, token_data, token_data_size);
 		if (!ok) return 0;
 #ifdef DEBUG
 		printf("\n");
@@ -641,7 +641,7 @@ static int pull_token(struct token_cursor *tokens,
 		tokens->err = TE_UNEXPECTED_TOKEN;
 		tokens->err_data.lex.expected = expected_type;
 		tokens->err_data.lex.got = type;
-		tokens->err_data.pos = cursor_index(&temp.c, 1);
+		tokens->err_data.pos = cursor_count(&temp.c, 1);
 		return 0;
 	}
 
@@ -973,8 +973,8 @@ static int parse_attributes(struct token_cursor *tokens,
 		ok = parse_attribute(tokens, &attr);
 		if (!ok) break;
 
-		index = cursor_index(attributes, sizeof(attr));
-		ok = push_data(attributes, (u8*)&attr, sizeof(attr));
+		index = cursor_count(attributes, sizeof(attr));
+		ok = cursor_push(attributes, (u8*)&attr, sizeof(attr));
 
 		if (!ok) {
 			printf("attribute data overflow\n");
@@ -1016,7 +1016,7 @@ static int push_cell(struct cursor *cells, struct cell *cell, u16 *cell_index)
 	int index;
 	int ok;
 
-	index = cursor_index(cells, sizeof(*cell));
+	index = cursor_count(cells, sizeof(*cell));
 
 	tokdebug("push_cell %d (%zu) %s\n", index, cells->p - cells->start, cell_type_str(cell->type));
 
@@ -1026,7 +1026,7 @@ static int push_cell(struct cursor *cells, struct cell *cell, u16 *cell_index)
 		return 0;
 	}
 
-	ok = push_data(cells, (u8*)cell, sizeof(*cell));
+	ok = cursor_push(cells, (u8*)cell, sizeof(*cell));
 	if (!ok) return 0;
 
 	if (cell_index)
@@ -1053,7 +1053,7 @@ static int push_cell_child(struct cell *parent, u16 child_ind)
 
 	child_inds.p += parent->n_children * sizeof(parent->children[0]);
 
-	ok = push_u16(&child_inds, child_ind);
+	ok = cursor_push_u16(&child_inds, child_ind);
 	if (!ok) return 0;
 
 	parent->n_children++;
@@ -1107,7 +1107,7 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 	tokdebug("parse_attributes %d\n", ok);
 
 	for (i = attr_inds[0]; i <= attr_inds[1]; i++) {
-		ok = push_u16(&cell_attr_inds, i);
+		ok = cursor_push_u16(&cell_attr_inds, i);
 		if (!ok) return 0;
 		cell->n_attributes++;
 	}

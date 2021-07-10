@@ -16,6 +16,8 @@
 #define ERR_STACK_SIZE 16
 #define NUM_LOCALS 0xFFFF
 
+static const int MAX_LABELS = 128;
+
 struct parse_error {
 	int pos;
 	char *msg;
@@ -122,30 +124,43 @@ static void print_stack(struct cursor *stack)
 	stack->p = p;
 }
 
+static inline int array_push(struct array *a, void *data)
+{
+	return cursor_push(&a->cur, (u8*)data, a->elem_size);
+}
+
+static inline int array_pop_u32(struct array *a, u32 *out)
+{
+	return cursor_pop(&a->cur, (u8*)out, a->elem_size);
+}
+
 static inline int cursor_pushval(struct cursor *cur, struct val *val)
 {
-	return push_data(cur, (unsigned char*)val, sizeof(*val));
+	return cursor_push(cur, (u8*)val, sizeof(*val));
 }
 
-static inline int cursor_pushcode(struct cursor *cur, struct cursor *code)
+static inline int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
 {
-	return push_data(cur, (unsigned char*)code, sizeof(*code));
+	return cursor_push(cur, (u8*)frame, sizeof(*frame));
 }
 
-static inline struct cursor *cursor_topcode(struct cursor *cur)
+static inline struct callframe *top_callframe(struct cursor *cur)
 {
 	assert(cur->p > cur->start);
-	return ((struct cursor*)cur->p) - 1;
+	return ((struct callframe*)cur->p) - 1;
 }
 
 static inline struct cursor *interp_codeptr(struct wasm_interp *interp)
 {
-	return cursor_topcode(&interp->code_stack);
+	struct callframe *frame;
+	frame = top_callframe(&interp->callframes);
+	if (!frame) return 0;
+	return &frame->code;
 }
 
-static inline int cursor_popcode(struct cursor *cur, struct cursor *code)
+static inline int cursor_pop_callframe(struct cursor *cur, struct callframe *frame)
 {
-	return cursor_popdata(cur, (unsigned char*)code, sizeof(*code));
+	return cursor_popdata(cur, (unsigned char*)frame, sizeof(*frame));
 }
 
 static inline int cursor_popint(struct cursor *cur, int *i)
@@ -202,7 +217,7 @@ static void note_error_(struct wasm_parser *p, const char *fmt, ...)
 
 	new_err = (struct parse_error *)p->mem.p;
 
-	if (!push_data(&p->mem, (unsigned char*)&err, sizeof(err))) {
+	if (!cursor_push(&p->mem, (unsigned char*)&err, sizeof(err))) {
 		fprintf(stderr, "arena OOM when pushing data, ");
 		fprintf(stderr, "mem->p at %ld, remaining %ld, data size %ld\n",
 				p->mem.p - p->mem.start,
@@ -1751,10 +1766,22 @@ static inline int interp_i32_const(struct wasm_interp *interp)
 	return cursor_pushval(&interp->stack, &val);
 }
 
-static inline int get_import_offset(struct module *module)
+static inline int imports_count(struct module *module)
 {
 	return !was_section_parsed(module, section_import) ? 0 :
 		module->import_section.num_imports;
+}
+
+static inline int code_count(struct module *module)
+{
+	// I guess not having any code and is technically possible?
+	return !was_section_parsed(module, section_code) ? 0 :
+		module->code_section.num_funcs;
+}
+
+static inline int functions_count(struct module *module)
+{
+	return imports_count(module) + code_count(module);
 }
 
 static inline struct func *get_function(struct module *module, int ind)
@@ -1764,7 +1791,7 @@ static inline struct func *get_function(struct module *module, int ind)
 		return NULL;
 	}
 
-	return &module->code_section.funcs[ind - get_import_offset(module)];
+	return &module->code_section.funcs[ind - imports_count(module)];
 }
 
 static inline struct functype *get_function_type(struct module *module, int ind)
@@ -1773,7 +1800,7 @@ static inline struct functype *get_function_type(struct module *module, int ind)
 		return NULL;
 	}
 
-	ind = module->func_section.type_indices[ind - get_import_offset(module)];
+	ind = module->func_section.type_indices[ind - imports_count(module)];
 	if (ind >= module->type_section.num_functypes) {
 		return NULL;
 	}
@@ -1787,9 +1814,11 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	struct functype *functype;
 	struct func *func;
 	struct val val;
-	struct cursor code;
+	struct callframe callframe;
 	enum valtype paramtype;
 	unsigned int offset;
+
+	debug("calling %s\n", get_function_name(interp->module, func_index));
 
 	if (!(func = get_function(interp->module, func_index))) {
 		interp_error(interp, "function %d oob/not found (%d funcs)",
@@ -1800,7 +1829,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 
 	/* record locals offset for indexing locals in the next function */
 	offset = cursor_count(&interp->locals, sizeof(struct val));
-	if (!push_int(&interp->locals_offsets, offset)) {
+	if (!cursor_push_int(&interp->locals_offsets, offset)) {
 		interp_error(interp, "push locals offset");
 		return 0;
 	}
@@ -1836,9 +1865,11 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 		}
 	}
 
-	/* update current function and push it to the codestack as well */
-	make_cursor(func->code.code, func->code.code + func->code.code_len, &code);
-	if (!cursor_pushcode(&interp->code_stack, &code)) {
+	/* update current function and push it to the callframe as well */
+	make_cursor(func->code.code, func->code.code + func->code.code_len, &callframe.code);
+	callframe.fn = func_index;
+
+	if (!cursor_push_callframe(&interp->callframes, &callframe)) {
 		interp_error(interp, "oob cursor_pushcode");
 		return 0;
 	}
@@ -1866,9 +1897,372 @@ static int interp_call(struct wasm_interp *interp)
 	return interp_code(interp);
 }
 
+
+static int parse_blocktype(struct cursor *cur, struct blocktype *blocktype)
+{
+	unsigned char byte;
+
+	if (!pull_byte(cur, &byte)) {
+		cursor_print_around(cur, 10);
+		printf("parse_blocktype: oob\n");
+		return 0;
+	}
+
+	if (byte == 0x40) {
+		blocktype->tag = blocktype_empty;
+	} else if (is_valtype(byte)) {
+		blocktype->tag = blocktype_valtype;
+		blocktype->valtype = (enum valtype)byte;
+	} else {
+		blocktype->tag = blocktype_index;
+		cur->p--;
+
+		if (!leb128_read(cur, &blocktype->type_index)) {
+			printf("parse_blocktype: read type_index\n");
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+// if we don't have a resolved label, we need to recursively consume
+// instructions until we get to the i_end or i_else, etc
+static int consume_instr(struct wasm_interp *interp, u8 *tag)
+{
+	u8 byte;
+
+	if (!pull_byte(&interp->cur, tag)) {
+		interp_error(interp, "oob");
+		return 0;
+	}
+
+	switch ((enum instr_tag)*tag) {
+		// two-byte instrs
+		case i_memory_size:
+		case i_memory_grow:
+			return pull_byte(&interp->cur, &byte);
+
+		case i_block:
+		case i_loop:
+		case i_if:
+		case i_else:
+		case i_end:
+		case i_br:
+		case i_br_if:
+		case i_br_table:
+		case i_call:
+		case i_call_indirect:
+		case i_local_get:
+		case i_local_set:
+		case i_local_tee:
+		case i_global_get:
+		case i_global_set:
+		case i_i32_load:
+		case i_i64_load:
+		case i_f32_load:
+		case i_f64_load:
+		case i_i32_load8_s:
+		case i_i32_load8_u:
+		case i_i32_load16_s:
+		case i_i32_load16_u:
+		case i_i64_load8_s:
+		case i_i64_load8_u:
+		case i_i64_load16_s:
+		case i_i64_load16_u:
+		case i_i64_load32_s:
+		case i_i64_load32_u:
+		case i_i32_store:
+		case i_i64_store:
+		case i_f32_store:
+		case i_f64_store:
+		case i_i32_store8:
+		case i_i32_store16:
+		case i_i64_store8:
+		case i_i64_store16:
+		case i_i64_store32:
+		case i_i32_const:
+		case i_i64_const:
+		case i_f32_const:
+		case i_f64_const:
+			interp_error(interp, "consume dynamic-size op");
+			return 0;
+
+		// single-tag ops
+		case i_unreachable:
+		case i_nop:
+		case i_return:
+		case i_drop:
+		case i_select:
+		case i_i32_eqz:
+		case i_i32_eq:
+		case i_i32_ne:
+		case i_i32_lt_s:
+		case i_i32_lt_u:
+		case i_i32_gt_s:
+		case i_i32_gt_u:
+		case i_i32_le_s:
+		case i_i32_le_u:
+		case i_i32_ge_s:
+		case i_i32_ge_u:
+		case i_i64_eqz:
+		case i_i64_eq:
+		case i_i64_ne:
+		case i_i64_lt_s:
+		case i_i64_lt_u:
+		case i_i64_gt_s:
+		case i_i64_gt_u:
+		case i_i64_le_s:
+		case i_i64_le_u:
+		case i_i64_ge_s:
+		case i_i64_ge_u:
+		case i_f32_eq:
+		case i_f32_ne:
+		case i_f32_lt:
+		case i_f32_gt:
+		case i_f32_le:
+		case i_f32_ge:
+		case i_f64_eq:
+		case i_f64_ne:
+		case i_f64_lt:
+		case i_f64_gt:
+		case i_f64_le:
+		case i_f64_ge:
+		case i_i32_clz:
+		case i_i32_add:
+		case i_i32_sub:
+		case i_i32_mul:
+		case i_i32_div_s:
+		case i_i32_div_u:
+		case i_i32_rem_s:
+		case i_i32_rem_u:
+		case i_i32_and:
+		case i_i32_or:
+		case i_i32_xor:
+		case i_i32_shl:
+		case i_i32_shr_s:
+		case i_i32_shr_u:
+		case i_i32_rotl:
+		case i_i32_rotr:
+		case i_i64_clz:
+		case i_i64_ctz:
+		case i_i64_popcnt:
+		case i_i64_add:
+		case i_i64_sub:
+		case i_i64_mul:
+		case i_i64_div_s:
+		case i_i64_div_u:
+		case i_i64_rem_s:
+		case i_i64_rem_u:
+		case i_i64_and:
+		case i_i64_or:
+		case i_i64_xor:
+		case i_i64_shl:
+		case i_i64_shr_s:
+		case i_i64_shr_u:
+		case i_i64_rotl:
+		case i_i64_rotr:
+			return 1;
+	}
+
+	interp_error(interp, "unhandled tag: 0x%x", *tag);
+	return 0;
+}
+
+static inline struct label *index_label(struct array *a, int fn, int ind)
+{
+	return (struct label*)array_index(a, (MAX_LABELS * fn) + ind);
+}
+
+static inline int label_is_resolved(struct label *label)
+{
+	return label->instr_pos & 0x80000000;
+}
+
+static int resolve_label(struct wasm_interp *interp)
+{
+	struct label *label;
+	struct callframe *frame;
+	u32 label_ind = 0;
+
+	if (!cursor_pop(&interp->resolver_stack, (u8*)&label_ind, sizeof(label_ind))) {
+		interp_error(interp, "couldn't pop jump resolver stack");
+		return 0;
+	}
+
+	frame = top_callframe(&interp->callframes);
+	assert(frame);
+
+	label = index_label(&interp->labels, frame->fn, label_ind);
+	assert(label);
+	assert(!label_is_resolved(label));
+
+	label->jump = interp->cur.p - interp->cur.start;
+	label->instr_pos |= 0x80000000;
+
+	return 1;
+}
+
+// consume instructions to resolve labels
+static int consume_instrs_until(struct wasm_interp *interp, u8 stop_instr)
+{
+	u8 tag = 0;
+
+	for (;;) {
+		if (!consume_instr(interp, &tag)) {
+			interp_error(interp, "consume 0x%x", tag);
+			return 0;
+		}
+
+		if (tag == stop_instr) {
+			resolve_label(interp);
+			return 1;
+		}
+	}
+}
+
+static inline u32 label_instr_pos(struct label *label)
+{
+	return label->instr_pos & 0x7FFFFFFF;
+}
+
+static inline void set_label_pos(struct label *label, u32 pos)
+{
+	assert(!(pos & 0x80000000));
+	label->instr_pos = pos;
+}
+
+static inline u16 *func_num_labels(struct wasm_interp *interp, int fn)
+{
+	u16 *num = (u16*)array_index(&interp->num_labels, fn);
+	assert(num);
+	assert(*num <= MAX_LABELS);
+	return num;
+}
+
+static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
+{
+	u16 *num_labels, i;
+	struct label *label;
+
+	num_labels = func_num_labels(interp, fn);
+	label = index_label(&interp->labels, fn, 0);
+	assert(label);
+	
+	for (i = 0; i < *num_labels; label++) {
+		assert((u8*)label < interp->labels.cur.end);
+		if (label_instr_pos(label) == instr_pos)
+			return i;
+		i++;
+	}
+
+	return -1;
+}
+
+// upsert an unresolved label
+static int upsert_label(struct wasm_interp *interp, int fn, u32 instr_pos, int *ind)
+{
+	struct label *label;
+	u16 *num_labels;
+
+	num_labels = func_num_labels(interp, fn);
+
+	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) == 0)) {
+		// we already have the label
+		return 1;
+	}
+
+	if (*num_labels + 1 > MAX_LABELS) {
+		interp_error(interp, "too many labels in %s (> %d)",
+			get_function_name(interp->module, fn), MAX_LABELS);
+		return 0;
+	}
+
+	*ind = *num_labels;
+	label = index_label(&interp->labels, fn, *ind);
+	assert(label);
+
+	set_label_pos(label, instr_pos);
+	*num_labels = *num_labels + 1;
+
+	return 2;
+}
+
+static int branch_jump(struct wasm_interp *interp, u8 end_tag)
+{
+	u32 instr_pos;
+	int ind;
+
+	int fns;
+	struct label *label;
+	struct callframe *frame;
+
+	fns = functions_count(interp->module);
+	frame = top_callframe(&interp->callframes);
+
+	assert(frame);
+	assert(frame->fn < fns);
+	assert(interp->cur.start == frame->code.start);
+
+	label = index_label(&interp->labels, frame->fn, 0);
+	assert(label);
+
+	if (label_is_resolved(label)) {
+		interp->cur.p = interp->cur.start + label->jump;
+		assert(interp->cur.p < interp->cur.end);
+		return 1;
+	}
+
+	instr_pos = interp->cur.p - interp->cur.start;
+	if (!upsert_label(interp, frame->fn, instr_pos, &ind)) {
+		interp_error(interp, "upsert label");
+		return 0;
+	}
+
+	if (!cursor_push_u16(&interp->resolver_stack, ind)) {
+		interp_error(interp, "push label index to resolver stack oob");
+		return 0;
+	}
+
+	// consume instructions, use resolver stack to resolve jumps
+	if (!consume_instrs_until(interp, end_tag)) {
+		interp_error(interp, "consume instrs");
+		return 0;
+	}
+
+	return 1;
+}
+
+static int interp_if(struct wasm_interp *interp)
+{
+	struct val cond;
+	struct blocktype blocktype;
+
+	if (!parse_blocktype(&interp->cur, &blocktype)) {
+		interp_error(interp, "couldn't parse blocktype");
+		return 0;
+	}
+
+	if (!cursor_popval(&interp->stack, &cond)) {
+		interp_error(interp, "if pop val");
+		return 0;
+	}
+
+	if (cond.i32 == 1) {
+		return 1;
+	}
+
+	if (!branch_jump(interp, i_end)) {
+		return 0;
+	}
+
+	return 0;
+}
+
 static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 {
 	interp->ops++;
+	debug("executing 0x%0x\n", tag);
 
 	switch (tag) {
 	case i_unreachable: return 1;
@@ -1879,6 +2273,7 @@ static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 	case i_i32_sub: return interp_i32_sub(interp);
 	case i_i32_const: return interp_i32_const(interp);
 	case i_i32_gt_u: return interp_i32_gt_u(interp);
+	case i_if: return interp_if(interp);
 	case i_call: return interp_call(interp);
 	default:
 		    interp_error(interp, "unhandled instruction 0x%x", tag);
@@ -1890,7 +2285,7 @@ static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 
 int interp_code(struct wasm_interp *interp)
 {
-	struct cursor code;
+	struct callframe frame;
 	unsigned char tag;
 	int offset;
 
@@ -1902,7 +2297,7 @@ int interp_code(struct wasm_interp *interp)
 		}
 
 		if (tag == i_end) {
-			cursor_popcode(&interp->code_stack, &code);
+			cursor_pop_callframe(&interp->callframes, &frame);
 			cursor_popint(&interp->locals_offsets, &offset);
 			break;
 		}
@@ -1954,6 +2349,11 @@ static int cursor_slice(struct cursor *mem, struct cursor *slice, size_t size)
 	return 1;
 }
 
+static inline int array_alloc(struct cursor *mem, struct array *a, int elems)
+{
+	return cursor_slice(mem, &a->cur, elems * a->elem_size);
+}
+
 void wasm_interp_init(struct wasm_interp *interp)
 {
 	static unsigned char *stack, *mem;
@@ -1973,9 +2373,21 @@ void wasm_interp_free(struct wasm_interp *interp)
 	free(interp->mem.start);
 }
 
+static int alloc_labels(struct wasm_interp *interp, int fns)
+{
+	const int capacity = fns * MAX_LABELS;
+
+	interp->labels.elem_size = sizeof(struct label);
+	interp->num_labels.elem_size = sizeof(u16);
+
+	return array_alloc(&interp->mem, &interp->labels, capacity) &&
+	       array_alloc(&interp->mem, &interp->num_labels, fns);
+
+}
+
 int interp_wasm_module(struct wasm_interp *interp, struct module *module)
 {
-	int ok, func;
+	int ok, func, fns;
 
 	interp->module = module;
 	interp->ops = 0;
@@ -1989,10 +2401,15 @@ int interp_wasm_module(struct wasm_interp *interp, struct module *module)
 	interp->stack.p = interp->stack.start;
 	interp->mem.p = interp->mem.start;
 
+	fns = functions_count(module);
+
 	ok =
-	cursor_slice(&interp->mem, &interp->locals, sizeof(struct val) * NUM_LOCALS) &&
-	cursor_slice(&interp->mem, &interp->locals_offsets, sizeof(int) * 255) &&
-	cursor_slice(&interp->mem, &interp->code_stack, sizeof(struct cursor) * 255);
+		cursor_slice(&interp->mem, &interp->locals,
+			     sizeof(struct val) * NUM_LOCALS) &&
+		cursor_slice(&interp->mem, &interp->locals_offsets, sizeof(int) * 255) &&
+		cursor_slice(&interp->mem, &interp->callframes, sizeof(struct callframe) * 255) &&
+		cursor_slice(&interp->mem, &interp->resolver_stack, sizeof(u32) * MAX_LABELS) &&
+		alloc_labels(interp, fns);
 
 	assert(ok);
 
