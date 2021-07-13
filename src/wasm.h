@@ -427,6 +427,8 @@ struct wasm_parser {
 int run_wasm(unsigned char *wasm, unsigned long len);
 int parse_wasm(struct wasm_parser *p);
 void wasm_interp_init(struct wasm_interp *interp);
+void wasm_parser_free(struct wasm_parser *parser);
+void wasm_parser_init(struct wasm_parser *parser, u8 *wasm, size_t wasm_len, size_t arena_size);
 void wasm_interp_free(struct wasm_interp *interp);
 int interp_wasm_module(struct wasm_interp *interp, struct module *module);
 

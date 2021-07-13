@@ -14,13 +14,13 @@ void note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...)
 	vsprintf(buf, fmt, ap);
 	va_end(ap);
 
-	err.msg = (char*)errs->p;
+	err.msg = buf;
 	err.pos = p->p - p->start;
 
 	if (!cursor_push_error(errs, &err)) {
 		fprintf(stderr, "arena OOM when recording error, ");
-		fprintf(stderr, "cur->p at %ld, remaining %ld, strlen %ld\n",
-				p->p - p->start, p->end - p->p, strlen(buf));
+		fprintf(stderr, "errs->p at %ld, remaining %ld, strlen %ld\n",
+				errs->p - errs->start, errs->end - errs->p, strlen(buf));
 		return;
 	}
 }

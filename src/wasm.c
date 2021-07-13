@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 #define interp_error(p, fmt, ...) interp_error_(p, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
-#define parse_err(p, fmt, ...) note_error(&(p)->errs, &(p)->cur, fmt, ##__VA_ARGS__)
+#define parse_err(p, fmt, ...) note_error(&((p)->errs), &(p)->cur, fmt, ##__VA_ARGS__)
 
 #define ERR_STACK_SIZE 16
 #define NUM_LOCALS 0xFFFF
@@ -321,7 +321,7 @@ static void print_parse_backtrace(struct wasm_parser *p)
 	copy_cursor(&p->errs, &errs);
 	errs.p = errs.start;
 
-	while (errs.p < p->errs.end) {
+	while (errs.p < p->errs.p) {
 		if (!cursor_pull_error(&errs, &err)) {
 			fprintf(stderr, "backtrace: couldn't pull error\n");
 			return;
@@ -864,7 +864,10 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 		return 0;
 	}
 
-	assert(func->code.code[func->code.code_len-1] == i_end);
+	if (!(func->code.code[func->code.code_len-1] == i_end)) {
+		parse_err(p, "no end tag (corruption?)");
+		return 0;
+	}
 
 	return 1;
 }
@@ -2230,7 +2233,7 @@ static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
 	num_labels = func_num_labels(interp, fn);
 	label = index_label(&interp->labels, fn, 0);
 	assert(label);
-	
+
 	for (i = 0; i < *num_labels; label++) {
 		assert((u8*)label < interp->labels.cur.end);
 		if (label_instr_pos(label) == instr_pos)
@@ -2350,7 +2353,7 @@ static int interp_if(struct wasm_interp *interp)
 static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 {
 	interp->ops++;
-	
+
 	debug("0x%03lX %s\n",
 		interp_codeptr(interp)->p - interp_codeptr(interp)->start,
 		instr_name(tag));
@@ -2435,17 +2438,37 @@ static inline int array_alloc(struct cursor *mem, struct array *a, int elems)
 	return cursor_slice(mem, &a->cur, elems * a->elem_size);
 }
 
+void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t arena_size)
+{
+	u8 *mem;
+
+	mem = calloc(1, arena_size);
+	assert(mem);
+
+	make_cursor(wasm, wasm + wasm_len, &p->cur);
+	make_cursor(mem, mem + arena_size, &p->mem);
+
+	cursor_slice(&p->mem, &p->errs, 0xFFFF);
+}
+
 void wasm_interp_init(struct wasm_interp *interp)
 {
 	static unsigned char *stack, *mem;
 
 	interp->ops = 0;
 
-	stack = malloc(STACK_SPACE);
-	mem = malloc(MEM_SPACE);
+	stack = calloc(1, STACK_SPACE);
+	mem = calloc(1, MEM_SPACE);
 
 	make_cursor(stack, stack + STACK_SPACE, &interp->stack);
 	make_cursor(mem, mem + MEM_SPACE, &interp->mem);
+
+	cursor_slice(&interp->mem, &interp->errors, 0xFFFF);
+}
+
+void wasm_parser_free(struct wasm_parser *parser)
+{
+	free(parser->mem.start);
 }
 
 void wasm_interp_free(struct wasm_interp *interp)
@@ -2519,27 +2542,18 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 {
 	struct wasm_parser p;
 	struct wasm_interp interp;
+	int ok;
 
-	void *mem;
-	int ok, arena_size;
-
-	arena_size = len * 16;
-	memset(&p, 0, sizeof(p));
-	mem = malloc(arena_size);
-	assert(mem);
-
-	make_cursor(wasm, wasm + len, &p.cur);
-	make_cursor(mem, mem + arena_size, &p.mem);
+	wasm_parser_init(&p, wasm, len, len * 16);
 
 	if (!parse_wasm(&p)) {
-		free(mem);
+		wasm_parser_free(&p);
 		return 0;
 	}
 
 	wasm_interp_init(&interp);
 	ok = interp_wasm_module(&interp, &p.module);
 	wasm_interp_free(&interp);
-
-	free(mem);
+	wasm_parser_free(&p);
 	return ok;
 }

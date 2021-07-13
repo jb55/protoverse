@@ -1320,7 +1320,7 @@ int init_parser(struct parser *parser)
 	int cells_size = sizeof(struct cell) * 1024;
 	int memsize = attrs_size + tokens_size + cells_size;
 
-	if (!(pmem = calloc(1, attrs_size + tokens_size + cells_size))) {
+	if (!(pmem = calloc(1, memsize))) {
 		return 0;
 	}
 

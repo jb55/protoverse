@@ -9,22 +9,14 @@
 static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 {
 	struct wasm_parser p;
-	void *mem;
-	int arena_size, i, ops = 0;
 	struct wasm_interp interp;
 	struct timespec t1, t2;
+	int i, ops = 0;
 	long nanos, ms;
 
-	arena_size = len * 16;
-	memset(&p, 0, sizeof(p));
-	mem = malloc(arena_size);
-	assert(mem);
-
-	make_cursor(wasm, wasm + len, &p.cur);
-	make_cursor(mem, mem + arena_size, &p.mem);
+	wasm_parser_init(&p, wasm, len, len*16);
 
 	if (!parse_wasm(&p)) {
-		free(mem);
 		return 0;
 	}
 
@@ -46,8 +38,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 		nanos/times, (double)ms/(double)times, nanos, ms, ops, nanos/ops);
 
 	wasm_interp_free(&interp);
-
-	free(mem);
+	wasm_parser_free(&p);
 	return 1;
 }
 
