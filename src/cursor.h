@@ -63,6 +63,17 @@ static inline void *cursor_alloc(struct cursor *mem, unsigned long size)
 	return ret;
 }
 
+static inline int cursor_slice(struct cursor *mem, struct cursor *slice, size_t size)
+{
+	u8 *p;
+	if (!(p = cursor_alloc(mem, size))) {
+		return 0;
+	}
+	make_cursor(p, mem->p, slice);
+	return 1;
+}
+
+
 static inline void copy_cursor(struct cursor *src, struct cursor *dest)
 {
 	dest->start = src->start;
@@ -81,8 +92,22 @@ static inline int pull_byte(struct cursor *cursor, u8 *c)
 	return 1;
 }
 
+static inline int cursor_pull_c_str(struct cursor *cursor, const char **str)
+{
+	*str = (const char*)cursor->p;
 
-static inline int push_byte(struct cursor *cursor, u8 c)
+	for (; cursor->p < cursor->end; cursor->p++) {
+		if (*cursor->p == 0) {
+			cursor->p++;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+
+static inline int cursor_push_byte(struct cursor *cursor, u8 c)
 {
 	if (unlikely(cursor->p + 1 > cursor->end)) {
 		return 0;
@@ -94,7 +119,7 @@ static inline int push_byte(struct cursor *cursor, u8 c)
 	return 1;
 }
 
-static inline int pull_data(struct cursor *cursor, u8 *data, int len)
+static inline int cursor_pull(struct cursor *cursor, u8 *data, int len)
 {
 	if (unlikely(cursor->p + len > cursor->end)) {
 		return 0;
@@ -118,7 +143,7 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 		return 0;
 	}
 
-	ok = pull_data(cursor, dest->p, len);
+	ok = cursor_pull(cursor, dest->p, len);
 	if (!ok) return 0;
 
 	*data = dest->p;
@@ -175,13 +200,13 @@ static inline int push_varint(struct cursor *cursor, int n)
 		n >>= 7;
 		if (n == 0) {
 			b &= 0x7F;
-			ok = push_byte(cursor, b);
+			ok = cursor_push_byte(cursor, b);
 			len++;
 			if (!ok) return 0;
 			break;
 		}
 
-		ok = push_byte(cursor, b);
+		ok = cursor_push_byte(cursor, b);
 		len++;
 		if (!ok) return 0;
 	}
@@ -213,9 +238,9 @@ static inline int pull_varint(struct cursor *cursor, int *n)
 	return 0;
 }
 
-static inline int pull_int(struct cursor *cursor, int *i)
+static inline int cursor_pull_int(struct cursor *cursor, int *i)
 {
-	return pull_data(cursor, (u8*)i, sizeof(*i));
+	return cursor_pull(cursor, (u8*)i, sizeof(*i));
 }
 
 static inline int cursor_push_u16(struct cursor *cursor, u16 i)
@@ -240,16 +265,15 @@ static inline int push_sized_str(struct cursor *cursor, const char *str, int len
 	return cursor_push(cursor, (u8*)str, len);
 }
 
-static inline int push_str(struct cursor *cursor, const char *str)
+static inline int cursor_push_str(struct cursor *cursor, const char *str)
 {
 	return cursor_push(cursor, (u8*)str, strlen(str));
 }
 
-static inline int push_c_str(struct cursor *cursor, const char *str)
+static inline int cursor_push_c_str(struct cursor *cursor, const char *str)
 {
-	return push_str(cursor, str) && push_byte(cursor, 0);
+	return cursor_push_str(cursor, str) && cursor_push_byte(cursor, 0);
 }
-
 
 /* TODO: push varint size */
 static inline int push_prefixed_str(struct cursor *cursor, const char *str)
@@ -275,7 +299,7 @@ static inline int pull_prefixed_str(struct cursor *cursor, struct cursor *dest_b
 	ok = pull_data_into_cursor(cursor, dest_buf, (unsigned char**)str, len);
 	if (!ok) return 0;
 
-	ok = push_byte(dest_buf, 0);
+	ok = cursor_push_byte(dest_buf, 0);
 
 	return 1;
 }
@@ -290,6 +314,8 @@ static inline int cursor_remaining_capacity(struct cursor *cursor)
 static inline void cursor_print_around(struct cursor *cur, int range)
 {
 	unsigned char *c;
+
+	printf("[%ld/%ld] ", cur->p - cur->start, cur->end - cur->start);
 
 	c = max(cur->p - range, cur->start);
 	for (; c < cur->end && c < (cur->p + range); c++) {

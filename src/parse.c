@@ -87,9 +87,8 @@ static void copy_token_cursor(struct token_cursor *src, struct token_cursor *des
 	memcpy(&dest->err_data, &src->err_data, sizeof(src->err_data));
 }
 
-void make_token_cursor(u8 *start, u8 *end, struct token_cursor *cursor)
+static void init_token_cursor(struct token_cursor *cursor)
 {
-	make_cursor(start, end, &cursor->c);
 	cursor->err = TE_OK;
 	memset(&cursor->err_data, 0, sizeof(cursor->err_data));
 }
@@ -230,7 +229,7 @@ static int push_token_data(struct token_cursor *tokens,
 	struct tok_str *str;
 #endif
 	int ok;
-	ok = push_byte(&tokens->c, token);
+	ok = cursor_push_byte(&tokens->c, token);
 	if (!ok) return 0;
 
 	switch (token) {
@@ -604,8 +603,8 @@ static int pull_token_data(struct cursor *tokens, union token *token,
 	case T_STRING:
 	case T_SYMBOL:
 	case T_NUMBER:
-		ok = pull_data(tokens, (void*)&token->str,
-			       sizeof(struct tok_str));
+		ok = cursor_pull(tokens, (void*)&token->str,
+				 sizeof(struct tok_str));
 		return ok;
 	}
 
@@ -1312,29 +1311,34 @@ close:
 
 int init_parser(struct parser *parser)
 {
+	struct cursor mem;
+	u8 *pmem;
+	int ok;
+
 	int attrs_size = sizeof(struct attribute) * 1024;
 	int tokens_size = 2048;
 	int cells_size = sizeof(struct cell) * 1024;
+	int memsize = attrs_size + tokens_size + cells_size;
 
-	u8 *token_buf = calloc(1, tokens_size);
-	u8 *attrs_buf = calloc(1, attrs_size);
-	u8 *cells_buf = calloc(1, cells_size);
+	if (!(pmem = calloc(1, attrs_size + tokens_size + cells_size))) {
+		return 0;
+	}
 
-	if (!token_buf) return 0;
-	if (!attrs_buf) return 0;
-	if (!cells_buf) return 0;
+	make_cursor(pmem, pmem + memsize, &mem);
 
-	make_cursor(cells_buf, cells_buf + cells_size, &parser->cells);
-	make_cursor(attrs_buf, attrs_buf + attrs_size, &parser->attributes);
-	make_token_cursor(token_buf, token_buf + tokens_size, &parser->tokens);
+	ok =
+		cursor_slice(&mem, &parser->cells, cells_size) &&
+		cursor_slice(&mem, &parser->attributes, attrs_size) &&
+		cursor_slice(&mem, &parser->tokens.c, tokens_size);
+	assert(ok);
+
+	init_token_cursor(&parser->tokens);
 
 	return 1;
 }
 
 int free_parser(struct parser *parser)
 {
-	free(parser->tokens.c.start);
-	free(parser->attributes.start);
 	free(parser->cells.start);
 
 	return 1;

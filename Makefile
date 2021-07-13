@@ -3,6 +3,9 @@ CFLAGS = -Wno-error=unused-function -O2 -g -std=gnu90 -Wall -Wextra -Werror \
 	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
 	 -Wmissing-declarations -Wdeclaration-after-statement
 
+debug: CFLAGS += -DDEBUG
+debug: all
+
 OBJS = src/io.o \
        src/parse.o \
        src/describe.o \
@@ -11,6 +14,7 @@ OBJS = src/io.o \
        src/net.o \
        src/varint.o \
        src/parser.o \
+       src/error.o \
        src/wasm.o
 
 WASMS = wasm/hello-c.wasm \

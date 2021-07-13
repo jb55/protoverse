@@ -2,6 +2,7 @@
 #include "wasm.h"
 #include "parser.h"
 #include "debug.h"
+#include "error.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -10,19 +11,13 @@
 #include <string.h>
 #include <stdint.h>
 
-#define note_error(p, fmt, ...) note_error_(p, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
 #define interp_error(p, fmt, ...) interp_error_(p, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
+#define parse_err(p, fmt, ...) note_error(&(p)->errs, &(p)->cur, fmt, ##__VA_ARGS__)
 
 #define ERR_STACK_SIZE 16
 #define NUM_LOCALS 0xFFFF
 
 static const int MAX_LABELS = 128;
-
-struct parse_error {
-	int pos;
-	char *msg;
-	struct parse_error *next;
-};
 
 struct val {
 	enum valtype type;
@@ -72,6 +67,134 @@ static const char *valtype_name(enum valtype valtype)
 	}
 
 	return "unk";
+}
+
+static char *instr_name(enum instr_tag tag)
+{
+	static char unk[6] = {0};
+
+	switch (tag) {
+		case i_unreachable: return "unreachable";
+		case i_nop: return "nop";
+		case i_block: return "block";
+		case i_loop: return "loop";
+		case i_if: return "if";
+		case i_else: return "else";
+		case i_end: return "end";
+		case i_br: return "br";
+		case i_br_if: return "br_if";
+		case i_br_table: return "br_table";
+		case i_return: return "return";
+		case i_call: return "call";
+		case i_call_indirect: return "call_indirect";
+		case i_drop: return "drop";
+		case i_select: return "select";
+		case i_local_get: return "local_get";
+		case i_local_set: return "local_set";
+		case i_local_tee: return "local_tee";
+		case i_global_get: return "global_get";
+		case i_global_set: return "global_set";
+		case i_i32_load: return "i32_load";
+		case i_i64_load: return "i64_load";
+		case i_f32_load: return "f32_load";
+		case i_f64_load: return "f64_load";
+		case i_i32_load8_s: return "i32_load8_s";
+		case i_i32_load8_u: return "i32_load8_u";
+		case i_i32_load16_s: return "i32_load16_s";
+		case i_i32_load16_u: return "i32_load16_u";
+		case i_i64_load8_s: return "i64_load8_s";
+		case i_i64_load8_u: return "i64_load8_u";
+		case i_i64_load16_s: return "i64_load16_s";
+		case i_i64_load16_u: return "i64_load16_u";
+		case i_i64_load32_s: return "i64_load32_s";
+		case i_i64_load32_u: return "i64_load32_u";
+		case i_i32_store: return "i32_store";
+		case i_i64_store: return "i64_store";
+		case i_f32_store: return "f32_store";
+		case i_f64_store: return "f64_store";
+		case i_i32_store8: return "i32_store8";
+		case i_i32_store16: return "i32_store16";
+		case i_i64_store8: return "i64_store8";
+		case i_i64_store16: return "i64_store16";
+		case i_i64_store32: return "i64_store32";
+		case i_memory_size: return "memory_size";
+		case i_memory_grow: return "memory_grow";
+		case i_i32_const: return "i32_const";
+		case i_i64_const: return "i64_const";
+		case i_f32_const: return "f32_const";
+		case i_f64_const: return "f64_const";
+		case i_i32_eqz: return "i32_eqz";
+		case i_i32_eq: return "i32_eq";
+		case i_i32_ne: return "i32_ne";
+		case i_i32_lt_s: return "i32_lt_s";
+		case i_i32_lt_u: return "i32_lt_u";
+		case i_i32_gt_s: return "i32_gt_s";
+		case i_i32_gt_u: return "i32_gt_u";
+		case i_i32_le_s: return "i32_le_s";
+		case i_i32_le_u: return "i32_le_u";
+		case i_i32_ge_s: return "i32_ge_s";
+		case i_i32_ge_u: return "i32_ge_u";
+		case i_i64_eqz: return "i64_eqz";
+		case i_i64_eq: return "i64_eq";
+		case i_i64_ne: return "i64_ne";
+		case i_i64_lt_s: return "i64_lt_s";
+		case i_i64_lt_u: return "i64_lt_u";
+		case i_i64_gt_s: return "i64_gt_s";
+		case i_i64_gt_u: return "i64_gt_u";
+		case i_i64_le_s: return "i64_le_s";
+		case i_i64_le_u: return "i64_le_u";
+		case i_i64_ge_s: return "i64_ge_s";
+		case i_i64_ge_u: return "i64_ge_u";
+		case i_f32_eq: return "f32_eq";
+		case i_f32_ne: return "f32_ne";
+		case i_f32_lt: return "f32_lt";
+		case i_f32_gt: return "f32_gt";
+		case i_f32_le: return "f32_le";
+		case i_f32_ge: return "f32_ge";
+		case i_f64_eq: return "f64_eq";
+		case i_f64_ne: return "f64_ne";
+		case i_f64_lt: return "f64_lt";
+		case i_f64_gt: return "f64_gt";
+		case i_f64_le: return "f64_le";
+		case i_f64_ge: return "f64_ge";
+		case i_i32_clz: return "i32_clz";
+		case i_i32_add: return "i32_add";
+		case i_i32_sub: return "i32_sub";
+		case i_i32_mul: return "i32_mul";
+		case i_i32_div_s: return "i32_div_s";
+		case i_i32_div_u: return "i32_div_u";
+		case i_i32_rem_s: return "i32_rem_s";
+		case i_i32_rem_u: return "i32_rem_u";
+		case i_i32_and: return "i32_and";
+		case i_i32_or: return "i32_or";
+		case i_i32_xor: return "i32_xor";
+		case i_i32_shl: return "i32_shl";
+		case i_i32_shr_s: return "i32_shr_s";
+		case i_i32_shr_u: return "i32_shr_u";
+		case i_i32_rotl: return "i32_rotl";
+		case i_i32_rotr: return "i32_rotr";
+		case i_i64_clz: return "i64_clz";
+		case i_i64_ctz: return "i64_ctz";
+		case i_i64_popcnt: return "i64_popcnt";
+		case i_i64_add: return "i64_add";
+		case i_i64_sub: return "i64_sub";
+		case i_i64_mul: return "i64_mul";
+		case i_i64_div_s: return "i64_div_s";
+		case i_i64_div_u: return "i64_div_u";
+		case i_i64_rem_s: return "i64_rem_s";
+		case i_i64_rem_u: return "i64_rem_u";
+		case i_i64_and: return "i64_and";
+		case i_i64_or: return "i64_or";
+		case i_i64_xor: return "i64_xor";
+		case i_i64_shl: return "i64_shl";
+		case i_i64_shr_s: return "i64_shr_s";
+		case i_i64_shr_u: return "i64_shr_u";
+		case i_i64_rotl: return "i64_rotl";
+		case i_i64_rotr: return "i64_rotr";
+	}
+
+	snprintf(unk, sizeof(unk), "0x%02x", tag);
+	return unk;
 }
 
 static void print_val(struct val *val)
@@ -190,60 +313,20 @@ static void interp_error_(struct wasm_interp *p, const char *fmt, ...)
 	va_end(ap);
 }
 
-static void note_error_(struct wasm_parser *p, const char *fmt, ...)
-{
-	static char buf[512];
-	struct parse_error err;
-	struct parse_error *perr, *new_err;
-
-	va_list ap;
-	va_start(ap, fmt);
-	vsprintf(buf, fmt, ap);
-	va_end(ap);
-
-	perr = NULL;
-	err.msg = (char*)p->mem.p;
-	err.pos = p->cur.p - p->cur.start;
-	err.next = NULL;
-
-	if (!push_c_str(&p->mem, buf)) {
-		fprintf(stderr, "arena OOM when recording parse error, ");
-		fprintf(stderr, "mem->p at %ld, remaining %ld, strlen %ld\n",
-				p->mem.p - p->mem.start,
-				p->mem.end - p->mem.p,
-				strlen(buf));
-		return;
-	}
-
-	new_err = (struct parse_error *)p->mem.p;
-
-	if (!cursor_push(&p->mem, (unsigned char*)&err, sizeof(err))) {
-		fprintf(stderr, "arena OOM when pushing data, ");
-		fprintf(stderr, "mem->p at %ld, remaining %ld, data size %ld\n",
-				p->mem.p - p->mem.start,
-				p->mem.end - p->mem.p,
-				sizeof(err));
-		return;
-	}
-
-	for (perr = p->errors; perr != NULL;) {
-		if (perr == NULL || perr->next == NULL)
-			break;
-		perr = perr->next;
-	}
-
-	if (p->errors == NULL) {
-		p->errors = new_err;
-	} else {
-		perr->next = new_err;
-	}
-}
-
 static void print_parse_backtrace(struct wasm_parser *p)
 {
-	struct parse_error *err;
-	for (err = p->errors; err != NULL; err = err->next) {
-		fprintf(stderr, "%08x:%s\n", err->pos, err->msg);
+	struct cursor errs;
+	struct error err;
+
+	copy_cursor(&p->errs, &errs);
+	errs.p = errs.start;
+
+	while (errs.p < p->errs.end) {
+		if (!cursor_pull_error(&errs, &err)) {
+			fprintf(stderr, "backtrace: couldn't pull error\n");
+			return;
+		}
+		fprintf(stderr, "%08x:%s\n", err.pos, err.msg);
 	}
 }
 
@@ -580,7 +663,7 @@ static int parse_valtype(struct wasm_parser *p, enum valtype *valtype)
 	start = p->cur.p;
 
 	if (!pull_byte(&p->cur, (unsigned char*)valtype)) {
-		note_error(p, "valtype tag oob");
+		parse_err(p, "valtype tag oob");
 		return 0;
 	}
 
@@ -588,7 +671,7 @@ static int parse_valtype(struct wasm_parser *p, enum valtype *valtype)
 		return 1;
 
 	p->cur.p = start;
-	note_error(p, "%c is not a valid valtype tag", *valtype);
+	parse_err(p, "%c is not a valid valtype tag", *valtype);
 	return 0;
 }
 
@@ -603,20 +686,20 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 	start = p->mem.p;
 
 	if (!leb128_read(&p->cur, (unsigned int*)&elems)) {
-		note_error(p, "vec len");
+		parse_err(p, "vec len");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++)
 	{
 		if (!parse_valtype(p, &valtype)) {
-			note_error(p, "valtype #%d", i);
+			parse_err(p, "valtype #%d", i);
 			p->mem.p = start;
 			return 0;
 		}
 
-		if (!push_byte(&p->mem, (unsigned char)valtype)) {
-			note_error(p, "valtype push data OOM #%d", i);
+		if (!cursor_push_byte(&p->mem, (unsigned char)valtype)) {
+			parse_err(p, "valtype push data OOM #%d", i);
 			p->mem.p = start;
 			return 0;
 		}
@@ -632,17 +715,17 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 static int parse_func_type(struct wasm_parser *p, struct functype *func)
 {
 	if (!consume_byte(&p->cur, FUNC_TYPE_TAG)) {
-		note_error(p, "type tag");
+		parse_err(p, "type tag");
 		return 0;
 	}
 
 	if (!parse_result_type(p, &func->params)) {
-		note_error(p, "params");
+		parse_err(p, "params");
 		return 0;
 	}
 
 	if (!parse_result_type(p, &func->result)) {
-		note_error(p, "result");
+		parse_err(p, "result");
 		return 0;
 	}
 
@@ -653,18 +736,18 @@ static int parse_name(struct wasm_parser *p, const char **name)
 {
 	unsigned int bytes;
 	if (!leb128_read(&p->cur, &bytes)) {
-		note_error(p, "name len");
+		parse_err(p, "name len");
 		return 0;
 	}
 
 	if (!pull_data_into_cursor(&p->cur, &p->mem, (unsigned char**)name,
 				bytes)) {
-		note_error(p, "name string");
+		parse_err(p, "name string");
 		return 0;
 	}
 
-	if (!push_byte(&p->mem, 0)) {
-		note_error(p, "name null byte");
+	if (!cursor_push_byte(&p->mem, 0)) {
+		parse_err(p, "name null byte");
 		return 0;
 	}
 
@@ -676,7 +759,7 @@ static int parse_export_desc(struct wasm_parser *p, enum exportdesc *desc)
 	unsigned char byte;
 
 	if (!pull_byte(&p->cur, &byte)) {
-		note_error(p, "export desc byte eof");
+		parse_err(p, "export desc byte eof");
 		return 0;
 	}
 
@@ -689,24 +772,24 @@ static int parse_export_desc(struct wasm_parser *p, enum exportdesc *desc)
 		return 1;
 	}
 
-	note_error(p, "invalid tag: %x", byte);
+	parse_err(p, "invalid tag: %x", byte);
 	return 0;
 }
 
 static int parse_export(struct wasm_parser *p, struct wexport *export)
 {
 	if (!parse_name(p, &export->name)) {
-		note_error(p, "export name");
+		parse_err(p, "export name");
 		return 0;
 	}
 
 	if (!parse_export_desc(p, &export->desc)) {
-		note_error(p, "export desc");
+		parse_err(p, "export desc");
 		return 0;
 	}
 
 	if (!leb128_read(&p->cur, &export->index)) {
-		note_error(p, "export index");
+		parse_err(p, "export index");
 		return 0;
 	}
 
@@ -716,12 +799,12 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
 	if (!leb128_read(&p->cur, &local->n)) {
-		note_error(p, "n");
+		parse_err(p, "n");
 		return 0;
 	}
 
 	if (!parse_valtype(p, &local->valtype)) {
-		note_error(p, "valtype");
+		parse_err(p, "valtype");
 		return 0;
 	}
 
@@ -732,14 +815,14 @@ static int parse_vector(struct wasm_parser *p, unsigned int item_size,
 		unsigned int *elems, void **items)
 {
 	if (!leb128_read(&p->cur, elems)) {
-		note_error(p, "len");
+		parse_err(p, "len");
 		return 0;
 	}
 
 	*items = cursor_alloc(&p->mem, *elems * item_size);
 
 	if (*items == NULL) {
-		note_error(p, "vector alloc oom");
+		parse_err(p, "vector alloc oom");
 		return 0;
 	}
 
@@ -753,20 +836,20 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 	struct local *locals;
 
 	if (!leb128_read(&p->cur, &size)) {
-		note_error(p, "code size");
+		parse_err(p, "code size");
 		return 0;
 	}
 
 	start = p->cur.p;
 
 	if (!parse_vector(p, sizeof(*locals), &elems, (void**)&locals)) {
-		note_error(p, "locals");
+		parse_err(p, "locals");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_local(p, &locals[i])) {
-			note_error(p, "local #%d", i);
+			parse_err(p, "local #%d", i);
 			return 0;
 		}
 	}
@@ -777,7 +860,7 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 
 	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code.code,
 				func->code.code_len)) {
-		note_error(p, "code oom");
+		parse_err(p, "code oom");
 		return 0;
 	}
 
@@ -793,13 +876,13 @@ static int parse_code_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*funcs), &elems, (void**)&funcs)) {
-		note_error(p, "funcs");
+		parse_err(p, "funcs");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_func(p, &funcs[i])) {
-			note_error(p, "func #%d", i);
+			parse_err(p, "func #%d", i);
 			return 0;
 		}
 	}
@@ -824,12 +907,12 @@ static int parse_reftype(struct wasm_parser *p, enum reftype *reftype)
 	u8 tag;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "reftype");
+		parse_err(p, "reftype");
 		return 0;
 	}
 
 	if (!is_valid_reftype(tag)) {
-		note_error(p, "invalid reftype: 0x%x", reftype);
+		parse_err(p, "invalid reftype: 0x%x", reftype);
 		return 0;
 	}
 
@@ -846,13 +929,13 @@ static int parse_export_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*exports), &elems, (void**)&exports)) {
-		note_error(p, "vector");
+		parse_err(p, "vector");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_export(p, &exports[i])) {
-			note_error(p, "export #%d", i);
+			parse_err(p, "export #%d", i);
 			return 0;
 		}
 	}
@@ -867,17 +950,17 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 {
 	unsigned char tag;
 	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "oob");
+		parse_err(p, "oob");
 		return 0;
 	}
 
 	if (tag != limit_min && tag != limit_min_max) {
-		note_error(p, "invalid tag %02x", tag);
+		parse_err(p, "invalid tag %02x", tag);
 		return 0;
 	}
 
 	if (!leb128_read(&p->cur, &limits->min)) {
-		note_error(p, "min");
+		parse_err(p, "min");
 		return 0;
 	}
 
@@ -885,7 +968,7 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 		return 1;
 
 	if (!leb128_read(&p->cur, &limits->max)) {
-		note_error(p, "max");
+		parse_err(p, "max");
 		return 0;
 	}
 
@@ -895,12 +978,12 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 static int parse_table(struct wasm_parser *p, struct table *table)
 {
 	if (!parse_reftype(p, &table->reftype)) {
-		note_error(p, "reftype");
+		parse_err(p, "reftype");
 		return 0;
 	}
 
 	if (!parse_limits(p, &table->limits)) {
-		note_error(p, "limits");
+		parse_err(p, "limits");
 		return 0;
 	}
 
@@ -934,12 +1017,12 @@ static int parse_const_instr(struct wasm_parser *p)
 	unsigned int n;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "tag");
+		parse_err(p, "tag");
 		return 0;
 	}
 
 	if (!is_valid_const_instr(tag)) {
-		note_error(p, "invalid const instr tag 0x%x", tag);
+		parse_err(p, "invalid const instr tag 0x%x", tag);
 		p->cur.p--;
 		return 0;
 	}
@@ -948,13 +1031,13 @@ static int parse_const_instr(struct wasm_parser *p)
 	case const_i32:
 	case const_i64:
 		if (!leb128_read(&p->cur, &n)) {
-			note_error(p, "couldn't read integer");
+			parse_err(p, "couldn't read integer");
 			return 0;
 		}
 		break;
 	case const_f32:
 	case const_f64:
-		note_error(p, "TODO parse float constants");
+		parse_err(p, "TODO parse float constants");
 		return 0;
 	}
 
@@ -967,12 +1050,12 @@ static int parse_ref_instr(struct wasm_parser *p)
 	unsigned int idx;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "tag");
+		parse_err(p, "tag");
 		return 0;
 	}
 
 	if (!is_valid_ref_instr(tag)) {
-		//note_error(p, "invalid ref instr tag 0x%x", tag);
+		//parse_err(p, "invalid ref instr tag 0x%x", tag);
 		p->cur.p--;
 		return 0;
 	}
@@ -980,7 +1063,7 @@ static int parse_ref_instr(struct wasm_parser *p)
 	switch ((enum ref_instr)tag) {
 	case ref_null:
 		if (!parse_reftype(p, (enum reftype*)&tag)) {
-			note_error(p, "invalid ref.null instr reftype 0x%x", tag);
+			parse_err(p, "invalid ref.null instr reftype 0x%x", tag);
 			return 0;
 		}
 		break;
@@ -990,7 +1073,7 @@ static int parse_ref_instr(struct wasm_parser *p)
 
 	case ref_func:
 		if (!leb128_read(&p->cur, &idx)) {
-			note_error(p, "invalid ref.func idx");
+			parse_err(p, "invalid ref.func idx");
 			return 0;
 		}
 		break;
@@ -1016,7 +1099,7 @@ static int parse_const_expr(struct wasm_parser *p, struct expr *expr)
 		}
 
 		if (!parse_const_expr_instr(p)) {
-			note_error(p, "no constant expr found");
+			parse_err(p, "no constant expr found");
 			return 0;
 		}
 	}
@@ -1036,14 +1119,14 @@ static int parse_mut(struct wasm_parser *p, enum mut *mut)
 		return 1;
 	}
 
-	note_error(p, "unknown mut %02x", *p->cur.p);
+	parse_err(p, "unknown mut %02x", *p->cur.p);
 	return 0;
 }
 
 static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
 {
 	if (!parse_valtype(p, &g->valtype)) {
-		note_error(p, "valtype");
+		parse_err(p, "valtype");
 		return 0;
 	}
 
@@ -1054,12 +1137,12 @@ static int parse_global(struct wasm_parser *p,
 		struct global *global)
 {
 	if (!parse_globaltype(p, &global->type)) {
-		note_error(p, "type");
+		parse_err(p, "type");
 		return 0;
 	}
 
 	if (!parse_const_expr(p, &global->init)) {
-		note_error(p, "init code");
+		parse_err(p, "init code");
 		return 0;
 	}
 
@@ -1073,13 +1156,13 @@ static int parse_global_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*globals), &elems, (void**)&globals)) {
-		note_error(p, "globals vector");
+		parse_err(p, "globals vector");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_global(p, &globals[i])) {
-			note_error(p, "global #%d/%d", i+1, elems);
+			parse_err(p, "global #%d/%d", i+1, elems);
 			return 0;
 		}
 	}
@@ -1097,13 +1180,13 @@ static int parse_memory_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*mems), &elems, (void**)&mems)) {
-		note_error(p, "mems vector");
+		parse_err(p, "mems vector");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_limits(p, &mems[i])) {
-			note_error(p, "memory #%d/%d", i+1, elems);
+			parse_err(p, "memory #%d/%d", i+1, elems);
 			return 0;
 		}
 	}
@@ -1118,7 +1201,7 @@ static int parse_start_section(struct wasm_parser *p,
 		struct startsec *start_section)
 {
 	if (!leb128_read(&p->cur, (unsigned int*)&start_section->start_fn)) {
-		note_error(p, "start_fn index");
+		parse_err(p, "start_fn index");
 		return 0;
 	}
 
@@ -1129,12 +1212,12 @@ static inline int parse_byte_vector(struct wasm_parser *p, unsigned char **data,
 		int *data_len)
 {
 	if (!leb128_read(&p->cur, (unsigned int*)data_len)) {
-		note_error(p, "len");
+		parse_err(p, "len");
 		return 0;
 	}
 
 	if (p->cur.p + *data_len > p->cur.end) {
-		note_error(p, "byte vector overflow");
+		parse_err(p, "byte vector overflow");
 		return 0;
 	}
 
@@ -1149,13 +1232,13 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 	u8 tag;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "tag");
+		parse_err(p, "tag");
 		return 0;
 	}
 
 	if (tag > 2) {
 		cursor_print_around(&p->cur, 10);
-		note_error(p, "invalid datasegment tag: 0x%x", tag);
+		parse_err(p, "invalid datasegment tag: 0x%x", tag);
 		return 0;
 	}
 
@@ -1165,12 +1248,12 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		data->active.mem_index = 0;
 
 		if (!parse_const_expr(p, &data->active.offset_expr)) {
-			note_error(p, "const expr");
+			parse_err(p, "const expr");
 			return 0;
 		}
 
 		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
-			note_error(p, "bytes vector");
+			parse_err(p, "bytes vector");
 			return 0;
 		}
 
@@ -1180,7 +1263,7 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		data->mode = datamode_passive;
 
 		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
-			note_error(p, "passive bytes vector");
+			parse_err(p, "passive bytes vector");
 			return 0;
 		}
 
@@ -1190,17 +1273,17 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		data->mode = datamode_active;
 
 		if (!leb128_read(&p->cur, (unsigned int*)&data->active.mem_index))  {
-			note_error(p, "read active data mem_index");
+			parse_err(p, "read active data mem_index");
 			return 0;
 		}
 
 		if (!parse_const_expr(p, &data->active.offset_expr)) {
-			note_error(p, "read active data (w/ mem_index) offset_expr");
+			parse_err(p, "read active data (w/ mem_index) offset_expr");
 			return 0;
 		}
 
 		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
-			note_error(p, "active (w/ mem_index) bytes vector");
+			parse_err(p, "active (w/ mem_index) bytes vector");
 			return 0;
 		}
 
@@ -1216,13 +1299,13 @@ static int parse_data_section(struct wasm_parser *p, struct datasec *section)
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*data), &elems, (void**)&data)) {
-		note_error(p, "datas vector");
+		parse_err(p, "datas vector");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_wdata(p, &data[i])) {
-			note_error(p, "data segment #%d/%d", i+1, elems);
+			parse_err(p, "data segment #%d/%d", i+1, elems);
 			return 0;
 		}
 	}
@@ -1240,13 +1323,13 @@ static int parse_table_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*tables), &elems, (void**)&tables)) {
-		note_error(p, "tables vector");
+		parse_err(p, "tables vector");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_table(p, &tables[i])) {
-			note_error(p, "table #%d/%d", i+1, elems);
+			parse_err(p, "table #%d/%d", i+1, elems);
 			return 0;
 		}
 	}
@@ -1264,13 +1347,13 @@ static int parse_function_section(struct wasm_parser *p,
 	unsigned int i, elems;
 
 	if (!parse_vector(p, sizeof(*indices), &elems, (void**)&indices)) {
-		note_error(p, "indices");
+		parse_err(p, "indices");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!leb128_read(&p->cur, &indices[i])) {
-			note_error(p, "typeidx #%d", i);
+			parse_err(p, "typeidx #%d", i);
 			return 0;
 		}
 	}
@@ -1284,12 +1367,12 @@ static int parse_function_section(struct wasm_parser *p,
 static int parse_import_table(struct wasm_parser *p, struct limits *limits)
 {
 	if (!consume_byte(&p->cur, 0x70)) {
-		note_error(p, "elemtype != 0x70");
+		parse_err(p, "elemtype != 0x70");
 		return 0;
 	}
 
 	if (!parse_limits(p, limits)) {
-		note_error(p, "limits");
+		parse_err(p, "limits");
 		return 0;
 	}
 
@@ -1301,7 +1384,7 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 	unsigned char tag;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		note_error(p, "oom");
+		parse_err(p, "oom");
 		return 0;
 	}
 
@@ -1310,7 +1393,7 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 	switch (desc->type) {
 	case import_func:
 		if (!leb128_read(&p->cur, &desc->typeidx)) {
-			note_error(p, "typeidx");
+			parse_err(p, "typeidx");
 			return 0;
 		}
 		return 1;
@@ -1320,7 +1403,7 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 
 	case import_mem:
 		if (!parse_limits(p, &desc->memtype)) {
-			note_error(p, "memtype limits");
+			parse_err(p, "memtype limits");
 			return 0;
 		}
 
@@ -1328,31 +1411,31 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 
 	case import_global:
 		if (!parse_globaltype(p, &desc->globaltype)) {
-			note_error(p, "globaltype");
+			parse_err(p, "globaltype");
 			return 0;
 		}
 
 		return 1;
 	}
 
-	note_error(p, "unknown importdesc tag %02x", tag);
+	parse_err(p, "unknown importdesc tag %02x", tag);
 	return 0;
 }
 
 static int parse_import(struct wasm_parser *p, struct import *import)
 {
 	if (!parse_name(p, &import->module_name)) {
-		note_error(p, "module name");
+		parse_err(p, "module name");
 		return 0;
 	}
 
 	if (!parse_name(p, &import->name)) {
-		note_error(p, "name");
+		parse_err(p, "name");
 		return 0;
 	}
 
 	if (!parse_importdesc(p, &import->import_desc)) {
-		note_error(p, "desc");
+		parse_err(p, "desc");
 		return 0;
 	}
 
@@ -1365,13 +1448,13 @@ static int parse_import_section(struct wasm_parser *p, struct importsec *imports
 	struct import *imports;
 
 	if (!parse_vector(p, sizeof(*imports), &elems, (void**)&imports)) {
-		note_error(p, "imports");
+		parse_err(p, "imports");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_import(p, &imports[i])) {
-			note_error(p, "import #%d", i);
+			parse_err(p, "import #%d", i);
 			return 0;
 		}
 	}
@@ -1392,13 +1475,13 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 	typesec->functypes = NULL;
 
 	if (!parse_vector(p, sizeof(*functypes), &elems, (void**)&functypes)) {
-		note_error(p, "functypes");
+		parse_err(p, "functypes");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_func_type(p, &functypes[i])) {
-			note_error(p, "functype #%d", i);
+			parse_err(p, "functype #%d", i);
 			return 0;
 		}
 	}
@@ -1415,73 +1498,73 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 	(void)size;
 	switch (tag) {
 	case section_custom:
-		note_error(p, "section_custom parse not implemented");
+		parse_err(p, "section_custom parse not implemented");
 		return 0;
 	case section_type:
 		if (!parse_type_section(p, &p->module.type_section)) {
-			note_error(p, "type section");
+			parse_err(p, "type section");
 			return 0;
 		}
 		return 1;
 	case section_import:
 		if (!parse_import_section(p, &p->module.import_section)) {
-			note_error(p, "import section");
+			parse_err(p, "import section");
 			return 0;
 		}
 		return 1;
 	case section_function:
 		if (!parse_function_section(p, &p->module.func_section)) {
-			note_error(p, "function section");
+			parse_err(p, "function section");
 			return 0;
 		}
 		return 1;
 	case section_table:
 		if (!parse_table_section(p, &p->module.table_section)) {
-			note_error(p, "table section");
+			parse_err(p, "table section");
 			return 0;
 		}
 		return 1;
 	case section_memory:
 		if (!parse_memory_section(p, &p->module.memory_section)) {
-			note_error(p, "memory section");
+			parse_err(p, "memory section");
 			return 0;
 		}
 		return 1;
 	case section_global:
 		if (!parse_global_section(p, &p->module.global_section)) {
-			note_error(p, "global section");
+			parse_err(p, "global section");
 			return 0;
 		}
 		return 1;
 	case section_export:
 		if (!parse_export_section(p, &p->module.export_section)) {
-			note_error(p, "export section");
+			parse_err(p, "export section");
 			return 0;
 		}
 		return 1;
 	case section_start:
 		if (!parse_start_section(p, &p->module.start_section)) {
-			note_error(p, "start section");
+			parse_err(p, "start section");
 			return 0;
 		}
 		return 1;
 	case section_element:
-		note_error(p, "section_element parse not implemented");
+		parse_err(p, "section_element parse not implemented");
 		return 0;
 	case section_code:
 		if (!parse_code_section(p, &p->module.code_section)) {
-			note_error(p, "code section");
+			parse_err(p, "code section");
 			return 0;
 		}
 		return 1;
 	case section_data:
 		if (!parse_data_section(p, &p->module.data_section)) {
-			note_error(p, "data section");
+			parse_err(p, "data section");
 			return 0;
 		}
 		return 1;
 	default:
-		note_error(p, "invalid section tag");
+		parse_err(p, "invalid section tag");
 		return 0;
 	}
 
@@ -1528,17 +1611,17 @@ static int parse_section(struct wasm_parser *p)
 	unsigned int bytes;
 
 	if (!parse_section_tag(&p->cur, &tag)) {
-		note_error(p, "section tag");
+		parse_err(p, "section tag");
 		return 2;
 	}
 
 	if (!leb128_read(&p->cur, &bytes)) {
-		note_error(p, "section len");
+		parse_err(p, "section len");
 		return 0;
 	}
 
 	if (!parse_section_by_tag(p, tag, bytes)) {
-		note_error(p, "%s (%d bytes)", section_name(tag), bytes);
+		parse_err(p, "%s (%d bytes)", section_name(tag), bytes);
 		return 0;
 	}
 
@@ -1552,12 +1635,12 @@ int parse_wasm(struct wasm_parser *p)
 	p->module.parsed = 0;
 
 	if (!consume_bytes(&p->cur, WASM_MAGIC, sizeof(WASM_MAGIC))) {
-		note_error(p, "magic");
+		parse_err(p, "magic");
 		goto fail;
 	}
 
 	if (!consume_u32(&p->cur, WASM_VERSION)) {
-		note_error(p, "version");
+		parse_err(p, "version");
 		goto fail;
 	}
 
@@ -1566,7 +1649,7 @@ int parse_wasm(struct wasm_parser *p)
 			break;
 
 		if (!parse_section(p)) {
-			note_error(p, "section");
+			parse_err(p, "section");
 			goto fail;
 		}
 	}
@@ -1903,7 +1986,6 @@ static int parse_blocktype(struct cursor *cur, struct blocktype *blocktype)
 	unsigned char byte;
 
 	if (!pull_byte(cur, &byte)) {
-		cursor_print_around(cur, 10);
 		printf("parse_blocktype: oob\n");
 		return 0;
 	}
@@ -2237,8 +2319,14 @@ static int interp_if(struct wasm_interp *interp)
 {
 	struct val cond;
 	struct blocktype blocktype;
+	struct cursor *code;
 
-	if (!parse_blocktype(&interp->cur, &blocktype)) {
+	if (!(code = interp_codeptr(interp))) {
+		interp_error(interp, "empty callstack?");
+		return 0;
+	}
+
+	if (!parse_blocktype(code, &blocktype)) {
 		interp_error(interp, "couldn't parse blocktype");
 		return 0;
 	}
@@ -2262,7 +2350,10 @@ static int interp_if(struct wasm_interp *interp)
 static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 {
 	interp->ops++;
-	debug("executing 0x%0x\n", tag);
+	
+	debug("0x%03lX %s\n",
+		interp_codeptr(interp)->p - interp_codeptr(interp)->start,
+		instr_name(tag));
 
 	switch (tag) {
 	case i_unreachable: return 1;
@@ -2337,16 +2428,6 @@ static int find_start_function(struct module *module)
 	}
 
 	return find_function(module, "start");
-}
-
-static int cursor_slice(struct cursor *mem, struct cursor *slice, size_t size)
-{
-	u8 *p;
-	if (!(p = cursor_alloc(mem, size))) {
-		return 0;
-	}
-	make_cursor(p, mem->p, slice);
-	return 1;
 }
 
 static inline int array_alloc(struct cursor *mem, struct array *a, int elems)

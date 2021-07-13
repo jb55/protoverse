@@ -397,10 +397,11 @@ struct callframe {
 
 struct wasm_interp {
 	struct module *module;
+	struct cursor errors; /* struct error */
 	size_t ops;
 
 	struct cursor cur; /* code */
-	struct cursor callframes; /* struct cursor */
+	struct cursor callframes; /* struct callframe */
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
 	struct cursor locals;  /* struct val */
@@ -413,15 +414,13 @@ struct wasm_interp {
 	// instruction is encountered, the label index is pushed. When an
 	// instruction is popped, we can resolve the label
 	struct cursor resolver_stack; /* u32 */
-
-	struct parser_error *errors;
 };
 
 struct wasm_parser {
 	struct module module;
 	struct cursor cur;
 	struct cursor mem;
-	struct parse_error *errors;
+	struct cursor errs;
 };
 
 

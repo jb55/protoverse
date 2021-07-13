@@ -136,7 +136,6 @@ int init_parser(struct parser *parser);
 int free_parser(struct parser *parser);
 void print_cell(struct cursor *attributes, struct cell *cell);
 int tokenize_cells(unsigned char *buf, int buf_size, struct token_cursor *tokens);
-void make_token_cursor(u8 *start, u8 *end, struct token_cursor *cursor);
 int parse_cell(struct parser *parser, u16 *index);
 void print_token_error(struct token_cursor *cursor);
 const char *cell_type_str(enum cell_type);
