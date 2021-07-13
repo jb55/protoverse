@@ -134,7 +134,7 @@ struct importdesc {
 struct import {
 	const char *module_name;
 	const char *name;
-	struct importdesc import_desc;
+	struct importdesc desc;
 };
 
 struct importsec {

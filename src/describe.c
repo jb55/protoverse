@@ -15,7 +15,7 @@ static int push_sized_word(struct cursor *strs, const char *str, int len)
 	int ok;
 
 	if (strs->p-1 >= strs->start && !isspace(*(strs->p-1))) {
-		ok = push_str(strs, " ");
+		ok = cursor_push_str(strs, " ");
 		if (!ok) return 0;
 	}
 
@@ -36,7 +36,7 @@ static int push_adjective(struct cursor *strs, struct attribute *attr)
 
 	switch (attr->type) {
 	case A_CONDITION:
-		ok = push_str(strs, " ");
+		ok = cursor_push_str(strs, " ");
 		if (!ok) return 0;
 		ok = push_sized_str(strs, attr->data.str.ptr,
 				    attr->data.str.len);
@@ -93,7 +93,7 @@ static int push_adjectives(struct describe *desc)
 				if (!ok) return 0;
 			}
 			else if (adjs != adj_count-1) {
-				ok = push_str(desc->strs, ",");
+				ok = cursor_push_str(desc->strs, ",");
 				if (!ok) return 0;
 			}
 
@@ -189,7 +189,7 @@ static int describe_room(struct describe *desc)
 	int ok;
 
 	/* TODO: temp buffers for determining a(n) things */
-	ok = push_str(desc->strs, "There is a(n)");
+	ok = cursor_push_str(desc->strs, "There is a(n)");
 	if (!ok) return 0;
 
 	ok = push_adjectives(desc);
@@ -267,11 +267,11 @@ static int describe_group(struct describe *desc)
 	if (!ok) return 0;
 
 	if (nobjs > 1) {
-		ok = push_str(desc->strs, "s:");
+		ok = cursor_push_str(desc->strs, "s:");
 		if (!ok) return 0;
 	}
 	else {
-		push_str(desc->strs, ":");
+		cursor_push_str(desc->strs, ":");
 		if (!ok) return 0;
 	}
 
@@ -289,7 +289,7 @@ static int describe_group(struct describe *desc)
 				if (!ok) return 0;
 			}
 			else if (i != nobjs-1) {
-				ok = push_str(desc->strs, ",");
+				ok = cursor_push_str(desc->strs, ",");
 				if (!ok) return 0;
 			}
 
@@ -347,7 +347,7 @@ int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs
 	ok = describe_cell(cell, parsed, strs);
 	if (!ok) return 0;
 
-	ok = push_str(strs, ".\n");
+	ok = cursor_push_str(strs, ".\n");
 	if (!ok) return 0;
 
 	if (cell->n_children == 0)

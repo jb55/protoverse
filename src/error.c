@@ -15,7 +15,7 @@ void note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...)
 	va_end(ap);
 
 	err.msg = buf;
-	err.pos = p->p - p->start;
+	err.pos = p ? p->p - p->start : 0;
 
 	if (!cursor_push_error(errs, &err)) {
 		fprintf(stderr, "arena OOM when recording error, ");
