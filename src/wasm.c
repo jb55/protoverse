@@ -315,14 +315,25 @@ static void print_functype(struct functype *ft)
 {
 	int i;
 
+	printf("(");
+
 	for (i = 0; i < ft->params.num_valtypes; i++) {
-		printf("%s ", valtype_name(ft->params.valtypes[i]));
+		printf("%s", valtype_name(ft->params.valtypes[i]));
+		if (i != ft->params.num_valtypes-1) {
+			printf(", ");
+		}
 	}
-	printf("-> ");
+
+	printf(") -> (");
+
 	for (i = 0; i < ft->result.num_valtypes; i++) {
-		printf("%s ", valtype_name(ft->result.valtypes[i]));
+		printf("%s", valtype_name(ft->result.valtypes[i]));
+		if (i != ft->result.num_valtypes-1) {
+			printf(", ");
+		}
 	}
-	printf("\n");
+
+	printf(")\n");
 }
 
 static void print_type_section(struct typesec *typesec)
@@ -2252,7 +2263,7 @@ static int resolve_label(struct wasm_interp *interp)
 	assert(label);
 	assert(!label_is_resolved(label));
 
-	label->jump = interp->cur.p - interp->cur.start;
+	label->jump = frame->code.p - frame->code.start;
 	label->instr_pos |= 0x80000000;
 
 	return 1;
@@ -2316,12 +2327,16 @@ static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
 }
 
 // upsert an unresolved label
-static int upsert_label(struct wasm_interp *interp, int fn, u32 instr_pos, int *ind)
+static int upsert_label(struct wasm_interp *interp, int fn,
+			u32 instr_pos, int *ind)
 {
 	struct label *label;
 	u16 *num_labels;
 
 	num_labels = func_num_labels(interp, fn);
+
+	debug("upsert_label: %d labels for %s\n",
+	      *num_labels, get_function_name(interp->module, fn));
 
 	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) == 0)) {
 		// we already have the label
@@ -2363,12 +2378,12 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 	assert(label);
 
 	if (label_is_resolved(label)) {
-		interp->cur.p = interp->cur.start + label->jump;
-		assert(interp->cur.p < interp->cur.end);
+		frame->code.p = frame->code.start + label->jump;
+		assert(frame->code.p < frame->code.end);
 		return 1;
 	}
 
-	instr_pos = interp->cur.p - interp->cur.start;
+	instr_pos = frame->code.p - frame->code.start;
 	if (!upsert_label(interp, frame->fn, instr_pos, &ind)) {
 		interp_error(interp, "upsert label");
 		return 0;
@@ -2579,6 +2594,7 @@ int interp_wasm_module(struct wasm_interp *interp, struct module *module)
 
 	// reset cursors
 	interp->stack.p = interp->stack.start;
+	interp->errors.p = interp->errors.start;
 	interp->mem.p = interp->mem.start;
 
 	fns = functions_count(module);
@@ -2611,9 +2627,6 @@ int interp_wasm_module(struct wasm_interp *interp, struct module *module)
 	}
 
 end:
-	print_error_backtrace(&interp->errors);
-	debug("ops: %ld\nstack:\n", interp->ops);
-	print_stack(&interp->stack);
 
 	return ok;
 }
@@ -2633,6 +2646,9 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 
 	wasm_interp_init(&interp);
 	ok = interp_wasm_module(&interp, &p.module);
+	print_error_backtrace(&interp.errors);
+	printf("ops: %ld\nstack:\n", interp.ops);
+	print_stack(&interp.stack);
 	wasm_interp_free(&interp);
 	wasm_parser_free(&p);
 	return ok;

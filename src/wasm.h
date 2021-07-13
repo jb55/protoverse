@@ -400,7 +400,6 @@ struct wasm_interp {
 	struct cursor errors; /* struct error */
 	size_t ops;
 
-	struct cursor cur; /* code */
 	struct cursor callframes; /* struct callframe */
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */

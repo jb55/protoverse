@@ -3,9 +3,6 @@ CFLAGS = -Wno-error=unused-function -O2 -g -std=gnu90 -Wall -Wextra -Werror \
 	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
 	 -Wmissing-declarations -Wdeclaration-after-statement
 
-debug: CFLAGS += -DDEBUG
-debug: all
-
 OBJS = src/io.o \
        src/parse.o \
        src/describe.o \
@@ -21,6 +18,9 @@ WASMS = wasm/hello-c.wasm \
 	wasm/hello.wasm
 
 all: protoverse bench test libprotoverse.a
+
+debug: CFLAGS += -DDEBUG
+debug: all
 
 wasm: $(WASMS)
 
