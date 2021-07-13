@@ -23,7 +23,7 @@ struct val {
 	enum valtype type;
 	union {
 		int i32;
-		int64_t i64;
+		u64 i64;
 		float f32;
 		double f64;
 	};
@@ -217,7 +217,7 @@ static void print_val(struct val *val)
 {
 	switch (val->type) {
 	case i32: printf("%d", val->i32); break;
-	case i64: printf("%ld", val->i64); break;
+	case i64: printf("%llu", val->i64); break;
 	case f32: printf("%f", val->f32); break;
 	case f64: printf("%f", val->f64); break;
 	}
@@ -261,16 +261,6 @@ static void print_stack(struct cursor *stack)
 	}
 
 	stack->p = p;
-}
-
-static inline int array_push(struct array *a, void *data)
-{
-	return cursor_push(&a->cur, (u8*)data, a->elem_size);
-}
-
-static inline int array_pop_u32(struct array *a, u32 *out)
-{
-	return cursor_pop(&a->cur, (u8*)out, a->elem_size);
 }
 
 static inline int cursor_pushval(struct cursor *cur, struct val *val)
