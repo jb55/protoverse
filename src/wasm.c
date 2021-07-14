@@ -1690,10 +1690,10 @@ int parse_wasm(struct wasm_parser *p)
 	return 1;
 
 fail:
-	debug("parse failure backtrace:\n");
-	print_error_backtrace(&p->errs);
 	debug("\npartially parsed module:\n");
 	print_module(&p->module);
+	debug("parse failure backtrace:\n");
+	print_error_backtrace(&p->errs);
 	return 0;
 }
 
@@ -2237,6 +2237,8 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 }
 
 
+// when we encounter a control instruction, try to resolve the label, otherwise
+// push the label index to the resolver stack for resolution later
 static int label_checkpoint(struct wasm_interp *interp, int *jumped)
 {
 	u32 instr_pos;
@@ -2270,6 +2272,7 @@ static int label_checkpoint(struct wasm_interp *interp, int *jumped)
 		return 0;
 	}
 
+	// should this be done in branch_jump instead?
 	if (label_is_resolved(label)) {
 		frame->code.p = frame->code.start + label->jump;
 		debug("label is resolved, jumping to %04lX\n",
@@ -2661,13 +2664,14 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	labels_capacity  = fns * MAX_LABELS;
 	num_labels_elemsize = sizeof(u16);
 
-	errors_size      = 0xFFFF;
-	stack_size       = 0xFFFF;
+	// TODO: make memory limits configurable
+	errors_size      = 0xFFF;
+	stack_size       = sizeof(struct val) * 0xFF;
  	labels_size      = labels_capacity * sizeof(struct label);
  	num_labels_size  = fns * num_labels_elemsize;
-	locals_size      = sizeof(struct val) * NUM_LOCALS;
-	offsets_size     = sizeof(int) * 255;
-	callframes_size  = sizeof(struct callframe) * 255;
+	locals_size      = sizeof(struct val) * 0xFF;
+	offsets_size     = sizeof(int) * 0xFF;
+	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(u16) * MAX_LABELS;
 
 	interp->labels.elem_size = sizeof(struct label);
