@@ -2149,7 +2149,6 @@ static int parse_instrs_until(struct wasm_interp *interp, u8 stop_instr,
 	for (;;) {
 		if (!pull_byte(code, &tag) && tag == stop_instr) {
 			parsed_instrs->end = code->p;
-			resolve_label(interp);
 			return 1;
 		}
 
@@ -2175,8 +2174,139 @@ static int parse_block(struct wasm_interp *interp, struct block *block, u8 end_t
 		return 0;
 	}
 
-	return parse_instrs_until(interp, end_tag, &block->instrs);
+	if (!label_checkpoint(interp)) {
+		interp_error(interp, "checkpoint");
+		return 0;
+	}
+
+	if (!parse_instrs_until(interp, end_tag, &block->instrs)) {
+		interp_error(interp, "checkpoint");
+		return 0;
+	}
+
+	return resolve_label(interp);
 }
+
+static inline int parse_memarg(struct cursor *code, struct memarg *memarg)
+{
+	return leb128_read(code, &memarg->offset) &&
+	       leb128_read(code, &memarg->align);
+}
+
+static inline u16 *func_num_labels(struct wasm_interp *interp, int fn)
+{
+	u16 *num = (u16*)array_index(&interp->num_labels, fn);
+	assert(num);
+	assert(*num <= MAX_LABELS);
+	return num;
+}
+
+static inline void set_label_pos(struct label *label, u32 pos)
+{
+	assert(!(pos & 0x80000000));
+	label->instr_pos = pos;
+}
+
+static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
+{
+	u16 *num_labels, i;
+	struct label *label;
+
+	num_labels = func_num_labels(interp, fn);
+	label = index_label(&interp->labels, fn, 0);
+	assert(label);
+
+	for (i = 0; i < *num_labels; label++) {
+		assert((u8*)label < interp->labels.cur.end);
+		if (label_instr_pos(label) == instr_pos)
+			return i;
+		i++;
+	}
+
+	return -1;
+}
+
+// upsert an unresolved label
+static int upsert_label(struct wasm_interp *interp, int fn,
+			u32 instr_pos, int *ind)
+{
+	struct label *label;
+	u16 *num_labels;
+
+	num_labels = func_num_labels(interp, fn);
+
+	debug("upsert_label: %d labels for %s\n",
+	      *num_labels, get_function_name(interp->module, fn));
+
+	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) == 0)) {
+		// we already have the label
+		return 1;
+	}
+
+	if (*num_labels + 1 > MAX_LABELS) {
+		interp_error(interp, "too many labels in %s (> %d)",
+			get_function_name(interp->module, fn), MAX_LABELS);
+		return 0;
+	}
+
+	*ind = *num_labels;
+	label = index_label(&interp->labels, fn, *ind);
+	assert(label);
+
+	set_label_pos(label, instr_pos);
+	*num_labels = *num_labels + 1;
+
+	return 2;
+}
+
+static int label_checkpoint(struct wasm_interp *interp)
+{
+	u32 instr_pos;
+	int ind;
+
+	int fns;
+	struct label *label;
+	struct callframe *frame;
+
+	fns = functions_count(interp->module);
+	frame = top_callframe(&interp->callframes);
+
+	if (!frame) {
+		interp_error(interp, "no callframes available?");
+		return 0;
+	} else if (frame->fn >= fns) {
+		interp_error(interp, "invalid fn index?");
+		return 0;
+	}
+
+	instr_pos = frame->code.p - frame->code.start;
+	if (!upsert_label(interp, frame->fn, instr_pos, &ind)) {
+		interp_error(interp, "upsert label");
+		return 0;
+	}
+
+	if (!(label = index_label(&interp->labels, frame->fn, ind))) {
+		interp_error(interp, "couldn't index label");
+		return 0;
+	}
+
+	if (label_is_resolved(label)) {
+		frame->code.p = frame->code.start + label->jump;
+		if (frame->code.p >= frame->code.end) {
+			interp_error(interp, "code pointer at or past end, evil jump?");
+			return 0;
+		}
+		return 1;
+	}
+
+	if (!cursor_push_u16(&interp->resolver_stack, ind)) {
+		interp_error(interp, "push label index to resolver stack oob");
+		return 0;
+	}
+
+	return 1;
+}
+
 
 static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 {
@@ -2196,7 +2326,7 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 		case i_block:
 		case i_loop:
 		case i_if:
-			return parse_block(interp, &op->block, i_end);
+			return parse_block(interp, &op->blocks[0], i_end);
 
 		case i_else:
 			return parse_block(interp, &op->blocks[0], i_else) &&
@@ -2205,16 +2335,14 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 		case i_end:
 			return 1;
 
-		case i_br:
-		case i_br_if:
-		case i_br_table:
 		case i_call:
-		case i_call_indirect:
 		case i_local_get:
 		case i_local_set:
 		case i_local_tee:
 		case i_global_get:
 		case i_global_set:
+			return leb128_read(code, &op->integer);
+
 		case i_i32_load:
 		case i_i64_load:
 		case i_f32_load:
@@ -2238,6 +2366,12 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 		case i_i64_store8:
 		case i_i64_store16:
 		case i_i64_store32:
+			return parse_memarg(code, &op->memarg);
+
+		case i_br:
+		case i_br_if:
+		case i_br_table:
+		case i_call_indirect:
 			interp_error(interp, "consume dynamic-size op");
 			return 0;
 
@@ -2331,105 +2465,12 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 	return 0;
 }
 
-static inline void set_label_pos(struct label *label, u32 pos)
-{
-	assert(!(pos & 0x80000000));
-	label->instr_pos = pos;
-}
-
-static inline u16 *func_num_labels(struct wasm_interp *interp, int fn)
-{
-	u16 *num = (u16*)array_index(&interp->num_labels, fn);
-	assert(num);
-	assert(*num <= MAX_LABELS);
-	return num;
-}
-
-static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
-{
-	u16 *num_labels, i;
-	struct label *label;
-
-	num_labels = func_num_labels(interp, fn);
-	label = index_label(&interp->labels, fn, 0);
-	assert(label);
-
-	for (i = 0; i < *num_labels; label++) {
-		assert((u8*)label < interp->labels.cur.end);
-		if (label_instr_pos(label) == instr_pos)
-			return i;
-		i++;
-	}
-
-	return -1;
-}
-
-// upsert an unresolved label
-static int upsert_label(struct wasm_interp *interp, int fn,
-			u32 instr_pos, int *ind)
-{
-	struct label *label;
-	u16 *num_labels;
-
-	num_labels = func_num_labels(interp, fn);
-
-	debug("upsert_label: %d labels for %s\n",
-	      *num_labels, get_function_name(interp->module, fn));
-
-	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) == 0)) {
-		// we already have the label
-		return 1;
-	}
-
-	if (*num_labels + 1 > MAX_LABELS) {
-		interp_error(interp, "too many labels in %s (> %d)",
-			get_function_name(interp->module, fn), MAX_LABELS);
-		return 0;
-	}
-
-	*ind = *num_labels;
-	label = index_label(&interp->labels, fn, *ind);
-	assert(label);
-
-	set_label_pos(label, instr_pos);
-	*num_labels = *num_labels + 1;
-
-	return 2;
-}
-
 static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 {
-	u32 instr_pos;
-	int ind;
-
-	int fns;
-	struct label *label;
-	struct callframe *frame;
 	struct cursor instrs;
 
-	fns = functions_count(interp->module);
-	frame = top_callframe(&interp->callframes);
-
-	assert(frame);
-	assert(frame->fn < fns);
-
-	label = index_label(&interp->labels, frame->fn, 0);
-	assert(label);
-
-	if (label_is_resolved(label)) {
-		frame->code.p = frame->code.start + label->jump;
-		assert(frame->code.p < frame->code.end);
-		return 1;
-	}
-
-	instr_pos = frame->code.p - frame->code.start;
-	if (!upsert_label(interp, frame->fn, instr_pos, &ind)) {
-		interp_error(interp, "upsert label");
-		return 0;
-	}
-
-	if (!cursor_push_u16(&interp->resolver_stack, ind)) {
-		interp_error(interp, "push label index to resolver stack oob");
+	if (!label_checkpoint(interp)) {
+		interp_error(interp, "label checkpoint");
 		return 0;
 	}
 

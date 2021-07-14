@@ -349,9 +349,15 @@ struct block {
 	struct cursor instrs;
 };
 
+struct memarg {
+	unsigned int offset;
+	unsigned int align;
+};
+
 struct instr {
 	enum instr_tag tag;
 	union {
+		struct memarg memarg;
 		struct block block;
 		struct block blocks[2];
 		unsigned int integer;
