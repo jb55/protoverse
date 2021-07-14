@@ -41,7 +41,8 @@ static inline struct cursor *interp_codeptr(struct wasm_interp *interp)
 {
 	struct callframe *frame;
 	frame = top_callframe(&interp->callframes);
-	if (!frame) return 0;
+	if (unlikely(!frame))
+		return 0;
 	return &frame->code;
 }
 
@@ -2059,12 +2060,12 @@ static int interp_call(struct wasm_interp *interp)
 }
 
 
-static int parse_blocktype(struct cursor *cur, struct blocktype *blocktype)
+static int parse_blocktype(struct cursor *cur, struct cursor *errs, struct blocktype *blocktype)
 {
 	unsigned char byte;
 
 	if (!pull_byte(cur, &byte)) {
-		printf("parse_blocktype: oob\n");
+		note_error(errs, cur, "parse_blocktype: oob\n");
 		return 0;
 	}
 
@@ -2078,7 +2079,7 @@ static int parse_blocktype(struct cursor *cur, struct blocktype *blocktype)
 		cur->p--;
 
 		if (!leb128_read(cur, &blocktype->type_index)) {
-			printf("parse_blocktype: read type_index\n");
+			note_error(errs, cur, "parse_blocktype: read type_index\n");
 			return 0;
 		}
 	}
@@ -2086,11 +2087,55 @@ static int parse_blocktype(struct cursor *cur, struct blocktype *blocktype)
 	return 1;
 }
 
-// if we don't have a resolved label, we need to recursively consume
-// instructions until we get to the i_end or i_else, etc
-static int consume_instr(struct wasm_interp *interp, u8 *tag)
+static inline struct label *index_label(struct array *a, int fn, int ind)
 {
-	u8 byte;
+	return (struct label*)array_index(a, (MAX_LABELS * fn) + ind);
+}
+
+static inline u32 label_instr_pos(struct label *label)
+{
+	return label->instr_pos & 0x7FFFFFFF;
+}
+
+static inline int label_is_resolved(struct label *label)
+{
+	return label->instr_pos & 0x80000000;
+}
+
+
+static int resolve_label(struct wasm_interp *interp)
+{
+	struct label *label;
+	struct callframe *frame;
+	u32 label_ind = 0;
+
+	if (!cursor_pop(&interp->resolver_stack, (u8*)&label_ind, sizeof(label_ind))) {
+		interp_error(interp, "couldn't pop jump resolver stack");
+		return 0;
+	}
+
+	frame = top_callframe(&interp->callframes);
+	assert(frame);
+
+	label = index_label(&interp->labels, frame->fn, label_ind);
+	assert(label);
+	assert(!label_is_resolved(label));
+
+	label->jump = frame->code.p - frame->code.start;
+	label->instr_pos |= 0x80000000;
+
+	return 1;
+}
+
+static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op);
+
+//
+// consume instructions to resolve labels
+static int parse_instrs_until(struct wasm_interp *interp, u8 stop_instr,
+		struct cursor *parsed_instrs)
+{
+	u8 tag;
+	struct instr op;
 	struct cursor *code;
 
 	if (!(code = interp_codeptr(interp))) {
@@ -2098,22 +2143,68 @@ static int consume_instr(struct wasm_interp *interp, u8 *tag)
 		return 0;
 	}
 
-	if (!pull_byte(code, tag)) {
-		interp_error(interp, "oob");
+	parsed_instrs->start = code->p;
+	parsed_instrs->p = code->p;
+
+	for (;;) {
+		if (!pull_byte(code, &tag) && tag == stop_instr) {
+			parsed_instrs->end = code->p;
+			resolve_label(interp);
+			return 1;
+		}
+
+		if (!parse_instr(interp, tag, &op)) {
+			interp_error(interp, "parse %s instr (0x%x)", instr_name(tag), tag);
+			return 0;
+		}
+	}
+}
+
+
+static int parse_block(struct wasm_interp *interp, struct block *block, u8 end_tag)
+{
+	struct cursor *code;
+
+	if (!(code = interp_codeptr(interp))) {
+		interp_error(interp, "codeptr");
 		return 0;
 	}
 
-	switch ((enum instr_tag)*tag) {
+	if (!parse_blocktype(code, &interp->errors, &block->type)) {
+		interp_error(interp, "blocktype");
+		return 0;
+	}
+
+	return parse_instrs_until(interp, end_tag, &block->instrs);
+}
+
+static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
+{
+	struct cursor *code;
+	
+	if (!(code = interp_codeptr(interp))) {
+		interp_error(interp, "codeptr");
+		return 0;
+	}
+
+	switch (tag) {
 		// two-byte instrs
 		case i_memory_size:
 		case i_memory_grow:
-			return pull_byte(code, &byte);
+			return pull_byte(code, &op->memidx);
 
 		case i_block:
 		case i_loop:
 		case i_if:
+			return parse_block(interp, &op->block, i_end);
+
 		case i_else:
+			return parse_block(interp, &op->blocks[0], i_else) &&
+			       parse_block(interp, &op->blocks[1], i_end);
+
 		case i_end:
+			return 1;
+
 		case i_br:
 		case i_br_if:
 		case i_br_table:
@@ -2147,11 +2238,16 @@ static int consume_instr(struct wasm_interp *interp, u8 *tag)
 		case i_i64_store8:
 		case i_i64_store16:
 		case i_i64_store32:
+			interp_error(interp, "consume dynamic-size op");
+			return 0;
+
 		case i_i32_const:
 		case i_i64_const:
+			return leb128_read(code, &op->integer);
+
 		case i_f32_const:
 		case i_f64_const:
-			interp_error(interp, "consume dynamic-size op");
+			interp_error(interp, "parse float const");
 			return 0;
 
 		// single-tag ops
@@ -2231,66 +2327,8 @@ static int consume_instr(struct wasm_interp *interp, u8 *tag)
 			return 1;
 	}
 
-	interp_error(interp, "unhandled tag: 0x%x", *tag);
+	interp_error(interp, "unhandled tag: 0x%x", tag);
 	return 0;
-}
-
-static inline struct label *index_label(struct array *a, int fn, int ind)
-{
-	return (struct label*)array_index(a, (MAX_LABELS * fn) + ind);
-}
-
-static inline int label_is_resolved(struct label *label)
-{
-	return label->instr_pos & 0x80000000;
-}
-
-static int resolve_label(struct wasm_interp *interp)
-{
-	struct label *label;
-	struct callframe *frame;
-	u32 label_ind = 0;
-
-	if (!cursor_pop(&interp->resolver_stack, (u8*)&label_ind, sizeof(label_ind))) {
-		interp_error(interp, "couldn't pop jump resolver stack");
-		return 0;
-	}
-
-	frame = top_callframe(&interp->callframes);
-	assert(frame);
-
-	label = index_label(&interp->labels, frame->fn, label_ind);
-	assert(label);
-	assert(!label_is_resolved(label));
-
-	label->jump = frame->code.p - frame->code.start;
-	label->instr_pos |= 0x80000000;
-
-	return 1;
-}
-
-// consume instructions to resolve labels
-static int consume_instrs_until(struct wasm_interp *interp, u8 stop_instr)
-{
-	u8 tag = 0;
-
-	for (;;) {
-		if (!consume_instr(interp, &tag)) {
-			interp_error(interp, "consume %s (0x%x)",
-					instr_name(tag), tag);
-			return 0;
-		}
-
-		if (tag == stop_instr) {
-			resolve_label(interp);
-			return 1;
-		}
-	}
-}
-
-static inline u32 label_instr_pos(struct label *label)
-{
-	return label->instr_pos & 0x7FFFFFFF;
 }
 
 static inline void set_label_pos(struct label *label, u32 pos)
@@ -2367,6 +2405,7 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 	int fns;
 	struct label *label;
 	struct callframe *frame;
+	struct cursor instrs;
 
 	fns = functions_count(interp->module);
 	frame = top_callframe(&interp->callframes);
@@ -2395,8 +2434,8 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 	}
 
 	// consume instructions, use resolver stack to resolve jumps
-	if (!consume_instrs_until(interp, end_tag)) {
-		interp_error(interp, "consume instrs");
+	if (!parse_instrs_until(interp, end_tag, &instrs)) {
+		interp_error(interp, "parse instrs");
 		return 0;
 	}
 
@@ -2414,7 +2453,7 @@ static int interp_if(struct wasm_interp *interp)
 		return 0;
 	}
 
-	if (!parse_blocktype(code, &blocktype)) {
+	if (!parse_blocktype(code, &interp->errors, &blocktype)) {
 		interp_error(interp, "couldn't parse blocktype");
 		return 0;
 	}

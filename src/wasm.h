@@ -344,6 +344,21 @@ struct blocktype {
 	};
 };
 
+struct block {
+	struct blocktype type;
+	struct cursor instrs;
+};
+
+struct instr {
+	enum instr_tag tag;
+	union {
+		struct block block;
+		struct block blocks[2];
+		unsigned int integer;
+		unsigned char memidx;
+	};
+};
+
 enum datamode {
 	datamode_active,
 	datamode_passive,
