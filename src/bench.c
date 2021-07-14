@@ -20,13 +20,12 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 		return 0;
 	}
 
-	wasm_interp_init(&interp);
+	wasm_interp_init(&interp, &p.module);
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
 	for (i = 0; i < times; i++) {
-		if (!interp_wasm_module(&interp, &p.module)) {
-			printf("bench: interp_wasm_module failed\n");
-			break;
+		if (!interp_wasm_module(&interp)) {
+			//print_error_backtrace(&interp.errors);
 		}
 		ops += interp.ops;
 	}
@@ -35,7 +34,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 	nanos = (t2.tv_sec - t1.tv_sec) * (long)1e9 + (t2.tv_nsec - t1.tv_nsec);
 	ms = nanos / 1e6;
 	printf("ns/run\t%ld\nms/run\t%f\nns\t%ld\nms\t%ld\nops\t%d\nns/op\t%ld\n",
-		nanos/times, (double)ms/(double)times, nanos, ms, ops, nanos/ops);
+		nanos/times, (double)ms/(double)times, nanos, ms, ops, nanos/(ops+1));
 
 	wasm_interp_free(&interp);
 	wasm_parser_free(&p);

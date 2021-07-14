@@ -295,7 +295,7 @@ static inline int offset_stack_top(struct cursor *cur)
 	return *(p - sizeof(*p));
 }
 
-static void print_error_backtrace(struct cursor *errors)
+void print_error_backtrace(struct cursor *errors)
 {
 	struct cursor errs;
 	struct error err;
@@ -1872,7 +1872,7 @@ static inline int interp_i32_gt_u(struct wasm_interp *interp)
 		return 0;
 	}
 
-	c.i32 = (unsigned int)b.i32 > (unsigned int)a.i32; 
+	c.i32 = (unsigned int)b.i32 > (unsigned int)a.i32;
 
 	return cursor_pushval(&interp->stack, &c);
 }
@@ -2118,8 +2118,11 @@ static int resolve_label(struct wasm_interp *interp)
 
 	label = index_label(&interp->labels, frame->fn, label_ind);
 	assert(label);
-	assert(!label_is_resolved(label));
 
+	if (label_is_resolved(label)) {
+		debug("label %d is already resolved\n", label_ind);
+		return 1;
+	}
 
 	label->jump = frame->code.p - frame->code.start;
 	label->instr_pos |= 0x80000000;
@@ -2209,9 +2212,6 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 
 	num_labels = func_num_labels(interp, fn);
 
-	debug("upsert_label: %d labels for %s\n",
-	      *num_labels, get_function_name(interp->module, fn));
-
 	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) == 0)) {
 		// we already have the label
 		return 1;
@@ -2222,6 +2222,9 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 			get_function_name(interp->module, fn), MAX_LABELS);
 		return 0;
 	}
+
+	debug("upsert_label: %d labels for %s\n",
+	      *num_labels, get_function_name(interp->module, fn));
 
 	*ind = *num_labels;
 	label = index_label(&interp->labels, fn, *ind);
@@ -2234,7 +2237,7 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 }
 
 
-static int label_checkpoint(struct wasm_interp *interp)
+static int label_checkpoint(struct wasm_interp *interp, int *jumped)
 {
 	u32 instr_pos;
 	int ind;
@@ -2242,6 +2245,8 @@ static int label_checkpoint(struct wasm_interp *interp)
 	int fns;
 	struct label *label;
 	struct callframe *frame;
+
+	*jumped = 0;
 
 	fns = functions_count(interp->module);
 	frame = top_callframe(&interp->callframes);
@@ -2267,10 +2272,13 @@ static int label_checkpoint(struct wasm_interp *interp)
 
 	if (label_is_resolved(label)) {
 		frame->code.p = frame->code.start + label->jump;
+		debug("label is resolved, jumping to %04lX\n",
+				frame->code.p - frame->code.start);
 		if (frame->code.p >= frame->code.end) {
 			interp_error(interp, "code pointer at or past end, evil jump?");
 			return 0;
 		}
+		*jumped = 1;
 		return 1;
 	}
 
@@ -2287,8 +2295,7 @@ static int label_checkpoint(struct wasm_interp *interp)
 static int parse_block(struct wasm_interp *interp, struct block *block, u8 end_tag)
 {
 	struct cursor *code;
-
-	debug("parsing block");
+	int jumped;
 
 	if (!(code = interp_codeptr(interp))) {
 		interp_error(interp, "codeptr");
@@ -2300,7 +2307,7 @@ static int parse_block(struct wasm_interp *interp, struct block *block, u8 end_t
 		return 0;
 	}
 
-	if (!label_checkpoint(interp)) {
+	if (!label_checkpoint(interp, &jumped)) {
 		interp_error(interp, "checkpoint");
 		return 0;
 	}
@@ -2323,7 +2330,7 @@ static inline int parse_memarg(struct cursor *code, struct memarg *memarg)
 static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 {
 	struct cursor *code;
-	
+
 	if (!(code = interp_codeptr(interp))) {
 		interp_error(interp, "codeptr");
 		return 0;
@@ -2483,10 +2490,15 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 {
 	struct cursor instrs;
+	int jumped;
 
-	if (!label_checkpoint(interp)) {
+	if (!label_checkpoint(interp, &jumped)) {
 		interp_error(interp, "label checkpoint");
 		return 0;
+	}
+
+	if (jumped) {
+		return 1;
 	}
 
 	// consume instructions, use resolver stack to resolve jumps
@@ -2592,10 +2604,6 @@ int interp_code(struct wasm_interp *interp)
 	return 1;
 }
 
-#define STACK_SPACE 5242880
-#define MEM_SPACE 5242880
-#define LOCALS_SPACE 5242880
-
 static int find_function(struct module *module, const char *name)
 {
 	struct wexport *export;
@@ -2638,19 +2646,57 @@ void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t a
 	cursor_slice(&p->mem, &p->errs, 0xFFFF);
 }
 
-void wasm_interp_init(struct wasm_interp *interp)
+void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 {
-	static unsigned char *stack, *mem;
+	unsigned char *mem;
+	int ok, fns, errors_size, stack_size, locals_size, offsets_size,
+	    callframes_size, resolver_size, labels_size, num_labels_size,
+	    labels_capacity, num_labels_elemsize, memsize;
 
-	interp->ops = 0;
+	memset(interp, 0, sizeof(*interp));
+	interp->module = module;
 
-	stack = calloc(1, STACK_SPACE);
-	mem = calloc(1, MEM_SPACE);
+	//stack = calloc(1, STACK_SPACE);
+	fns = functions_count(module);
+	labels_capacity  = fns * MAX_LABELS;
+	num_labels_elemsize = sizeof(u16);
 
-	make_cursor(stack, stack + STACK_SPACE, &interp->stack);
-	make_cursor(mem, mem + MEM_SPACE, &interp->mem);
+	errors_size      = 0xFFFF;
+	stack_size       = 0xFFFF;
+ 	labels_size      = labels_capacity * sizeof(struct label);
+ 	num_labels_size  = fns * num_labels_elemsize;
+	locals_size      = sizeof(struct val) * NUM_LOCALS;
+	offsets_size     = sizeof(int) * 255;
+	callframes_size  = sizeof(struct callframe) * 255;
+	resolver_size    = sizeof(u16) * MAX_LABELS;
 
-	cursor_slice(&interp->mem, &interp->errors, 0xFFFF);
+	interp->labels.elem_size = sizeof(struct label);
+	interp->num_labels.elem_size = num_labels_elemsize;
+
+	memsize =
+		errors_size +
+		stack_size +
+		labels_size +
+		num_labels_size +
+		locals_size +
+		offsets_size +
+		callframes_size +
+		resolver_size;
+
+	mem = calloc(1, memsize);
+	make_cursor(mem, mem + memsize, &interp->mem);
+
+	ok =
+		cursor_slice(&interp->mem, &interp->stack, stack_size) &&
+		cursor_slice(&interp->mem, &interp->errors, errors_size) &&
+		cursor_slice(&interp->mem, &interp->locals, locals_size) &&
+		cursor_slice(&interp->mem, &interp->locals_offsets, offsets_size) &&
+		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
+		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
+		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
+	        array_alloc(&interp->mem, &interp->num_labels, fns);
+
+	assert(ok);
 }
 
 void wasm_parser_free(struct wasm_parser *parser)
@@ -2660,52 +2706,31 @@ void wasm_parser_free(struct wasm_parser *parser)
 
 void wasm_interp_free(struct wasm_interp *interp)
 {
-	free(interp->stack.start);
 	free(interp->mem.start);
 }
 
-static int alloc_labels(struct wasm_interp *interp, int fns)
+int interp_wasm_module(struct wasm_interp *interp)
 {
-	const int capacity = fns * MAX_LABELS;
+	int ok, func;
 
-	interp->labels.elem_size = sizeof(struct label);
-	interp->num_labels.elem_size = sizeof(u16);
-
-	return array_alloc(&interp->mem, &interp->labels, capacity) &&
-	       array_alloc(&interp->mem, &interp->num_labels, fns);
-
-}
-
-int interp_wasm_module(struct wasm_interp *interp, struct module *module)
-{
-	int ok, func, fns;
-
-	interp->module = module;
 	interp->ops = 0;
 
-	if (module->code_section.num_funcs == 0) {
+	if (interp->module->code_section.num_funcs == 0) {
 		interp_error(interp, "empty module");
 		return 0;
 	}
 
 	// reset cursors
-	interp->stack.p = interp->stack.start;
-	interp->errors.p = interp->errors.start;
-	interp->mem.p = interp->mem.start;
+	reset_cursor(&interp->stack);
+	reset_cursor(&interp->errors);
+	reset_cursor(&interp->locals);
+	reset_cursor(&interp->locals_offsets);
+	reset_cursor(&interp->callframes);
+	// don't reset labels for perf!
 
-	fns = functions_count(module);
+	//interp->mem.p = interp->mem.start;
 
-	ok =
-		cursor_slice(&interp->mem, &interp->locals,
-			     sizeof(struct val) * NUM_LOCALS) &&
-		cursor_slice(&interp->mem, &interp->locals_offsets, sizeof(int) * 255) &&
-		cursor_slice(&interp->mem, &interp->callframes, sizeof(struct callframe) * 255) &&
-		cursor_slice(&interp->mem, &interp->resolver_stack, sizeof(u32) * MAX_LABELS) &&
-		alloc_labels(interp, fns);
-
-	assert(ok);
-
-	func = find_start_function(module);
+	func = find_start_function(interp->module);
 	if (func == -1) {
 		interp_error(interp, "no start function found");
 		ok = 0;
@@ -2740,8 +2765,8 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 		return 0;
 	}
 
-	wasm_interp_init(&interp);
-	ok = interp_wasm_module(&interp, &p.module);
+	wasm_interp_init(&interp, &p.module);
+	ok = interp_wasm_module(&interp);
 	print_error_backtrace(&interp.errors);
 	printf("ops: %ld\nstack:\n", interp.ops);
 	print_stack(&interp.stack);

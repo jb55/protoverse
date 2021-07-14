@@ -6,6 +6,7 @@
 #include "varint.h"
 
 #include <stdio.h>
+#include <assert.h>
 #include <string.h>
 
 #define unlikely(x)     __builtin_expect((x),0)
@@ -20,6 +21,11 @@ struct array {
 	struct cursor cur;
 	unsigned int elem_size;
 };
+
+static inline void reset_cursor(struct cursor *cursor)
+{
+	cursor->p = cursor->start;
+}
 
 static inline void make_cursor(u8 *start, u8 *end, struct cursor *cursor)
 {
