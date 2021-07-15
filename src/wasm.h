@@ -84,6 +84,24 @@ struct tablesec {
 	int num_tables;
 };
 
+enum elem_mode {
+	elem_mode_passive,
+	elem_mode_active,
+	elem_mode_declarative,
+}
+
+struct elem {
+	enum elem_mode mode;
+	enum reftype reftype;
+	int tableidx;
+	struct expr offset;
+};
+
+struct elemsec {
+	struct elem *elems;
+	int num_elems;
+};
+
 struct memsec {
 	struct limits *mems; /* memtype */
 	int num_mems;

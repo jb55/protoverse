@@ -1204,6 +1204,16 @@ static int parse_global_section(struct wasm_parser *p,
 	return 1;
 }
 
+static int parse_element_section(struct wasm_parser *p, struct elemsec *elemsec)
+{
+	struct element *elements;
+	unsigned int count;
+
+	if (!parse_vector(p, sizeof(struct elem), &count, (void**)&elements)) {
+		return parse_err(p, "elements vec");
+	}
+}
+
 static int parse_memory_section(struct wasm_parser *p,
 		struct memsec *memory_section)
 {
@@ -1211,14 +1221,12 @@ static int parse_memory_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*mems), &elems, (void**)&mems)) {
-		parse_err(p, "mems vector");
-		return 0;
+		return parse_err(p, "mems vector");
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_limits(p, &mems[i])) {
-			parse_err(p, "memory #%d/%d", i+1, elems);
-			return 0;
+			return parse_err(p, "memory #%d/%d", i+1, elems);
 		}
 	}
 
@@ -1232,8 +1240,7 @@ static int parse_start_section(struct wasm_parser *p,
 		struct startsec *start_section)
 {
 	if (!leb128_read(&p->cur, (unsigned int*)&start_section->start_fn)) {
-		parse_err(p, "start_fn index");
-		return 0;
+		return parse_err(p, "start_fn index");
 	}
 
 	return 1;
@@ -1243,13 +1250,11 @@ static inline int parse_byte_vector(struct wasm_parser *p, unsigned char **data,
 		int *data_len)
 {
 	if (!leb128_read(&p->cur, (unsigned int*)data_len)) {
-		parse_err(p, "len");
-		return 0;
+		return parse_err(p, "len");
 	}
 
 	if (p->cur.p + *data_len > p->cur.end) {
-		parse_err(p, "byte vector overflow");
-		return 0;
+		return parse_err(p, "byte vector overflow");
 	}
 
 	*data = p->cur.p;
@@ -1263,14 +1268,12 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 	u8 tag;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		parse_err(p, "tag");
-		return 0;
+		return parse_err(p, "tag");
 	}
 
 	if (tag > 2) {
 		cursor_print_around(&p->cur, 10);
-		parse_err(p, "invalid datasegment tag: 0x%x", tag);
-		return 0;
+		return parse_err(p, "invalid datasegment tag: 0x%x", tag);
 	}
 
 	switch (tag) {
@@ -1279,13 +1282,11 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		data->active.mem_index = 0;
 
 		if (!parse_const_expr(p, &data->active.offset_expr)) {
-			parse_err(p, "const expr");
-			return 0;
+			return parse_err(p, "const expr");
 		}
 
 		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
-			parse_err(p, "bytes vector");
-			return 0;
+			return parse_err(p, "bytes vector");
 		}
 
 		break;
@@ -1294,8 +1295,7 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		data->mode = datamode_passive;
 
 		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
-			parse_err(p, "passive bytes vector");
-			return 0;
+			return parse_err(p, "passive bytes vector");
 		}
 
 		break;
@@ -1304,18 +1304,15 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		data->mode = datamode_active;
 
 		if (!leb128_read(&p->cur, (unsigned int*)&data->active.mem_index))  {
-			parse_err(p, "read active data mem_index");
-			return 0;
+			return parse_err(p, "read active data mem_index");
 		}
 
 		if (!parse_const_expr(p, &data->active.offset_expr)) {
-			parse_err(p, "read active data (w/ mem_index) offset_expr");
-			return 0;
+			return parse_err(p, "read active data (w/ mem_index) offset_expr");
 		}
 
 		if (!parse_byte_vector(p, &data->bytes, &data->bytes_len)) {
-			parse_err(p, "active (w/ mem_index) bytes vector");
-			return 0;
+			return parse_err(p, "active (w/ mem_index) bytes vector");
 		}
 
 		break;
@@ -1330,14 +1327,12 @@ static int parse_data_section(struct wasm_parser *p, struct datasec *section)
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*data), &elems, (void**)&data)) {
-		parse_err(p, "datas vector");
-		return 0;
+		return parse_err(p, "datas vector");
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_wdata(p, &data[i])) {
-			parse_err(p, "data segment #%d/%d", i+1, elems);
-			return 0;
+			return parse_err(p, "data segment #%d/%d", i+1, elems);
 		}
 	}
 

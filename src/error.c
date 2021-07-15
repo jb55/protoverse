@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-void note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...)
+int note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...)
 {
 	static char buf[512];
 	struct error err;
@@ -21,7 +21,8 @@ void note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...)
 		fprintf(stderr, "arena OOM when recording error, ");
 		fprintf(stderr, "errs->p at %ld, remaining %ld, strlen %ld\n",
 				errs->p - errs->start, errs->end - errs->p, strlen(buf));
-		return;
 	}
+
+	return 0;
 }
 

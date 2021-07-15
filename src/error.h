@@ -23,6 +23,6 @@ static inline int cursor_pull_error(struct cursor *cur, struct error *err)
 	       cursor_pull_c_str(cur, &err->msg);
 }
 
-void note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...);
+int note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...);
 
 #endif /* PROTOVERSE_ERROR_H */
