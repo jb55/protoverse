@@ -249,6 +249,9 @@ static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int le
 static inline int was_section_parsed(struct module *module,
 	enum section_tag section)
 {
+	if (section == section_custom)
+		return module->custom_sections > 0;
+
 	return module->parsed & (1 << section);
 }
 
@@ -496,6 +499,11 @@ static const char *get_function_name(struct module *module, int func_index)
 	return "unknown";
 }
 
+static void print_element_section(struct elemsec *section)
+{
+	printf("%d elements\n", section->num_elements);
+}
+
 static void print_start_section(struct module *module)
 {
 	int fn = module->start_section.start_fn;
@@ -553,11 +561,20 @@ static void print_data_section(struct datasec *section)
 	printf("%d data segments\n", section->num_datas);
 }
 
+static void print_custom_section(struct customsec *section)
+{
+	printf("custom (%s) %d bytes\n", section->name, section->data_len);
+}
+
 static void print_section(struct module *module, enum section_tag section)
 {
+	u32 i;
+
 	switch (section) {
 	case section_custom:
-		printf("TODO: print custom section\n");
+		for (i = 0; i < module->custom_sections; i++) {
+			print_custom_section(&module->custom_section[i]);
+		}
 		break;
 	case section_type:
 		print_type_section(&module->type_section);
@@ -584,7 +601,7 @@ static void print_section(struct module *module, enum section_tag section)
 		print_start_section(module);
 		break;
 	case section_element:
-		printf("TODO: print element section\n");
+		print_element_section(&module->element_section);
 		break;
 	case section_code:
 		print_code_section(&module->code_section);
@@ -951,7 +968,8 @@ static int parse_reftype(struct wasm_parser *p, enum reftype *reftype)
 	}
 
 	if (!is_valid_reftype(tag)) {
-		parse_err(p, "invalid reftype: 0x%x", reftype);
+		cursor_print_around(&p->cur, 10);
+		parse_err(p, "invalid reftype: 0x%02x", tag);
 		return 0;
 	}
 
@@ -1275,6 +1293,7 @@ static int parse_expr(struct wasm_parser *p, struct expr *expr)
 static int parse_element(struct wasm_parser *p, struct elem *elem)
 {
 	u8 tag = 0;
+	unsigned int i;
 	(void)elem;
 
 	if (!pull_byte(&p->cur, &tag))
@@ -1291,8 +1310,14 @@ static int parse_element(struct wasm_parser *p, struct elem *elem)
 		if (!parse_vector(p,
 				  sizeof(*elem->func_indices),
 				  &elem->num_func_indices,
-				  (void**)&elem->func_indices))
+				  (void**)&elem->func_indices)) {
 			return parse_err(p, "elem 0x00 func indices");
+		}
+
+		for (i = 0; i < elem->num_func_indices; i++) {
+			if (!leb128_read(&p->cur, &elem->func_indices[i]))
+				return parse_err(p, "func index %d read fail", i);
+		}
 
 		elem->mode = elem_mode_active;
 		elem->tableidx = 0;
@@ -1306,6 +1331,22 @@ static int parse_element(struct wasm_parser *p, struct elem *elem)
 	return 1;
 }
 
+static int parse_custom_section(struct wasm_parser *p, u32 size,
+		struct customsec *section)
+{
+	u8 *start;
+	start = p->cur.p;
+
+	if (!parse_name(p, &section->name))
+		return parse_err(p, "name");
+
+	section->data = p->cur.p;
+	section->data_len = size - (p->cur.p - start);
+	p->cur.p += section->data_len;
+	p->module.custom_sections++;
+
+	return 1;
+}
 
 static int parse_element_section(struct wasm_parser *p, struct elemsec *elemsec)
 {
@@ -1317,7 +1358,7 @@ static int parse_element_section(struct wasm_parser *p, struct elemsec *elemsec)
 
 	for (i = 0; i < count; i++) {
 		if (!parse_element(p, &elements[i]))
-			return parse_err(p, "element %d/%d", i+1, count);
+			return parse_err(p, "element %d of %d", i+1, count);
 	}
 
 	elemsec->num_elements = count;
@@ -1631,13 +1672,15 @@ static int parse_type_section(struct wasm_parser *p, struct typesec *typesec)
 }
 
 static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
-		unsigned int size)
+				u32 size)
 {
 	(void)size;
 	switch (tag) {
 	case section_custom:
-		parse_err(p, "section_custom parse not implemented");
-		return 0;
+		if (!parse_custom_section(p, size,
+			&p->module.custom_section[p->module.custom_sections]))
+			return parse_err(p, "custom section");
+		return 1;
 	case section_type:
 		if (!parse_type_section(p, &p->module.type_section)) {
 			return parse_err(p, "type section");
@@ -1680,7 +1723,10 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		return 1;
 
 	case section_element:
-		return parse_element_section(p, &p->module.element_section);
+		if (!parse_element_section(p, &p->module.element_section)) {
+			return parse_err(p, "element section");
+		}
+		return 1;
 
 	case section_code:
 		if (!parse_code_section(p, &p->module.code_section)) {
@@ -1763,6 +1809,7 @@ static int parse_section(struct wasm_parser *p)
 int parse_wasm(struct wasm_parser *p)
 {
 	p->module.parsed = 0;
+	p->module.custom_sections = 0;
 
 	if (!consume_bytes(&p->cur, WASM_MAGIC, sizeof(WASM_MAGIC))) {
 		parse_err(p, "magic");
@@ -1784,8 +1831,8 @@ int parse_wasm(struct wasm_parser *p)
 		}
 	}
 
-	debug("module parse success!\n\n");
 	print_module(&p->module);
+	debug("module parse success!\n\n");
 	return 1;
 
 fail:
@@ -2675,7 +2722,7 @@ static int find_start_function(struct module *module)
 		return module->start_section.start_fn;
 	}
 
-	return find_function(module, "start");
+	return find_function(module, "start") || find_function(module, "_start");
 }
 
 static inline int array_alloc(struct cursor *mem, struct array *a, int elems)

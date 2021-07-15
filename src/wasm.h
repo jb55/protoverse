@@ -98,10 +98,16 @@ struct expr {
 struct elem {
 	struct expr offset;
 	int tableidx;
-	int *func_indices;
+	unsigned int *func_indices;
 	unsigned int num_func_indices;
 	enum elem_mode mode;
 	enum reftype reftype;
+};
+
+struct customsec {
+	const char *name;
+	unsigned char *data;
+	int data_len;
 };
 
 struct elemsec {
@@ -413,6 +419,8 @@ struct startsec {
 
 struct module {
 	unsigned int parsed;
+	unsigned int custom_sections;
+	struct customsec custom_section[32];
 	struct typesec type_section;
 	struct funcsec func_section;
 	struct importsec import_section;
