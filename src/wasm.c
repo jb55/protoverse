@@ -2721,7 +2721,8 @@ static int find_start_function(struct module *module)
 	if (was_section_parsed(module, section_start))
 		return module->start_section.start_fn;
 
-	return find_function(module, "start") || find_function(module, "_start");
+	return find_function(module, "start") ||
+	       find_function(module, "_start");
 }
 
 static inline int array_alloc(struct cursor *mem, struct array *a, int elems)
