@@ -167,6 +167,7 @@ struct import {
 	const char *module_name;
 	const char *name;
 	struct importdesc desc;
+	int resolved_builtin;
 };
 
 struct importsec {
@@ -185,14 +186,27 @@ struct local {
 };
 
 /* "code" */
-struct func {
+struct wasm_func {
 	struct expr code;
 	struct local *locals;
 	int num_locals;
 };
 
+enum func_type {
+	func_type_wasm,
+	func_type_builtin,
+};
+
+struct func {
+	union {
+		struct wasm_func *wasm_func;
+		struct builtin *builtin;
+	};
+	enum func_type type;
+};
+
 struct codesec {
-	struct func *funcs;
+	struct wasm_func *funcs;
 	int num_funcs;
 };
 
@@ -421,6 +435,7 @@ struct startsec {
 struct module {
 	unsigned int parsed;
 	unsigned int custom_sections;
+
 	struct customsec custom_section[MAX_CUSTOM_SECTIONS];
 	struct typesec type_section;
 	struct funcsec func_section;
@@ -448,6 +463,7 @@ struct callframe {
 
 struct wasm_interp {
 	struct module *module;
+
 	struct cursor errors; /* struct error */
 	size_t ops;
 
@@ -464,6 +480,12 @@ struct wasm_interp {
 	// instruction is encountered, the label index is pushed. When an
 	// instruction is popped, we can resolve the label
 	struct cursor resolver_stack; /* u32 */
+};
+
+struct builtin {
+	const char *name;
+	int (*fn)(struct wasm_interp *);
+	int (*prepare_args)(struct wasm_interp *);
 };
 
 struct wasm_parser {

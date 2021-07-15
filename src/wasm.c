@@ -35,8 +35,6 @@ struct expr_parser {
 	struct cursor *errs;
 };
 
-static int parse_instr(struct expr_parser *parser, u8 tag, struct instr *op);
-
 static inline struct callframe *top_callframe(struct cursor *cur)
 {
 	if (cur->p <= cur->start) {
@@ -53,6 +51,19 @@ static inline struct cursor *interp_codeptr(struct wasm_interp *interp)
 		return 0;
 	return &frame->code;
 }
+
+static int builtin_get_args(struct wasm_interp *interp)
+{
+	return interp_error(interp, "run get_args");
+}
+
+static struct builtin BUILTINS[] = {
+	{ .name = "args_get", .fn = builtin_get_args },
+};
+
+static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
+
+static int parse_instr(struct expr_parser *parser, u8 tag, struct instr *op);
 
 static inline int is_valtype(unsigned char byte)
 {
@@ -323,29 +334,60 @@ void print_error_backtrace(struct cursor *errors)
 	}
 }
 
-static void print_functype(struct functype *ft)
+static int _functype_str(struct functype *ft, struct cursor *buf)
 {
 	int i;
 
-	printf("(");
+	if (!cursor_push_str(buf, "("))
+		return 0;
 
 	for (i = 0; i < ft->params.num_valtypes; i++) {
-		printf("%s", valtype_name(ft->params.valtypes[i]));
+		if (!cursor_push_str(buf, valtype_name(ft->params.valtypes[i])))
+			return 0;
+
 		if (i != ft->params.num_valtypes-1) {
-			printf(", ");
+			if (!cursor_push_str(buf, ", "))
+				return 0;
 		}
 	}
 
-	printf(") -> (");
+	if (!cursor_push_str(buf, ") -> ("))
+		return 0;
 
 	for (i = 0; i < ft->result.num_valtypes; i++) {
-		printf("%s", valtype_name(ft->result.valtypes[i]));
+		if (!cursor_push_str(buf, valtype_name(ft->result.valtypes[i])))
+			return 0;
+
 		if (i != ft->result.num_valtypes-1) {
-			printf(", ");
+			if (!cursor_push_str(buf, ", "))
+				return 0;
 		}
 	}
 
-	printf(")\n");
+	return cursor_push_c_str(buf, ")");
+}
+
+static const char *functype_str(struct functype *ft, struct cursor *buf)
+{
+	if (buf->start == buf->end)
+		return "";
+
+	if (!_functype_str(ft, buf)) {
+		if (buf->p == buf->start)
+			return "";
+		buf->p[-1] = 0;
+	}
+
+	return (const char*)buf->start;
+}
+
+static void print_functype(struct functype *ft)
+{
+	static unsigned char buf[0xFF];
+	struct cursor cur;
+	buf[0] = 0;
+	make_cursor(buf, buf + sizeof(buf), &cur);
+	printf("%s\n", functype_str(ft, &cur));
 }
 
 static void print_type_section(struct typesec *typesec)
@@ -528,7 +570,7 @@ static void print_local(struct local *local)
 	debug("%d %s\n", local->n, valtype_name(local->valtype));
 }
 
-static void print_func(struct func *func)
+static void print_func(struct wasm_func *func)
 {
 	int i;
 
@@ -882,7 +924,7 @@ static int parse_vector(struct wasm_parser *p, unsigned int item_size,
 	return 1;
 }
 
-static int parse_func(struct wasm_parser *p, struct func *func)
+static int parse_func(struct wasm_parser *p, struct wasm_func *func)
 {
 	unsigned int elems, size, i;
 	unsigned char *start;
@@ -928,7 +970,7 @@ static int parse_func(struct wasm_parser *p, struct func *func)
 static int parse_code_section(struct wasm_parser *p,
 		struct codesec *code_section)
 {
-	struct func *funcs;
+	struct wasm_func *funcs;
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*funcs), &elems, (void**)&funcs)) {
@@ -1578,6 +1620,7 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 			parse_err(p, "typeidx");
 			return 0;
 		}
+
 		return 1;
 
 	case import_table:
@@ -1604,21 +1647,35 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 	return 0;
 }
 
+static int find_builtin(const char *name)
+{
+	struct builtin *b;
+	u32 i;
+
+	for (i = 0; i < NUM_BUILTINS; i++) {
+		b = &BUILTINS[i];
+		if (!strcmp(b->name, name))
+			return i;
+	}
+	return -1;
+}
+
 static int parse_import(struct wasm_parser *p, struct import *import)
 {
-	if (!parse_name(p, &import->module_name)) {
-		parse_err(p, "module name");
-		return 0;
-	}
+	import->resolved_builtin = -1;
 
-	if (!parse_name(p, &import->name)) {
-		parse_err(p, "name");
-		return 0;
-	}
+	if (!parse_name(p, &import->module_name))
+		return parse_err(p, "module name");
 
-	if (!parse_importdesc(p, &import->desc)) {
-		parse_err(p, "desc");
-		return 0;
+	if (!parse_name(p, &import->name))
+		return parse_err(p, "name");
+
+	if (!parse_importdesc(p, &import->desc))
+		return parse_err(p, "desc");
+
+	if (import->desc.type == import_func) {
+		import->resolved_builtin =
+			find_builtin(import->name);
 	}
 
 	return 1;
@@ -2059,18 +2116,68 @@ static inline int functions_count(struct module *module)
 	return imports_count(module) + code_count(module);
 }
 
-static inline struct func *get_function(struct module *module, int ind)
+static struct builtin *builtin_func(int ind)
+{
+	if (ind < 0 || ind >= NUM_BUILTINS) {
+		printf("UNUSUAL: invalid builtin index %d (max %d)\n", ind,
+				NUM_BUILTINS-1);
+		return NULL;
+	}
+	return &BUILTINS[ind];
+}
+
+static int get_import_function(struct module *module, int ind, struct func *func)
+{
+	struct import *import;
+	int i, fn = 0;
+
+	if (ind >= module->import_section.num_imports)
+		return 0;
+
+	for (i = 0; i < module->import_section.num_imports; i++) {
+		import = &module->import_section.imports[i];
+
+		if (import->desc.type != import_func)
+			continue;
+
+		if (ind != fn++)
+			continue;
+
+		if (import->resolved_builtin != -1) {
+			/* builtin! */
+			func->type = func_type_builtin;
+			func->builtin = builtin_func(import->resolved_builtin);
+			if (func->builtin == NULL)
+				return 0;
+			return 1;
+		} else {
+			/* TODO: linked imports */
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+static inline void init_func(struct func *func)
+{
+	memset(func, 0, sizeof(*func));
+}
+
+static inline int get_function(struct module *module, int ind, struct func *func)
 {
 	if ((ind - imports_count(module)) < 0) {
-		// TODO imports
-		return NULL;
+		return get_import_function(module, ind, func);
 	}
 
 	if (ind >= module->code_section.num_funcs) {
-		return NULL;
+		return 0;
 	}
 
-	return &module->code_section.funcs[ind - imports_count(module)];
+	func->type = func_type_wasm;
+	func->wasm_func = &module->code_section.funcs[ind - imports_count(module)];
+
+	return 1;
 }
 
 static struct functype *get_function_type(struct wasm_interp *interp, int ind)
@@ -2111,75 +2218,112 @@ static struct functype *get_function_type(struct wasm_interp *interp, int ind)
 	return &interp->module->type_section.functypes[typeidx];
 }
 
+static inline int call_wasm_func(struct wasm_interp *interp, struct wasm_func *func, int fn)
+{
+	struct callframe callframe;
+
+	/* update current function and push it to the callframe as well */
+	make_cursor(func->code.code, func->code.code + func->code.code_len, &callframe.code);
+	callframe.fn = fn;
+
+	if (!cursor_push_callframe(&interp->callframes, &callframe))
+		return interp_error(interp, "oob cursor_pushcode");
+
+	return 1;
+}
+
+static inline int call_builtin_func(struct wasm_interp *interp, struct builtin *func)
+{
+	return interp_error(interp, "call builtin %s", func->name);
+}
+
+static inline int call_func(struct wasm_interp *interp, struct func *func, int fn)
+{
+	switch (func->type) {
+	case func_type_wasm:
+		return call_wasm_func(interp, func->wasm_func, fn);
+	case func_type_builtin:
+		return call_builtin_func(interp, func->builtin);
+	}
+	interp_error(interp, "corrupt func type: %02x", func->type);
+	return 0;
+}
+
+static inline int prepare_builtin(struct wasm_interp *interp, struct builtin *func)
+{
+	return func->prepare_args(interp);
+}
+
 static int prepare_call(struct wasm_interp *interp, int func_index)
 {
+	static u8 tmp[0xFF];
 	int i;
+	struct cursor buf;
 	struct functype *functype;
-	struct func *func;
+	struct func func;
 	struct val val;
-	struct callframe callframe;
 	enum valtype paramtype;
 	unsigned int offset;
 
 	debug("calling %s (%d)\n", get_function_name(interp->module, func_index), func_index);
 
-	if (!(func = get_function(interp->module, func_index))) {
-		interp_error(interp, "function %s (%d) not found (%d funcs)",
+	if (!get_function(interp->module, func_index, &func)) {
+		return interp_error(interp,
+				"function %s (%d) not found (%d funcs)",
 				get_function_name(interp->module, func_index),
 				func_index,
 				interp->module->code_section.num_funcs);
-		return 0;
 	}
 
 	/* record locals offset for indexing locals in the next function */
 	offset = cursor_count(&interp->locals, sizeof(struct val));
-	if (!cursor_push_int(&interp->locals_offsets, offset)) {
-		interp_error(interp, "push locals offset");
-		return 0;
-	}
+	if (!cursor_push_int(&interp->locals_offsets, offset))
+		return interp_error(interp, "push locals offset");
 
 	/* get type signature to know how many locals to push as params */
 	if (!(functype = get_function_type(interp, func_index))) {
-		interp_error(interp, "couldn't get function type for function '%s' (%d)",
-				get_function_name(interp->module, func_index), func_index);
-		return 0;
+		return interp_error(interp,
+			"couldn't get function type for function '%s' (%d)",
+			get_function_name(interp->module, func_index),
+			func_index);
 	}
 
+	/*
+	if (func->type == func_type_builtin && !func.builtin.prepare_args(interp)) {
+		return interp_error(interp, "prepare '%s' builtin",
+				func->builtin.name);
+	}
+	*/
 
 	/* push params as locals */
 	for (i = 0; i < functype->params.num_valtypes; i++) {
 		paramtype = (enum valtype)functype->params.valtypes[i];
 
 		if (!cursor_popval(&interp->stack, &val)) {
-			interp_error(interp, "not enough arguments for call");
-			return 0;
+			make_cursor(tmp, tmp + sizeof(tmp), &buf);
+
+			return interp_error(interp,
+				"not enough arguments for call to %s: [%s], needed %d args, got %d",
+				get_function_name(interp->module, func_index),
+				functype_str(functype, &buf),
+				functype->params.num_valtypes,
+				i);
 		}
 
 		if (val.type != paramtype) {
-			interp_error(interp,
+			return interp_error(interp,
 				"call parameter %d type mismatch. got %s, expected %s",
 				i+1,
 				valtype_name(val.type),
 				valtype_name(paramtype));
-			return 0;
 		}
 
 		if (!cursor_pushval(&interp->locals, &val)) {
-			interp_error(interp, "push param local");
-			return 0;
+			return interp_error(interp, "push param local");
 		}
 	}
 
-	/* update current function and push it to the callframe as well */
-	make_cursor(func->code.code, func->code.code + func->code.code_len, &callframe.code);
-	callframe.fn = func_index;
-
-	if (!cursor_push_callframe(&interp->callframes, &callframe)) {
-		interp_error(interp, "oob cursor_pushcode");
-		return 0;
-	}
-
-	return 1;
+	return call_func(interp, &func, func_index);
 }
 
 int interp_code(struct wasm_interp *interp);
