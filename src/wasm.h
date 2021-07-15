@@ -7,6 +7,7 @@ static const unsigned char WASM_MAGIC[] = {0,'a','s','m'};
 #define WASM_VERSION 0x01
 #define MAX_U32_LEB128_BYTES 5
 #define MAX_U64_LEB128_BYTES 10
+#define MAX_CUSTOM_SECTIONS 32
 
 #define FUNC_TYPE_TAG 0x60
 
@@ -420,7 +421,7 @@ struct startsec {
 struct module {
 	unsigned int parsed;
 	unsigned int custom_sections;
-	struct customsec custom_section[32];
+	struct customsec custom_section[MAX_CUSTOM_SECTIONS];
 	struct typesec type_section;
 	struct funcsec func_section;
 	struct importsec import_section;

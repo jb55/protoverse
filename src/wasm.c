@@ -1337,6 +1337,9 @@ static int parse_custom_section(struct wasm_parser *p, u32 size,
 	u8 *start;
 	start = p->cur.p;
 
+	if (p->module.custom_sections + 1 > MAX_CUSTOM_SECTIONS)
+		return parse_err(p, "more than 32 custom sections!");
+
 	if (!parse_name(p, &section->name))
 		return parse_err(p, "name");
 
