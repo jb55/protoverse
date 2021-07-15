@@ -88,18 +88,25 @@ enum elem_mode {
 	elem_mode_passive,
 	elem_mode_active,
 	elem_mode_declarative,
-}
+};
+
+struct expr {
+	unsigned char *code;
+	int code_len;
+};
 
 struct elem {
+	struct expr offset;
+	int tableidx;
+	int *func_indices;
+	unsigned int num_func_indices;
 	enum elem_mode mode;
 	enum reftype reftype;
-	int tableidx;
-	struct expr offset;
 };
 
 struct elemsec {
-	struct elem *elems;
-	int num_elems;
+	struct elem *elements;
+	int num_elements;
 };
 
 struct memsec {
@@ -158,11 +165,6 @@ struct import {
 struct importsec {
 	struct import *imports;
 	int num_imports;
-};
-
-struct expr {
-	unsigned char *code;
-	int code_len;
 };
 
 struct global {
@@ -420,6 +422,7 @@ struct module {
 	struct memsec memory_section;
 	struct globalsec global_section;
 	struct startsec start_section;
+	struct elemsec element_section;
 	struct datasec data_section;
 };
 

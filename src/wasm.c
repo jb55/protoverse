@@ -29,6 +29,14 @@ struct val {
 	};
 };
 
+struct expr_parser {
+	struct wasm_interp *interp; // optional...
+	struct cursor *code;
+	struct cursor *errs;
+};
+
+static int parse_instr(struct expr_parser *parser, u8 tag, struct instr *op);
+
 static inline struct callframe *top_callframe(struct cursor *cur)
 {
 	if (cur->p <= cur->start) {
@@ -1204,14 +1212,118 @@ static int parse_global_section(struct wasm_parser *p,
 	return 1;
 }
 
+static inline void make_interp_expr_parser(struct wasm_interp *interp,
+		struct expr_parser *p)
+{
+	assert(interp);
+
+	p->interp = interp;
+	p->code = interp_codeptr(interp);
+	p->errs = &interp->errors;
+
+	assert(p->code);
+}
+
+static inline void make_expr_parser(struct cursor *errs, struct cursor *code,
+		struct expr_parser *p)
+{
+	p->interp = NULL;
+	p->code = code;
+	p->errs = errs;
+}
+
+static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
+               struct cursor *parsed_instrs)
+{
+       u8 tag;
+       struct instr op;
+
+       parsed_instrs->start = p->code->p;
+       parsed_instrs->p = p->code->p;
+
+       for (;;) {
+               if (!pull_byte(p->code, &tag))
+                       return note_error(p->errs, p->code, "oob");
+
+               if (!parse_instr(p, tag, &op))
+                       return note_error(p->errs, p->code,
+				  "parse %s instr (0x%x)", instr_name(tag), tag);
+
+               if (tag == stop_instr) {
+                       parsed_instrs->end = p->code->p;
+                       return 1;
+               }
+       }
+}
+
+static int parse_expr(struct wasm_parser *p, struct expr *expr)
+{
+	struct expr_parser parser;
+	struct cursor code;
+
+	make_expr_parser(&p->errs, &p->cur, &parser);
+
+	if (!parse_instrs_until(&parser, i_end, &code))
+		return parse_err(p, "instrs");
+
+	expr->code = code.start;
+	expr->code_len = code.end - code.start;
+
+	return 1;
+}
+
+static int parse_element(struct wasm_parser *p, struct elem *elem)
+{
+	u8 tag = 0;
+	(void)elem;
+
+	if (!pull_byte(&p->cur, &tag))
+		return parse_err(p, "tag");
+
+	if (tag > 7)
+		return parse_err(p, "expected tag 0x00 to 0x07, got 0x%02x", tag);
+
+	switch (tag) {
+	case 0x00:
+		if (!parse_expr(p, &elem->offset))
+			return parse_err(p, "elem 0x00 offset expr");
+
+		if (!parse_vector(p,
+				  sizeof(*elem->func_indices),
+				  &elem->num_func_indices,
+				  (void**)&elem->func_indices))
+			return parse_err(p, "elem 0x00 func indices");
+
+		elem->mode = elem_mode_active;
+		elem->tableidx = 0;
+		elem->reftype = funcref;
+		break;
+
+	default:
+		return parse_err(p, "implement parse element 0x%02x", tag);
+	}
+
+	return 1;
+}
+
+
 static int parse_element_section(struct wasm_parser *p, struct elemsec *elemsec)
 {
-	struct element *elements;
-	unsigned int count;
+	struct elem *elements;
+	unsigned int count, i;
 
-	if (!parse_vector(p, sizeof(struct elem), &count, (void**)&elements)) {
+	if (!parse_vector(p, sizeof(struct elem), &count, (void**)&elements))
 		return parse_err(p, "elements vec");
+
+	for (i = 0; i < count; i++) {
+		if (!parse_element(p, &elements[i]))
+			return parse_err(p, "element %d/%d", i+1, count);
 	}
+
+	elemsec->num_elements = count;
+	elemsec->elements = elements;
+
+	return 1;
 }
 
 static int parse_memory_section(struct wasm_parser *p,
@@ -1528,70 +1640,62 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		return 0;
 	case section_type:
 		if (!parse_type_section(p, &p->module.type_section)) {
-			parse_err(p, "type section");
-			return 0;
+			return parse_err(p, "type section");
 		}
 		return 1;
 	case section_import:
 		if (!parse_import_section(p, &p->module.import_section)) {
-			parse_err(p, "import section");
-			return 0;
+			return parse_err(p, "import section");
 		}
 		return 1;
 	case section_function:
 		if (!parse_function_section(p, &p->module.func_section)) {
-			parse_err(p, "function section");
-			return 0;
+			return parse_err(p, "function section");
 		}
 		return 1;
 	case section_table:
 		if (!parse_table_section(p, &p->module.table_section)) {
-			parse_err(p, "table section");
-			return 0;
+			return parse_err(p, "table section");
 		}
 		return 1;
 	case section_memory:
 		if (!parse_memory_section(p, &p->module.memory_section)) {
-			parse_err(p, "memory section");
-			return 0;
+			return parse_err(p, "memory section");
 		}
 		return 1;
 	case section_global:
 		if (!parse_global_section(p, &p->module.global_section)) {
-			parse_err(p, "global section");
-			return 0;
+			return parse_err(p, "global section");
 		}
 		return 1;
 	case section_export:
 		if (!parse_export_section(p, &p->module.export_section)) {
-			parse_err(p, "export section");
-			return 0;
+			return parse_err(p, "export section");
 		}
 		return 1;
 	case section_start:
 		if (!parse_start_section(p, &p->module.start_section)) {
-			parse_err(p, "start section");
-			return 0;
+			return parse_err(p, "start section");
 		}
 		return 1;
+
 	case section_element:
-		parse_err(p, "section_element parse not implemented");
-		return 0;
+		return parse_element_section(p, &p->module.element_section);
+
 	case section_code:
 		if (!parse_code_section(p, &p->module.code_section)) {
-			parse_err(p, "code section");
-			return 0;
+			return parse_err(p, "code section");
 		}
 		return 1;
+
 	case section_data:
 		if (!parse_data_section(p, &p->module.data_section)) {
-			parse_err(p, "data section");
-			return 0;
+			return parse_err(p, "data section");
 		}
 		return 1;
+
 	default:
-		parse_err(p, "invalid section tag");
-		return 0;
+		return parse_err(p, "invalid section tag");
 	}
 
 	return 1;
@@ -2128,43 +2232,6 @@ static int resolve_label(struct wasm_interp *interp)
 	return 1;
 }
 
-static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op);
-
-//
-// consume instructions to resolve labels
-static int parse_instrs_until(struct wasm_interp *interp, u8 stop_instr,
-		struct cursor *parsed_instrs)
-{
-	u8 tag;
-	struct instr op;
-	struct cursor *code;
-
-	if (!(code = interp_codeptr(interp))) {
-		interp_error(interp, "codeptr");
-		return 0;
-	}
-
-	parsed_instrs->start = code->p;
-	parsed_instrs->p = code->p;
-
-	for (;;) {
-		if (!pull_byte(code, &tag)) {
-			interp_error(interp, "oob");
-			return 0;
-		}
-
-		if (!parse_instr(interp, tag, &op)) {
-			interp_error(interp, "parse %s instr (0x%x)", instr_name(tag), tag);
-			return 0;
-		}
-
-		if (tag == stop_instr) {
-			parsed_instrs->end = code->p;
-			return 1;
-		}
-	}
-}
-
 static inline u16 *func_num_labels(struct wasm_interp *interp, int fn)
 {
 	u16 *num = (u16*)array_index(&interp->num_labels, fn);
@@ -2289,33 +2356,25 @@ static int label_checkpoint(struct wasm_interp *interp, int *jumped)
 	return 1;
 }
 
-
-static int parse_block(struct wasm_interp *interp, struct block *block, u8 end_tag)
+static int parse_block(struct expr_parser *p, struct block *block, u8 end_tag)
 {
-	struct cursor *code;
 	int jumped;
 
-	if (!(code = interp_codeptr(interp))) {
-		interp_error(interp, "codeptr");
-		return 0;
-	}
+	if (!parse_blocktype(p->code, p->errs, &block->type))
+		return note_error(p->errs, p->code, "blocktype");
 
-	if (!parse_blocktype(code, &interp->errors, &block->type)) {
-		interp_error(interp, "blocktype");
-		return 0;
-	}
+	// if we don't have an interpreter instance, we don't care about
+	// label resolution
+	if (p->interp && !label_checkpoint(p->interp, &jumped))
+		return note_error(p->errs, p->code, "checkpoint");
 
-	if (!label_checkpoint(interp, &jumped)) {
-		interp_error(interp, "checkpoint");
-		return 0;
-	}
+	if (!parse_instrs_until(p, end_tag, &block->instrs))
+		return note_error(p->errs, p->code, "parse instrs");
 
-	if (!parse_instrs_until(interp, end_tag, &block->instrs)) {
-		interp_error(interp, "checkpoint");
-		return 0;
-	}
+	if (p->interp)
+		return resolve_label(p->interp);
 
-	return resolve_label(interp);
+	return 1;
 }
 
 static inline int parse_memarg(struct cursor *code, struct memarg *memarg)
@@ -2325,32 +2384,25 @@ static inline int parse_memarg(struct cursor *code, struct memarg *memarg)
 }
 
 
-static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
+static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 {
-	struct cursor *code;
-
-	if (!(code = interp_codeptr(interp))) {
-		interp_error(interp, "codeptr");
-		return 0;
-	}
-
-	debug("%04lX parsing instr %s (0x%02x)\n", code->p - 1 - code->start,
-			instr_name(tag), tag);
+	debug("%04lX parsing instr %s (0x%02x)\n",
+		p->code->p - 1 - p->code->start, instr_name(tag), tag);
 
 	switch (tag) {
 		// two-byte instrs
 		case i_memory_size:
 		case i_memory_grow:
-			return pull_byte(code, &op->memidx);
+			return pull_byte(p->code, &op->memidx);
 
 		case i_block:
 		case i_loop:
 		case i_if:
-			return parse_block(interp, &op->blocks[0], i_end);
+			return parse_block(p, &op->blocks[0], i_end);
 
 		case i_else:
-			return parse_block(interp, &op->blocks[0], i_else) &&
-			       parse_block(interp, &op->blocks[1], i_end);
+			return parse_block(p, &op->blocks[0], i_else) &&
+			       parse_block(p, &op->blocks[1], i_end);
 
 		case i_end:
 			return 1;
@@ -2361,7 +2413,7 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 		case i_local_tee:
 		case i_global_get:
 		case i_global_set:
-			return leb128_read(code, &op->integer);
+			return leb128_read(p->code, &op->integer);
 
 		case i_i32_load:
 		case i_i64_load:
@@ -2386,23 +2438,21 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 		case i_i64_store8:
 		case i_i64_store16:
 		case i_i64_store32:
-			return parse_memarg(code, &op->memarg);
+			return parse_memarg(p->code, &op->memarg);
 
 		case i_br:
 		case i_br_if:
 		case i_br_table:
 		case i_call_indirect:
-			interp_error(interp, "consume dynamic-size op");
-			return 0;
+			return note_error(p->errs, p->code, "consume dynamic-size op");
 
 		case i_i32_const:
 		case i_i64_const:
-			return leb128_read(code, &op->integer);
+			return leb128_read(p->code, &op->integer);
 
 		case i_f32_const:
 		case i_f64_const:
-			interp_error(interp, "parse float const");
-			return 0;
+			return note_error(p->errs, p->code, "parse float const");
 
 		// single-tag ops
 		case i_unreachable:
@@ -2481,13 +2531,13 @@ static int parse_instr(struct wasm_interp *interp, u8 tag, struct instr *op)
 			return 1;
 	}
 
-	interp_error(interp, "unhandled tag: 0x%x", tag);
-	return 0;
+	return note_error(p->errs, p->code, "unhandled tag: 0x%x", tag);
 }
 
 static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 {
 	struct cursor instrs;
+	struct expr_parser parser;
 	int jumped;
 
 	if (!label_checkpoint(interp, &jumped)) {
@@ -2499,8 +2549,10 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 		return 1;
 	}
 
+	make_interp_expr_parser(interp, &parser);
+
 	// consume instructions, use resolver stack to resolve jumps
-	if (!parse_instrs_until(interp, end_tag, &instrs)) {
+	if (!parse_instrs_until(&parser, end_tag, &instrs)) {
 		interp_error(interp, "parse instrs");
 		return 0;
 	}
