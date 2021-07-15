@@ -52,13 +52,107 @@ static inline struct cursor *interp_codeptr(struct wasm_interp *interp)
 	return &frame->code;
 }
 
+static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
+{
+	if (cur->p - len < cur->start)
+		return 0;
+
+	cur->p -= len;
+
+	if (dest)
+		memcpy(dest, cur->p, len);
+
+	return 1;
+}
+
+static inline int cursor_popval(struct cursor *cur, struct val *val)
+{
+	return cursor_popdata(cur, (unsigned char*)val, sizeof(*val));
+}
+
+static const char *valtype_name(enum valtype valtype)
+{
+	switch (valtype) {
+	case i32: return "i32";
+	case i64: return "i64";
+	case f32: return "f32";
+	case f64: return "f64";
+	}
+
+	return "unk";
+}
+
+static inline int offset_stack_top(struct cursor *cur)
+{
+	int *p = (int*)cur->p;
+
+	if (cur->p == cur->start) {
+		return 0;
+	}
+
+	return *(p - sizeof(*p));
+}
+
+static inline struct val *get_local(struct wasm_interp *interp, int ind)
+{
+	struct val *p;
+	int offset = offset_stack_top(&interp->locals_offsets);
+
+	if (!(p = index_cursor(&interp->locals, offset + ind, sizeof(struct val)))) {
+		interp_error(interp, "%d local oob %d > %ld", ind, offset + ind,
+				interp->locals.end - interp->locals.start);
+		return NULL;
+	}
+	return p;
+}
+
+static inline int stack_pop_i32(struct wasm_interp *interp, int *i)
+{
+	struct val val;
+	if (!cursor_popval(&interp->stack, &val))
+		return interp_error(interp, "couldn't pop val");
+	if (val.type != i32) {
+		return interp_error(interp, "popped type %s instead of i32",
+				valtype_name(val.type));
+	}
+	*i = val.i32;
+	return 1;
+}
+
 static int builtin_get_args(struct wasm_interp *interp)
 {
-	return interp_error(interp, "run get_args");
+	struct val *argv, *argv_buf;
+
+	if (!(argv = get_local(interp, 0)))
+		return interp_error(interp, "argv");
+
+	if (!(argv_buf = get_local(interp, 1)))
+		return interp_error(interp, "argv_buf");
+
+	return 1;
+}
+
+static inline int cursor_pushval(struct cursor *cur, struct val *val)
+{
+	return cursor_push(cur, (u8*)val, sizeof(*val));
+}
+
+static inline int stack_push_i32(struct wasm_interp *interp, int i)
+{
+	struct val val;
+	val.type = i32;
+	val.i32 = i;
+
+	return cursor_pushval(&interp->stack, &val);
+}
+
+static int builtin_get_args_prep(struct wasm_interp *interp)
+{
+	return stack_push_i32(interp, 1) && stack_push_i32(interp, 2);
 }
 
 static struct builtin BUILTINS[] = {
-	{ .name = "args_get", .fn = builtin_get_args },
+	{ .name = "args_get", .fn = builtin_get_args, .prepare_args = builtin_get_args_prep },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -92,18 +186,6 @@ static int sizeof_valtype(enum valtype valtype)
 	return 0;
 }
 */
-
-static const char *valtype_name(enum valtype valtype)
-{
-	switch (valtype) {
-	case i32: return "i32";
-	case i64: return "i64";
-	case f32: return "f32";
-	case f64: return "f64";
-	}
-
-	return "unk";
-}
 
 static char *instr_name(enum instr_tag tag)
 {
@@ -244,19 +326,6 @@ static void print_val(struct val *val)
 	printf(":%s\n", valtype_name(val->type));
 }
 
-static inline int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
-{
-	if (cur->p - len < cur->start)
-		return 0;
-
-	cur->p -= len;
-
-	if (dest)
-		memcpy(dest, cur->p, len);
-
-	return 1;
-}
-
 static inline int was_section_parsed(struct module *module,
 	enum section_tag section)
 {
@@ -264,11 +333,6 @@ static inline int was_section_parsed(struct module *module,
 		return module->custom_sections > 0;
 
 	return module->parsed & (1 << section);
-}
-
-static inline int cursor_popval(struct cursor *cur, struct val *val)
-{
-	return cursor_popdata(cur, (unsigned char*)val, sizeof(*val));
 }
 
 static void print_stack(struct cursor *stack)
@@ -286,11 +350,6 @@ static void print_stack(struct cursor *stack)
 	stack->p = p;
 }
 
-static inline int cursor_pushval(struct cursor *cur, struct val *val)
-{
-	return cursor_push(cur, (u8*)val, sizeof(*val));
-}
-
 static inline int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
 {
 	return cursor_push(cur, (u8*)frame, sizeof(*frame));
@@ -306,16 +365,6 @@ static inline int cursor_popint(struct cursor *cur, int *i)
 	return cursor_popdata(cur, (unsigned char *)i, sizeof(int));
 }
 
-static inline int offset_stack_top(struct cursor *cur)
-{
-	int *p = (int*)cur->p;
-
-	if (cur->p == cur->start) {
-		return 0;
-	}
-
-	return *(p - sizeof(*p));
-}
 
 void print_error_backtrace(struct cursor *errors)
 {
@@ -1909,19 +1958,16 @@ static int interp_prep_binop(struct wasm_interp *interp, struct val *a,
 	c->type = typ;
 
 	if (!cursor_popval(&interp->stack, a)) {
-		interp_error(interp, "couldn't pop first val");
-		return 0;
+		return interp_error(interp, "couldn't pop first val");
 	}
 
 	if (!cursor_popval(&interp->stack, b)) {
-		interp_error(interp, "couldn't pop second val");
-		return 0;
+		return interp_error(interp, "couldn't pop second val");
 	}
 
 	if (a->type != typ || b->type != typ) {
-	        interp_error(interp, "type mismatch, %s != %s",
+	        return interp_error(interp, "type mismatch, %s != %s",
 			valtype_name(a->type), valtype_name(b->type));
-	        return 0;
 	}
 
 	return 1;
@@ -1953,19 +1999,6 @@ static int interp_i32_sub(struct wasm_interp *interp)
 	c.i32 = a.i32 - b.i32;
 
 	return cursor_pushval(&interp->stack, &c);
-}
-
-static inline struct val *get_local(struct wasm_interp *interp, int ind)
-{
-	struct val *p;
-	int offset = offset_stack_top(&interp->locals_offsets);
-
-	if (!(p = index_cursor(&interp->locals, offset + ind, sizeof(struct val)))) {
-		interp_error(interp, "%d local oob %d > %ld", ind, offset + ind,
-				interp->locals.end - interp->locals.start);
-		return NULL;
-	}
-	return p;
 }
 
 static inline int count_locals(struct wasm_interp *interp)
@@ -2129,34 +2162,16 @@ static struct builtin *builtin_func(int ind)
 static int get_import_function(struct module *module, int ind, struct func *func)
 {
 	struct import *import;
-	int i, fn = 0;
 
-	if (ind >= module->import_section.num_imports)
+	import = find_function_import(&module->import_section, ind);
+
+	if (import->resolved_builtin == -1)
 		return 0;
 
-	for (i = 0; i < module->import_section.num_imports; i++) {
-		import = &module->import_section.imports[i];
+	func->type = func_type_builtin;
+	func->builtin = builtin_func(import->resolved_builtin);
 
-		if (import->desc.type != import_func)
-			continue;
-
-		if (ind != fn++)
-			continue;
-
-		if (import->resolved_builtin != -1) {
-			/* builtin! */
-			func->type = func_type_builtin;
-			func->builtin = builtin_func(import->resolved_builtin);
-			if (func->builtin == NULL)
-				return 0;
-			return 1;
-		} else {
-			/* TODO: linked imports */
-			return 0;
-		}
-	}
-
-	return 0;
+	return func->builtin != NULL;
 }
 
 static inline void init_func(struct func *func)
@@ -2232,26 +2247,16 @@ static inline int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 	return 1;
 }
 
-static inline int call_builtin_func(struct wasm_interp *interp, struct builtin *func)
-{
-	return interp_error(interp, "call builtin %s", func->name);
-}
-
 static inline int call_func(struct wasm_interp *interp, struct func *func, int fn)
 {
 	switch (func->type) {
 	case func_type_wasm:
 		return call_wasm_func(interp, func->wasm_func, fn);
 	case func_type_builtin:
-		return call_builtin_func(interp, func->builtin);
+		return func->builtin->fn(interp);
 	}
 	interp_error(interp, "corrupt func type: %02x", func->type);
 	return 0;
-}
-
-static inline int prepare_builtin(struct wasm_interp *interp, struct builtin *func)
-{
-	return func->prepare_args(interp);
 }
 
 static int prepare_call(struct wasm_interp *interp, int func_index)
@@ -2289,9 +2294,9 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	}
 
 	/*
-	if (func->type == func_type_builtin && !func.builtin.prepare_args(interp)) {
+	if (func.type == func_type_builtin && !func.builtin->prepare_args(interp)) {
 		return interp_error(interp, "prepare '%s' builtin",
-				func->builtin.name);
+				func.builtin->name);
 	}
 	*/
 
@@ -2323,7 +2328,11 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 		}
 	}
 
-	return call_func(interp, &func, func_index);
+	if (!call_func(interp, &func, func_index)) {
+		return interp_error(interp, "call func");
+	}
+
+	return 1;
 }
 
 int interp_code(struct wasm_interp *interp);
@@ -2332,6 +2341,7 @@ static int interp_call(struct wasm_interp *interp)
 {
 	unsigned int func_index;
 	struct cursor *code;
+	struct callframe frame;
 
 	if (!(code = interp_codeptr(interp))) {
 		interp_error(interp, "codeptr");
@@ -2349,7 +2359,15 @@ static int interp_call(struct wasm_interp *interp)
 	}
 
 	/* call the function! */
-	return interp_code(interp);
+	if (!interp_code(interp)) {
+		return interp_error(interp, "call %s",
+				get_function_name(interp->module, func_index));
+	}
+
+	if (!cursor_pop_callframe(&interp->callframes, &frame))
+		return interp_error(interp, "pop callframe");
+
+	return 1;
 }
 
 
@@ -2390,9 +2408,22 @@ static inline u32 label_instr_pos(struct label *label)
 	return label->instr_pos & 0x7FFFFFFF;
 }
 
-static inline int label_is_resolved(struct label *label)
+static inline int is_label_resolved(struct label *label)
 {
 	return label->instr_pos & 0x80000000;
+}
+
+static struct label *index_frame_label(struct wasm_interp *interp, int ind)
+{
+	struct callframe *frame;
+
+	frame = top_callframe(&interp->callframes);
+	if (!frame) {
+		interp_error(interp, "no callframe?");
+		return NULL;
+	}
+
+	return index_label(&interp->labels, frame->fn, ind);
 }
 
 static int resolve_label(struct wasm_interp *interp)
@@ -2406,14 +2437,13 @@ static int resolve_label(struct wasm_interp *interp)
 		return 0;
 	}
 
-	frame = top_callframe(&interp->callframes);
-	assert(frame);
+	if (!(frame = top_callframe(&interp->callframes)))
+		return interp_error(interp, "no callframe?");
 
-	label = index_label(&interp->labels, frame->fn, label_ind);
-	assert(label);
+	if (!(label = index_label(&interp->labels, frame->fn, label_ind)))
+		return interp_error(interp, "index label");
 
-	if (label_is_resolved(label)) {
-		debug("label %d is already resolved\n", label_ind);
+	if (is_label_resolved(label)) {
 		return 1;
 	}
 
@@ -2440,8 +2470,8 @@ static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
 	struct label *label;
 
 	num_labels = func_num_labels(interp, fn);
-	label = index_label(&interp->labels, fn, 0);
-	assert(label);
+	if (!(label = index_label(&interp->labels, fn, 0)))
+		return interp_error(interp, "index label");
 
 	for (i = 0; i < *num_labels; label++) {
 		assert((u8*)label < interp->labels.cur.end);
@@ -2483,8 +2513,8 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 	      *num_labels, get_function_name(interp->module, fn));
 
 	*ind = *num_labels;
-	label = index_label(&interp->labels, fn, *ind);
-	assert(label);
+	if (!(label = index_label(&interp->labels, fn, *ind)))
+		return interp_error(interp, "index label");
 
 	set_label_pos(label, instr_pos);
 	*num_labels = *num_labels + 1;
@@ -2495,56 +2525,36 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 
 // when we encounter a control instruction, try to resolve the label, otherwise
 // push the label index to the resolver stack for resolution later
-static int label_checkpoint(struct wasm_interp *interp, int *jumped)
+static int label_checkpoint(struct wasm_interp *interp, struct label **label)
 {
 	u32 instr_pos;
 	int ind;
 
 	int fns;
-	struct label *label;
 	struct callframe *frame;
 
-	*jumped = 0;
+	*label = NULL;
 
 	fns = functions_count(interp->module);
 	frame = top_callframe(&interp->callframes);
 
 	if (!frame) {
-		interp_error(interp, "no callframes available?");
-		return 0;
+		return interp_error(interp, "no callframes available?");
 	} else if (frame->fn >= fns) {
-		interp_error(interp, "invalid fn index?");
-		return 0;
+		return interp_error(interp, "invalid fn index?");
 	}
 
 	instr_pos = frame->code.p - frame->code.start;
 	if (!upsert_label(interp, frame->fn, instr_pos, &ind)) {
-		interp_error(interp, "upsert label");
-		return 0;
+		return interp_error(interp, "upsert label");
 	}
 
-	if (!(label = index_label(&interp->labels, frame->fn, ind))) {
-		interp_error(interp, "couldn't index label");
-		return 0;
+	if (!(*label = index_label(&interp->labels, frame->fn, ind))) {
+		return interp_error(interp, "couldn't index label");
 	}
 
-	// should this be done in branch_jump instead?
-	if (label_is_resolved(label)) {
-		frame->code.p = frame->code.start + label->jump;
-		debug("label is resolved, jumping to %04lX\n",
-				frame->code.p - frame->code.start);
-		if (frame->code.p >= frame->code.end) {
-			interp_error(interp, "code pointer at or past end, evil jump?");
-			return 0;
-		}
-		*jumped = 1;
-		return 1;
-	}
-
-	debug("pushing %d to resolver stack\n", ind);
 	if (!cursor_push_u16(&interp->resolver_stack, ind)) {
-		interp_error(interp, "push label index to resolver stack oob");
-		return 0;
+		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
 	return 1;
@@ -2552,15 +2562,23 @@ static int label_checkpoint(struct wasm_interp *interp, int *jumped)
 
 static int parse_block(struct expr_parser *p, struct block *block, u8 end_tag)
 {
-	int jumped;
+	struct label *label;
 
 	if (!parse_blocktype(p->code, p->errs, &block->type))
 		return note_error(p->errs, p->code, "blocktype");
 
 	// if we don't have an interpreter instance, we don't care about
-	// label resolution
-	if (p->interp && !label_checkpoint(p->interp, &jumped))
+	// label resolution (NOT TRUE ANYMORE!)
+	if (p->interp && !label_checkpoint(p->interp, &label))
 		return note_error(p->errs, p->code, "checkpoint");
+
+	if (label && is_label_resolved(label)) {
+		make_cursor(p->code->p + label_instr_pos(label),
+			    p->code->p + label->jump,
+			    &block->instrs);
+		p->code->p = p->code->start + label->jump;
+		return 1;
+	}
 
 	if (!parse_instrs_until(p, end_tag, &block->instrs))
 		return note_error(p->errs, p->code, "parse instrs");
@@ -2634,12 +2652,12 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_i64_store32:
 			return parse_memarg(p->code, &op->memarg);
 
-		case i_br:
-		case i_br_if:
 		case i_br_table:
 		case i_call_indirect:
 			return note_error(p->errs, p->code, "consume dynamic-size op");
 
+		case i_br:
+		case i_br_if:
 		case i_i32_const:
 		case i_i64_const:
 			return leb128_read(p->code, &op->integer);
@@ -2728,19 +2746,42 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 	return note_error(p->errs, p->code, "unhandled tag: 0x%x", tag);
 }
 
+static int interp_jump(struct wasm_interp *interp, int jmp)
+{
+	struct callframe *frame;
+
+	frame = top_callframe(&interp->callframes);
+	if (!frame) {
+		return interp_error(interp, "no callframe?");
+	}
+
+	debug("jumping to %04x\n", jmp);
+	frame->code.p = frame->code.start + jmp;
+
+	if (frame->code.p >= frame->code.end) {
+		return interp_error(interp,
+			"code pointer at or past end, evil jump?");
+	}
+
+	return 1;
+}
+
 static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 {
 	struct cursor instrs;
 	struct expr_parser parser;
-	int jumped;
+	struct label *label;
 
-	if (!label_checkpoint(interp, &jumped)) {
-		interp_error(interp, "label checkpoint");
-		return 0;
+	if (!label_checkpoint(interp, &label)) {
+		return interp_error(interp, "label checkpoint");
 	}
 
-	if (jumped) {
-		return 1;
+	if (!label) {
+		return interp_error(interp, "no label?");
+	}
+
+	if (is_label_resolved(label)) {
+		return interp_jump(interp, label->jump);
 	}
 
 	make_interp_expr_parser(interp, &parser);
@@ -2754,9 +2795,8 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 	return resolve_label(interp);
 }
 
-static int interp_if(struct wasm_interp *interp)
+static int interp_block(struct wasm_interp *interp)
 {
-	struct val cond;
 	struct blocktype blocktype;
 	struct cursor *code;
 
@@ -2766,13 +2806,28 @@ static int interp_if(struct wasm_interp *interp)
 	}
 
 	if (!parse_blocktype(code, &interp->errors, &blocktype)) {
-		interp_error(interp, "couldn't parse blocktype");
-		return 0;
+		return interp_error(interp, "couldn't parse blocktype");
+	}
+
+	return interp_code(interp);
+}
+
+static int interp_if(struct wasm_interp *interp)
+{
+	struct val cond;
+	struct blocktype blocktype;
+	struct cursor *code;
+
+	if (!(code = interp_codeptr(interp))) {
+		return interp_error(interp, "empty callstack?");
+	}
+
+	if (!parse_blocktype(code, &interp->errors, &blocktype)) {
+		return interp_error(interp, "couldn't parse blocktype");
 	}
 
 	if (!cursor_popval(&interp->stack, &cond)) {
-		interp_error(interp, "if pop val");
-		return 0;
+		return interp_error(interp, "if pop val");
 	}
 
 	if (cond.i32 == 1) {
@@ -2780,13 +2835,82 @@ static int interp_if(struct wasm_interp *interp)
 	}
 
 	if (!branch_jump(interp, i_end)) {
-		return 0;
+		return interp_error(interp, "jump");
 	}
 
 	return 1;
 }
 
-static int interp_instr(struct wasm_interp *interp, unsigned char tag)
+static int interp_i32_eqz(struct wasm_interp *interp)
+{
+	struct val a, res;
+
+	if (!cursor_popval(&interp->stack, &a))
+		return interp_error(interp, "if pop val");
+	if (a.type != i32)
+		return interp_error(interp, "not an i32 value");
+
+	res.type = i32;
+	res.i32 = a.i32 == 0;
+
+	return cursor_pushval(&interp->stack, &res);
+}
+
+static inline int top_resolver_stack(struct cursor *stack, int index, int *label)
+{
+	u16 *p = (u16*)stack->p;
+	p = &p[-(index+1)];
+	if (p < (u16*)stack->start)
+		return 0;
+	*label = *p;
+	return 1;
+}
+
+static int interp_br_jump(struct wasm_interp *interp, int index)
+{
+	int ind;
+	struct label *label;
+
+	if (!top_resolver_stack(&interp->resolver_stack, index, &ind)) {
+		return interp_error(interp, "invalid resolver index %d", index);
+	}
+
+	if (!(label = index_frame_label(interp, ind))) {
+		return interp_error(interp, "index label");
+	}
+
+	if (is_label_resolved(label)) {
+		return interp_jump(interp, label->jump);
+	}
+
+	return interp_error(interp, "TODO: br_jump on unresolved label");
+}
+
+static int interp_br_if(struct wasm_interp *interp)
+{
+	struct cursor *code;
+	u32 ind;
+	int cond = 0;
+
+	if (!(code = interp_codeptr(interp))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (!leb128_read(code, &ind))
+		return interp_error(interp, "read br_if index");
+
+	// TODO: can this be something other than an i32?
+	if (!stack_pop_i32(interp, &cond)) {
+		return interp_error(interp, "pop br_if i32");
+	}
+
+	if (cond != 0)
+		return interp_br_jump(interp, ind);
+
+	return 1;
+}
+
+static int interp_instr(struct wasm_interp *interp, u8 tag)
 {
 	interp->ops++;
 
@@ -2799,12 +2923,15 @@ static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 	case i_nop: return 1;
 	case i_local_get: return interp_local_get(interp);
 	case i_local_set: return interp_local_set(interp);
+	case i_i32_eqz: return interp_i32_eqz(interp);
 	case i_i32_add: return interp_i32_add(interp);
 	case i_i32_sub: return interp_i32_sub(interp);
 	case i_i32_const: return interp_i32_const(interp);
 	case i_i32_gt_u: return interp_i32_gt_u(interp);
 	case i_if: return interp_if(interp);
 	case i_call: return interp_call(interp);
+	case i_block: return interp_block(interp);
+	case i_br_if: return interp_br_if(interp);
 	default:
 		    interp_error(interp, "unhandled instruction %s 0x%x",
 				 instr_name(tag), tag);
@@ -2816,32 +2943,29 @@ static int interp_instr(struct wasm_interp *interp, unsigned char tag)
 
 int interp_code(struct wasm_interp *interp)
 {
-	struct callframe frame;
 	unsigned char tag;
 	int offset;
 	struct cursor *code;
 
 	for (;;) {
 		if (!(code = interp_codeptr(interp))) {
-			interp_error(interp, "codeptr");
-			return 0;
+			return interp_error(interp, "codeptr");
 		}
 
 		if (!pull_byte(code, &tag)) {
-			cursor_print_around(code, 10);
-			interp_error(interp, "instr tag");
-			return 0;
+			//cursor_print_around(code, 10);
+			return interp_error(interp, "instr tag");
 		}
 
 		if (tag == i_end) {
-			cursor_pop_callframe(&interp->callframes, &frame);
-			cursor_popint(&interp->locals_offsets, &offset);
+			if (!cursor_popint(&interp->locals_offsets, &offset))
+				return interp_error(interp, "pop locals_offset");
 			break;
 		}
 
 		if (!interp_instr(interp, tag)) {
-			interp_error(interp, "interp instr %s", instr_name(tag));
-			return 0;
+			return interp_error(interp, "interp instr %s",
+					instr_name(tag));
 		}
 	}
 
@@ -2865,11 +2989,18 @@ static int find_function(struct module *module, const char *name)
 
 static int find_start_function(struct module *module)
 {
-	if (was_section_parsed(module, section_start))
-		return module->start_section.start_fn;
+	int res;
 
-	return find_function(module, "start") ||
-	       find_function(module, "_start");
+	if (was_section_parsed(module, section_start)) {
+		debug("getting start function from start section\n");
+		return module->start_section.start_fn;
+	}
+
+	if ((res = find_function(module, "start")) != -1) {
+		return res;
+	}
+
+	return find_function(module, "_start");
 }
 
 static inline int array_alloc(struct cursor *mem, struct array *a, int elems)
@@ -2981,6 +3112,9 @@ int interp_wasm_module(struct wasm_interp *interp)
 		ok = 0;
 		goto end;
 	}
+
+	debug("found start function %s (%d)\n",
+			get_function_name(interp->module, func), func);
 
 	if (!prepare_call(interp, func)) {
 		interp_error(interp, "preparing start function");

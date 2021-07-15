@@ -479,7 +479,7 @@ struct wasm_interp {
 	// resolve stack for the current function. every time a control
 	// instruction is encountered, the label index is pushed. When an
 	// instruction is popped, we can resolve the label
-	struct cursor resolver_stack; /* u32 */
+	struct cursor resolver_stack; /* u16 */
 };
 
 struct builtin {
