@@ -2718,9 +2718,8 @@ static int find_function(struct module *module, const char *name)
 
 static int find_start_function(struct module *module)
 {
-	if (module->parsed & (1 << section_start)) {
+	if (was_section_parsed(module, section_start))
 		return module->start_section.start_fn;
-	}
 
 	return find_function(module, "start") || find_function(module, "_start");
 }
