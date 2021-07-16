@@ -1117,26 +1117,22 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 {
 	unsigned char tag;
 	if (!pull_byte(&p->cur, &tag)) {
-		parse_err(p, "oob");
-		return 0;
+		return parse_err(p, "oob");
 	}
 
 	if (tag != limit_min && tag != limit_min_max) {
-		parse_err(p, "invalid tag %02x", tag);
-		return 0;
+		return parse_err(p, "invalid tag %02x", tag);
 	}
 
 	if (!leb128_read(&p->cur, &limits->min)) {
-		parse_err(p, "min");
-		return 0;
+		return parse_err(p, "min");
 	}
 
 	if (tag == limit_min)
 		return 1;
 
 	if (!leb128_read(&p->cur, &limits->max)) {
-		parse_err(p, "max");
-		return 0;
+		return parse_err(p, "max");
 	}
 
 	return 1;
@@ -1145,13 +1141,11 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 static int parse_table(struct wasm_parser *p, struct table *table)
 {
 	if (!parse_reftype(p, &table->reftype)) {
-		parse_err(p, "reftype");
-		return 0;
+		return parse_err(p, "reftype");
 	}
 
 	if (!parse_limits(p, &table->limits)) {
-		parse_err(p, "limits");
-		return 0;
+		return parse_err(p, "limits");
 	}
 
 	return 1;
@@ -1198,14 +1192,12 @@ static int parse_const_instr(struct wasm_parser *p)
 	case const_i32:
 	case const_i64:
 		if (!leb128_read(&p->cur, &n)) {
-			parse_err(p, "couldn't read integer");
-			return 0;
+			return parse_err(p, "couldn't read integer");
 		}
 		break;
 	case const_f32:
 	case const_f64:
-		parse_err(p, "TODO parse float constants");
-		return 0;
+		return parse_err(p, "TODO parse float constants");
 	}
 
 	return 1;
@@ -1217,8 +1209,7 @@ static int parse_ref_instr(struct wasm_parser *p)
 	unsigned int idx;
 
 	if (!pull_byte(&p->cur, &tag)) {
-		parse_err(p, "tag");
-		return 0;
+		return parse_err(p, "tag");
 	}
 
 	if (!is_valid_ref_instr(tag)) {
@@ -1230,8 +1221,7 @@ static int parse_ref_instr(struct wasm_parser *p)
 	switch ((enum ref_instr)tag) {
 	case ref_null:
 		if (!parse_reftype(p, (enum reftype*)&tag)) {
-			parse_err(p, "invalid ref.null instr reftype 0x%x", tag);
-			return 0;
+			return parse_err(p, "invalid ref.null instr reftype 0x%x", tag);
 		}
 		break;
 
@@ -1240,8 +1230,7 @@ static int parse_ref_instr(struct wasm_parser *p)
 
 	case ref_func:
 		if (!leb128_read(&p->cur, &idx)) {
-			parse_err(p, "invalid ref.func idx");
-			return 0;
+			return parse_err(p, "invalid ref.func idx");
 		}
 		break;
 	}
@@ -1266,8 +1255,7 @@ static int parse_const_expr(struct wasm_parser *p, struct expr *expr)
 		}
 
 		if (!parse_const_expr_instr(p)) {
-			parse_err(p, "no constant expr found");
-			return 0;
+			return parse_err(p, "no constant expr found");
 		}
 	}
 
@@ -1286,15 +1274,13 @@ static int parse_mut(struct wasm_parser *p, enum mut *mut)
 		return 1;
 	}
 
-	parse_err(p, "unknown mut %02x", *p->cur.p);
-	return 0;
+	return parse_err(p, "unknown mut %02x", *p->cur.p);
 }
 
 static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
 {
 	if (!parse_valtype(p, &g->valtype)) {
-		parse_err(p, "valtype");
-		return 0;
+		return parse_err(p, "valtype");
 	}
 
 	return parse_mut(p, &g->mut);
@@ -1304,13 +1290,11 @@ static int parse_global(struct wasm_parser *p,
 		struct global *global)
 {
 	if (!parse_globaltype(p, &global->type)) {
-		parse_err(p, "type");
-		return 0;
+		return parse_err(p, "type");
 	}
 
 	if (!parse_const_expr(p, &global->init)) {
-		parse_err(p, "init code");
-		return 0;
+		return parse_err(p, "init code");
 	}
 
 	return 1;
@@ -1323,14 +1307,12 @@ static int parse_global_section(struct wasm_parser *p,
 	unsigned int elems, i;
 
 	if (!parse_vector(p, sizeof(*globals), &elems, (void**)&globals)) {
-		parse_err(p, "globals vector");
-		return 0;
+		return parse_err(p, "globals vector");
 	}
 
 	for (i = 0; i < elems; i++) {
 		if (!parse_global(p, &globals[i])) {
-			parse_err(p, "global #%d/%d", i+1, elems);
-			return 0;
+			return parse_err(p, "global #%d/%d", i+1, elems);
 		}
 	}
 
