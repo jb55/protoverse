@@ -167,7 +167,7 @@ static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
 	}
 	
 	cur->p -= len;
-	memcpy(cur->p, data, len);
+	memcpy(data, cur->p, len);
 
 	return 1;
 }
