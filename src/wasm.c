@@ -2567,14 +2567,14 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 
 static int parse_block(struct expr_parser *p, struct block *block, u8 end_tag)
 {
-	struct label *label;
+	struct label *label = NULL;
 
 	if (!parse_blocktype(p->code, p->errs, &block->type))
 		return note_error(p->errs, p->code, "blocktype");
 
 	// if we don't have an interpreter instance, we don't care about
 	// label resolution (NOT TRUE ANYMORE!)
-	if (p->interp && !push_label_checkpoint(p->interp, &label))
+	if (p->interp != NULL && !push_label_checkpoint(p->interp, &label))
 		return note_error(p->errs, p->code, "push checkpoint");
 
 	if (label && is_label_resolved(label)) {
