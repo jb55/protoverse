@@ -574,12 +574,6 @@ static const char *get_function_name(struct module *module, int func_index)
 	struct wexport *export;
 	struct import *import;
 	int i, num_imports;
-	static int counter = 0;
-
-	counter++;
-
-	if (counter > 1000)
-		assert(0);
 
 	num_imports = imports_count(module);
 
