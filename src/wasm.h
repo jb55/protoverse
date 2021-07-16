@@ -388,7 +388,8 @@ struct blocktype {
 
 struct block {
 	struct blocktype type;
-	struct cursor instrs;
+	unsigned char *instrs;
+	int instrs_len;
 };
 
 struct memarg {
@@ -463,6 +464,12 @@ struct callframe {
 	int fn;
 };
 
+struct resolver {
+	u16 label;
+	u8 end_tag;
+	u8 __unused;
+};
+
 struct wasm_interp {
 	struct module *module;
 
@@ -481,7 +488,7 @@ struct wasm_interp {
 	// resolve stack for the current function. every time a control
 	// instruction is encountered, the label index is pushed. When an
 	// instruction is popped, we can resolve the label
-	struct cursor resolver_stack; /* u16 */
+	struct cursor resolver_stack; /* struct resolver */
 };
 
 struct builtin {
