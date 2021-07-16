@@ -2426,13 +2426,35 @@ static struct label *index_frame_label(struct wasm_interp *interp, int ind)
 	return index_label(&interp->labels, frame->fn, ind);
 }
 
-static int resolve_label(struct wasm_interp *interp)
+static int resolve_label(struct label *label, struct cursor *code)
+{
+	if (is_label_resolved(label)) {
+		return 1;
+	}
+
+	label->jump = code->p - code->start;
+	label->instr_pos |= 0x80000000;
+
+	return 1;
+}
+
+static inline int pop_resolver(struct wasm_interp *interp, u16 *label_ind)
+{
+	if (!cursor_pop(&interp->resolver_stack, (u8*)&label_ind, sizeof(u16))) {
+		return interp_error(interp, "pop resolver");
+	}
+	debug("popped resolver stack %ld\n",
+			cursor_count(&interp->resolver_stack, sizeof(u16)));
+	return 1;
+}
+
+static int pop_label_checkpoint(struct wasm_interp *interp)
 {
 	struct label *label;
 	struct callframe *frame;
 	u16 label_ind = 0;
 
-	if (!cursor_pop(&interp->resolver_stack, (u8*)&label_ind, sizeof(label_ind))) {
+	if (!pop_resolver(interp, &label_ind)) {
 		interp_error(interp, "couldn't pop jump resolver stack");
 		return 0;
 	}
@@ -2443,15 +2465,8 @@ static int resolve_label(struct wasm_interp *interp)
 	if (!(label = index_label(&interp->labels, frame->fn, label_ind)))
 		return interp_error(interp, "index label");
 
-	if (is_label_resolved(label)) {
-		return 1;
-	}
-
-	label->jump = frame->code.p - frame->code.start;
-	label->instr_pos |= 0x80000000;
-
-	debug("resolving label %d (instr pos %04X) to %04X\n", label_ind,
-			label_instr_pos(label), label->jump);
+	if (!resolve_label(label, &frame->code))
+		return interp_error(interp, "resolve label");
 
 	return 1;
 }
@@ -2525,7 +2540,7 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 
 // when we encounter a control instruction, try to resolve the label, otherwise
 // push the label index to the resolver stack for resolution later
-static int label_checkpoint(struct wasm_interp *interp, struct label **label)
+static int push_label_checkpoint(struct wasm_interp *interp, struct label **label)
 {
 	u32 instr_pos;
 	int ind;
@@ -2556,6 +2571,8 @@ static int label_checkpoint(struct wasm_interp *interp, struct label **label)
 	if (!cursor_push_u16(&interp->resolver_stack, ind)) {
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
+	debug("pushed resolver stack %ld\n",
+			cursor_count(&interp->resolver_stack, sizeof(u16)));
 
 	return 1;
 }
@@ -2569,10 +2586,12 @@ static int parse_block(struct expr_parser *p, struct block *block, u8 end_tag)
 
 	// if we don't have an interpreter instance, we don't care about
 	// label resolution (NOT TRUE ANYMORE!)
-	if (p->interp && !label_checkpoint(p->interp, &label))
-		return note_error(p->errs, p->code, "checkpoint");
+	if (p->interp && !push_label_checkpoint(p->interp, &label))
+		return note_error(p->errs, p->code, "push checkpoint");
 
 	if (label && is_label_resolved(label)) {
+		if (!pop_label_checkpoint(p->interp))
+			return note_error(p->errs, p->code, "pop checkpoint");
 		make_cursor(p->code->p + label_instr_pos(label),
 			    p->code->p + label->jump,
 			    &block->instrs);
@@ -2584,7 +2603,7 @@ static int parse_block(struct expr_parser *p, struct block *block, u8 end_tag)
 		return note_error(p->errs, p->code, "parse instrs");
 
 	if (p->interp)
-		return resolve_label(p->interp);
+		return pop_label_checkpoint(p->interp);
 
 	return 1;
 }
@@ -2772,7 +2791,7 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 	struct expr_parser parser;
 	struct label *label;
 
-	if (!label_checkpoint(interp, &label)) {
+	if (!push_label_checkpoint(interp, &label)) {
 		return interp_error(interp, "label checkpoint");
 	}
 
@@ -2781,6 +2800,9 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 	}
 
 	if (is_label_resolved(label)) {
+		if (!pop_label_checkpoint(interp)) {
+			return interp_error(interp, "pop label resolver");
+		}
 		return interp_jump(interp, label->jump);
 	}
 
@@ -2792,13 +2814,14 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 		return 0;
 	}
 
-	return resolve_label(interp);
+	return pop_label_checkpoint(interp);
 }
 
 static int interp_block(struct wasm_interp *interp)
 {
 	struct blocktype blocktype;
 	struct cursor *code;
+	struct label *label;
 
 	if (!(code = interp_codeptr(interp))) {
 		interp_error(interp, "empty callstack?");
@@ -2809,7 +2832,15 @@ static int interp_block(struct wasm_interp *interp)
 		return interp_error(interp, "couldn't parse blocktype");
 	}
 
-	return interp_code(interp);
+	if (!push_label_checkpoint(interp, &label)) {
+		return interp_error(interp, "block label checkpoint");
+	}
+
+	if (!interp_code(interp)) {
+		return interp_error(interp, "interp code");
+	}
+
+	return pop_label_checkpoint(interp);
 }
 
 static int interp_if(struct wasm_interp *interp)
