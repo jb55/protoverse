@@ -4,12 +4,18 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-int note_error_(struct cursor *errs, struct cursor *p, const char *fmt, ...)
+int note_error_(struct errors *errs_, struct cursor *p, const char *fmt, ...)
 {
 	static char buf[512];
 	struct error err;
-
+	struct cursor *errs;
 	va_list ap;
+
+	errs = &errs_->cur;
+
+	if (errs_->enabled == 0)
+		return 0;
+
 	va_start(ap, fmt);
 	vsprintf(buf, fmt, ap);
 	va_end(ap);

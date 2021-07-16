@@ -12,6 +12,7 @@ static const unsigned char WASM_MAGIC[] = {0,'a','s','m'};
 #define FUNC_TYPE_TAG 0x60
 
 #include "cursor.h"
+#include "error.h"
 
 enum valtype {
 	i32 = 0x7F,
@@ -435,6 +436,7 @@ struct startsec {
 struct module {
 	unsigned int parsed;
 	unsigned int custom_sections;
+	int start_fn;
 
 	struct customsec custom_section[MAX_CUSTOM_SECTIONS];
 	struct typesec type_section;
@@ -464,7 +466,7 @@ struct callframe {
 struct wasm_interp {
 	struct module *module;
 
-	struct cursor errors; /* struct error */
+	struct errors errors; /* struct error */
 	size_t ops;
 
 	struct cursor callframes; /* struct callframe */
@@ -492,7 +494,7 @@ struct wasm_parser {
 	struct module module;
 	struct cursor cur;
 	struct cursor mem;
-	struct cursor errs;
+	struct errors errs;
 };
 
 
@@ -503,6 +505,6 @@ void wasm_parser_free(struct wasm_parser *parser);
 void wasm_parser_init(struct wasm_parser *parser, u8 *wasm, size_t wasm_len, size_t arena_size);
 void wasm_interp_free(struct wasm_interp *interp);
 int interp_wasm_module(struct wasm_interp *interp);
-void print_error_backtrace(struct cursor *errors);
+void print_error_backtrace(struct errors *errors);
 
 #endif /* PROTOVERSE_WASM_H */
