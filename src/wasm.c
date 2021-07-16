@@ -3176,6 +3176,7 @@ int interp_wasm_module(struct wasm_interp *interp)
 
 	// reset cursors
 	reset_cursor(&interp->stack);
+	reset_cursor(&interp->resolver_stack);
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->locals);
 	reset_cursor(&interp->locals_offsets);
