@@ -43,37 +43,20 @@ struct expr_parser {
 
 static INLINE struct callframe *top_callframe(struct cursor *cur)
 {
-	if (unlikely(cur->p <= cur->start)) {
-		return NULL;
-	}
-	return ((struct callframe*)cur->p) - 1;
+	return (struct callframe*)cursor_top(cur, sizeof(struct callframe));
 }
 
 static INLINE struct cursor *interp_codeptr(struct wasm_interp *interp)
 {
 	struct callframe *frame;
-	frame = top_callframe(&interp->callframes);
-	if (unlikely(!frame))
+	if (unlikely(!(frame = top_callframe(&interp->callframes))))
 		return 0;
 	return &frame->code;
 }
 
-static INLINE int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
-{
-	if (unlikely(cur->p - len < cur->start))
-		return 0;
-
-	cur->p -= len;
-
-	if (dest)
-		memcpy(dest, cur->p, len);
-
-	return 1;
-}
-
 static INLINE int cursor_popval(struct cursor *cur, struct val *val)
 {
-	return cursor_popdata(cur, (unsigned char*)val, sizeof(*val));
+	return cursor_pop(cur, (unsigned char*)val, sizeof(*val));
 }
 
 static const char *valtype_name(enum valtype valtype)
@@ -364,12 +347,12 @@ static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *fr
 
 static INLINE int cursor_pop_callframe(struct cursor *cur, struct callframe *frame)
 {
-	return cursor_popdata(cur, (unsigned char*)frame, sizeof(*frame));
+	return cursor_pop(cur, (u8*)frame, sizeof(*frame));
 }
 
 static INLINE int cursor_popint(struct cursor *cur, int *i)
 {
-	return cursor_popdata(cur, (unsigned char *)i, sizeof(int));
+	return cursor_pop(cur, (u8 *)i, sizeof(int));
 }
 
 
@@ -2239,6 +2222,27 @@ static INLINE int call_func(struct wasm_interp *interp, struct func *func, int f
 	return interp_error(interp, "corrupt func type: %02x", func->type);
 }
 
+static inline int count_resolvers(struct wasm_interp *interp)
+{
+	return cursor_count(&interp->resolver_stack, sizeof(struct resolver));
+}
+
+static inline int count_local_resolvers(struct wasm_interp *interp, int *count)
+{
+	int offset;
+	u8 *p;
+	if (unlikely(!cursor_top_int(&interp->resolver_offsets, &offset))) {
+		return interp_error(interp, "no top resolver offset?");
+	}
+	p = interp->resolver_stack.start + offset * sizeof(struct resolver);
+	if (unlikely(p < interp->resolver_stack.start || 
+		     p >= interp->resolver_stack.end)) {
+		return interp_error(interp, "resolver offset oob?");
+	}
+	*count = (interp->resolver_stack.p - p) / sizeof(struct resolver);
+	return 1;
+}
+
 static int prepare_call(struct wasm_interp *interp, int func_index)
 {
 	static u8 tmp[0xFF];
@@ -2264,6 +2268,11 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	offset = cursor_count(&interp->locals, sizeof(struct val));
 	if (unlikely(!cursor_push_int(&interp->locals_offsets, offset)))
 		return interp_error(interp, "push locals offset");
+
+	offset = count_resolvers(interp);
+	/* this is like locals offsets but for label resolvers */
+	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
+		return interp_error(interp, "push resolver offset");
 
 	/* get type signature to know how many locals to push as params */
 	if (unlikely(!(functype = get_function_type(interp, func_index)))) {
@@ -2338,7 +2347,6 @@ static int interp_call(struct wasm_interp *interp)
 		return 0;
 	}
 
-	/* call the function! */
 	if (unlikely(!interp_code(interp))) {
 		return interp_error(interp, "call %s",
 				get_function_name_for_error(interp, func_index));
@@ -2422,9 +2430,9 @@ static INLINE int pop_resolver(struct wasm_interp *interp, struct resolver *reso
 	if (!cursor_pop(&interp->resolver_stack, (u8*)resolver, sizeof(*resolver))) {
 		return interp_error(interp, "pop resolver");
 	}
-	debug("popped resolver stack %d i_%s %ld\n",
+	debug("popped resolver stack %d i_%s %d\n",
 			resolver->label, instr_name(resolver->end_tag),
-			cursor_count(&interp->resolver_stack, sizeof(*resolver)));
+			count_resolvers(interp));
 	return 1;
 }
 
@@ -3018,7 +3026,7 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 int interp_code(struct wasm_interp *interp)
 {
 	unsigned char tag;
-	int offset;
+	int offset, num_resolvers = 0;
 	struct cursor *code;
 
 	for (;;) {
@@ -3027,14 +3035,28 @@ int interp_code(struct wasm_interp *interp)
 		}
 
 		if (unlikely(!pull_byte(code, &tag))) {
-			//cursor_print_around(code, 10);
-			return interp_error(interp, "instr tag");
+			return interp_error(interp, "no more instrs to pull");
 		}
 
-		if (unlikely(tag == i_end)) {
-			if (!cursor_popint(&interp->locals_offsets, &offset))
-				return interp_error(interp, "pop locals_offset");
-			break;
+		if (tag == i_end) {
+			if (unlikely(!count_local_resolvers(interp,
+							    &num_resolvers))) {
+				return interp_error(interp,
+						"count local resolvers");
+			}
+
+			if (num_resolvers == 0) {
+				if (!cursor_popint(&interp->resolver_offsets,
+						   &offset)) {
+					return interp_error(interp,
+							"pop resolver_offsets");
+				}
+				if (!cursor_popint(&interp->locals_offsets,
+						   &offset))
+					return interp_error(interp,
+							"pop locals_offset");
+				break;
+			}
 		}
 
 		if (unlikely(!interp_instr(interp, tag))) {
@@ -3100,11 +3122,12 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	unsigned char *mem;
 	int ok, fns, errors_size, stack_size, locals_size, offsets_size,
 	    callframes_size, resolver_size, labels_size, num_labels_size,
-	    labels_capacity, num_labels_elemsize, memsize;
+	    labels_capacity, num_labels_elemsize, memsize, resolver_offsets_size;
 
 	memset(interp, 0, sizeof(*interp));
 	interp->module = module;
 	interp->module->start_fn = -1;
+	interp->prev_resolvers = 0;
 
 	//stack = calloc(1, STACK_SPACE);
 	fns = functions_count(module);
@@ -3118,6 +3141,7 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
  	num_labels_size  = fns * num_labels_elemsize;
 	locals_size      = sizeof(struct val) * 0xFF;
 	offsets_size     = sizeof(int) * 0xFF;
+	resolver_offsets_size = offsets_size;
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
 
@@ -3131,6 +3155,7 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		num_labels_size +
 		locals_size +
 		offsets_size +
+		resolver_offsets_size +
 		callframes_size +
 		resolver_size;
 
@@ -3145,6 +3170,7 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		cursor_slice(&interp->mem, &interp->errors.cur, errors_size) &&
 		cursor_slice(&interp->mem, &interp->locals, locals_size) &&
 		cursor_slice(&interp->mem, &interp->locals_offsets, offsets_size) &&
+		cursor_slice(&interp->mem, &interp->resolver_offsets, resolver_offsets_size) &&
 		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
 		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
@@ -3177,6 +3203,7 @@ int interp_wasm_module(struct wasm_interp *interp)
 	// reset cursors
 	reset_cursor(&interp->stack);
 	reset_cursor(&interp->resolver_stack);
+	reset_cursor(&interp->resolver_offsets);
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->locals);
 	reset_cursor(&interp->locals_offsets);

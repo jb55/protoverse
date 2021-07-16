@@ -159,6 +159,26 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 	return 1;
 }
 
+
+static inline unsigned char *cursor_top(struct cursor *cur, int len)
+{
+	if (unlikely(cur->p - len < cur->start)) {
+		printf("cursor_top oob\n");
+		return NULL;
+	}
+	return cur->p - len;
+}
+
+static inline int cursor_top_int(struct cursor *cur, int *i)
+{
+	u8 *p;
+	if (unlikely(!(p = cursor_top(cur, sizeof(*i))))) {
+		return 0;
+	}
+	*i = *((int*)p);
+	return 1;
+}
+
 static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
 {
 	if (unlikely(cur->p - len < cur->start)) {

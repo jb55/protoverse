@@ -472,6 +472,7 @@ struct resolver {
 
 struct wasm_interp {
 	struct module *module;
+	int prev_resolvers;
 
 	struct errors errors; /* struct error */
 	size_t ops;
@@ -481,6 +482,7 @@ struct wasm_interp {
 	struct cursor mem; /* u8/mixed */
 	struct cursor locals;  /* struct val */
 	struct cursor locals_offsets; /* int */
+	struct cursor resolver_offsets; /* int */
 
 	struct array labels; /* struct labels */
 	struct array num_labels;
