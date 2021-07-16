@@ -2941,7 +2941,7 @@ static int interp_br_if(struct wasm_interp *interp)
 		return interp_error(interp, "pop br_if i32");
 	}
 
-	if (cond != 1)
+	if (cond != 0)
 		return interp_br_jump(interp, ind);
 
 	return 1;
