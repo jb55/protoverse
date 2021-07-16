@@ -43,7 +43,7 @@ struct expr_parser {
 
 static INLINE struct callframe *top_callframe(struct cursor *cur)
 {
-	if (cur->p <= cur->start) {
+	if (unlikely(cur->p <= cur->start)) {
 		return NULL;
 	}
 	return ((struct callframe*)cur->p) - 1;
@@ -60,7 +60,7 @@ static INLINE struct cursor *interp_codeptr(struct wasm_interp *interp)
 
 static INLINE int cursor_popdata(struct cursor *cur, unsigned char *dest, int len)
 {
-	if (cur->p - len < cur->start)
+	if (unlikely(cur->p - len < cur->start))
 		return 0;
 
 	cur->p -= len;
@@ -92,7 +92,7 @@ static INLINE int offset_stack_top(struct cursor *cur)
 {
 	int *p = (int*)cur->p;
 
-	if (cur->p == cur->start) {
+	if (unlikely(cur->p == cur->start)) {
 		return 0;
 	}
 
@@ -104,7 +104,8 @@ static INLINE struct val *get_local(struct wasm_interp *interp, int ind)
 	struct val *p;
 	int offset = offset_stack_top(&interp->locals_offsets);
 
-	if (!(p = index_cursor(&interp->locals, offset + ind, sizeof(struct val)))) {
+	if (unlikely(!(p = index_cursor(&interp->locals, offset + ind,
+						sizeof(struct val))))) {
 		interp_error(interp, "%d local oob %d > %ld", ind, offset + ind,
 				interp->locals.end - interp->locals.start);
 		return NULL;
@@ -115,9 +116,9 @@ static INLINE struct val *get_local(struct wasm_interp *interp, int ind)
 static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
 {
 	struct val val;
-	if (!cursor_popval(&interp->stack, &val))
+	if (unlikely(!cursor_popval(&interp->stack, &val)))
 		return interp_error(interp, "couldn't pop val");
-	if (val.type != i32) {
+	if (unlikely(val.type != i32)) {
 		return interp_error(interp, "popped type %s instead of i32",
 				valtype_name(val.type));
 	}
@@ -825,17 +826,16 @@ static int parse_valtype(struct wasm_parser *p, enum valtype *valtype)
 
 	start = p->cur.p;
 
-	if (!pull_byte(&p->cur, (unsigned char*)valtype)) {
-		parse_err(p, "valtype tag oob");
-		return 0;
+	if (unlikely(!pull_byte(&p->cur, (unsigned char*)valtype))) {
+		return parse_err(p, "valtype tag oob");
 	}
 
-	if (is_valtype((unsigned char)*valtype))
-		return 1;
+	if (unlikely(!is_valtype((unsigned char)*valtype))) {
+		p->cur.p = start;
+		return parse_err(p, "%c is not a valid valtype tag", *valtype);
+	}
 
-	p->cur.p = start;
-	parse_err(p, "%c is not a valid valtype tag", *valtype);
-	return 0;
+	return 1;
 }
 
 static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
@@ -848,20 +848,20 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 	rt->valtypes = 0;
 	start = p->mem.p;
 
-	if (!leb128_read(&p->cur, (unsigned int*)&elems)) {
+	if (unlikely(!leb128_read(&p->cur, (unsigned int*)&elems))) {
 		parse_err(p, "vec len");
 		return 0;
 	}
 
 	for (i = 0; i < elems; i++)
 	{
-		if (!parse_valtype(p, &valtype)) {
+		if (unlikely(!parse_valtype(p, &valtype))) {
 			parse_err(p, "valtype #%d", i);
 			p->mem.p = start;
 			return 0;
 		}
 
-		if (!cursor_push_byte(&p->mem, (unsigned char)valtype)) {
+		if (unlikely(!cursor_push_byte(&p->mem, (unsigned char)valtype))) {
 			parse_err(p, "valtype push data OOM #%d", i);
 			p->mem.p = start;
 			return 0;
@@ -877,17 +877,17 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 
 static int parse_func_type(struct wasm_parser *p, struct functype *func)
 {
-	if (!consume_byte(&p->cur, FUNC_TYPE_TAG)) {
+	if (unlikely(!consume_byte(&p->cur, FUNC_TYPE_TAG))) {
 		parse_err(p, "type tag");
 		return 0;
 	}
 
-	if (!parse_result_type(p, &func->params)) {
+	if (unlikely(!parse_result_type(p, &func->params))) {
 		parse_err(p, "params");
 		return 0;
 	}
 
-	if (!parse_result_type(p, &func->result)) {
+	if (unlikely(!parse_result_type(p, &func->result))) {
 		parse_err(p, "result");
 		return 0;
 	}
@@ -898,18 +898,18 @@ static int parse_func_type(struct wasm_parser *p, struct functype *func)
 static int parse_name(struct wasm_parser *p, const char **name)
 {
 	unsigned int bytes;
-	if (!leb128_read(&p->cur, &bytes)) {
+	if (unlikely(!leb128_read(&p->cur, &bytes))) {
 		parse_err(p, "name len");
 		return 0;
 	}
 
-	if (!pull_data_into_cursor(&p->cur, &p->mem, (unsigned char**)name,
-				bytes)) {
+	if (unlikely(!pull_data_into_cursor(&p->cur, &p->mem, (unsigned char**)name,
+				bytes))) {
 		parse_err(p, "name string");
 		return 0;
 	}
 
-	if (!cursor_push_byte(&p->mem, 0)) {
+	if (unlikely(!cursor_push_byte(&p->mem, 0))) {
 		parse_err(p, "name null byte");
 		return 0;
 	}
@@ -961,12 +961,12 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
-	if (!leb128_read(&p->cur, &local->n)) {
+	if (unlikely(!leb128_read(&p->cur, &local->n))) {
 		parse_err(p, "n");
 		return 0;
 	}
 
-	if (!parse_valtype(p, &local->valtype)) {
+	if (unlikely(!parse_valtype(p, &local->valtype))) {
 		parse_err(p, "valtype");
 		return 0;
 	}
@@ -2060,24 +2060,20 @@ static int interp_local_set(struct wasm_interp *interp)
 	unsigned int index;
 	struct cursor *code;
 
-	if (!cursor_popval(&interp->stack, &val)) {
-		interp_error(interp, "pop");
-		return 0;
+	if (unlikely(!cursor_popval(&interp->stack, &val))) {
+		return interp_error(interp, "pop");
 	}
 
-	if (!(code = interp_codeptr(interp))) {
-		interp_error(interp, "codeptr");
-		return 0;
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
 	}
 
-	if (!leb128_read(code, &index)) {
-		interp_error(interp, "read index");
-		return 0;
+	if (unlikely(!leb128_read(code, &index))) {
+		return interp_error(interp, "read index");
 	}
 
-	if (!set_local(interp, index, &val)) {
-		interp_error(interp, "set local");
-		return 0;
+	if (unlikely(!set_local(interp, index, &val))) {
+		return interp_error(interp, "set local");
 	}
 
 	return 1;
@@ -2090,24 +2086,24 @@ static int interp_local_get(struct wasm_interp *interp)
 	struct val *val;
 	struct cursor *code;
 
-	if (!(code = interp_codeptr(interp))) {
+	if (unlikely(!(code = interp_codeptr(interp)))) {
 		interp_error(interp, "codeptr");
 		return 0;
 	}
 
-	if (!leb128_read(code, &index)) {
+	if (unlikely(!leb128_read(code, &index))) {
 		interp_error(interp, "index");
 		return 0;
 	}
 
 	nlocals = count_locals(interp);
-	if (index >= nlocals) {
+	if (unlikely(index >= nlocals)) {
 		interp_error(interp, "local %d not set (%d locals)", index,
 				nlocals);
 		return 0;
 	}
 
-	if (!(val = get_local(interp, index))) {
+	if (unlikely(!(val = get_local(interp, index)))) {
 		interp_error(interp, "get local");
 		return 0;
 	}
@@ -2125,9 +2121,8 @@ static INLINE int interp_i32_gt_u(struct wasm_interp *interp)
 {
 	struct val a, b, c;
 
-	if (!interp_prep_binop(interp, &a, &b, &c, i32)) {
-		interp_error(interp, "gt_u prep");
-		return 0;
+	if (unlikely(!interp_prep_binop(interp, &a, &b, &c, i32))) {
+		return interp_error(interp, "gt_u prep");
 	}
 
 	c.i32 = (unsigned int)b.i32 > (unsigned int)a.i32;
@@ -2141,12 +2136,12 @@ static INLINE int interp_i32_const(struct wasm_interp *interp)
 	unsigned int read;
 	struct cursor *code;
 
-	if (!(code = interp_codeptr(interp))) {
+	if (unlikely(!(code = interp_codeptr(interp)))) {
 		interp_error(interp, "codeptr");
 		return 0;
 	}
 
-	if (!leb128_read(code, &read)) {
+	if (unlikely(!leb128_read(code, &read))) {
 		interp_error(interp, "invalid constant value");
 		return 0;
 	}
@@ -2170,7 +2165,7 @@ static INLINE int functions_count(struct module *module)
 
 static struct builtin *builtin_func(int ind)
 {
-	if (ind < 0 || ind >= NUM_BUILTINS) {
+	if (unlikely(ind < 0 || ind >= NUM_BUILTINS)) {
 		printf("UNUSUAL: invalid builtin index %d (max %d)\n", ind,
 				NUM_BUILTINS-1);
 		return NULL;
@@ -2255,7 +2250,7 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 	make_cursor(func->code.code, func->code.code + func->code.code_len, &callframe.code);
 	callframe.fn = fn;
 
-	if (!cursor_push_callframe(&interp->callframes, &callframe))
+	if (unlikely(!cursor_push_callframe(&interp->callframes, &callframe)))
 		return interp_error(interp, "oob cursor_pushcode");
 
 	return 1;
@@ -2269,8 +2264,7 @@ static INLINE int call_func(struct wasm_interp *interp, struct func *func, int f
 	case func_type_builtin:
 		return func->builtin->fn(interp);
 	}
-	interp_error(interp, "corrupt func type: %02x", func->type);
-	return 0;
+	return interp_error(interp, "corrupt func type: %02x", func->type);
 }
 
 static int prepare_call(struct wasm_interp *interp, int func_index)
@@ -2296,11 +2290,11 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 
 	/* record locals offset for indexing locals in the next function */
 	offset = cursor_count(&interp->locals, sizeof(struct val));
-	if (!cursor_push_int(&interp->locals_offsets, offset))
+	if (unlikely(!cursor_push_int(&interp->locals_offsets, offset)))
 		return interp_error(interp, "push locals offset");
 
 	/* get type signature to know how many locals to push as params */
-	if (!(functype = get_function_type(interp, func_index))) {
+	if (unlikely(!(functype = get_function_type(interp, func_index)))) {
 		return interp_error(interp,
 			"couldn't get function type for function '%s' (%d)",
 			get_function_name_for_error(interp, func_index),
@@ -2318,7 +2312,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	for (i = 0; i < functype->params.num_valtypes; i++) {
 		paramtype = (enum valtype)functype->params.valtypes[i];
 
-		if (!cursor_popval(&interp->stack, &val)) {
+		if (unlikely(!cursor_popval(&interp->stack, &val))) {
 			make_cursor(tmp, tmp + sizeof(tmp), &buf);
 
 			return interp_error(interp,
@@ -2329,7 +2323,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 				i);
 		}
 
-		if (val.type != paramtype) {
+		if (unlikely(val.type != paramtype)) {
 			return interp_error(interp,
 				"call parameter %d type mismatch. got %s, expected %s",
 				i+1,
@@ -2337,12 +2331,12 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 				valtype_name(paramtype));
 		}
 
-		if (!cursor_pushval(&interp->locals, &val)) {
+		if (unlikely(!cursor_pushval(&interp->locals, &val))) {
 			return interp_error(interp, "push param local");
 		}
 	}
 
-	if (!call_func(interp, &func, func_index)) {
+	if (unlikely(!call_func(interp, &func, func_index))) {
 		return interp_error(interp, "call func");
 	}
 
@@ -2357,28 +2351,28 @@ static int interp_call(struct wasm_interp *interp)
 	struct cursor *code;
 	struct callframe frame;
 
-	if (!(code = interp_codeptr(interp))) {
+	if (unlikely(!(code = interp_codeptr(interp)))) {
 		interp_error(interp, "codeptr");
 		return 0;
 	}
 
-	if (!leb128_read(code, &func_index)) {
+	if (unlikely(!leb128_read(code, &func_index))) {
 		interp_error(interp, "read func index");
 		return 0;
 	}
 
-	if (!prepare_call(interp, func_index)) {
+	if (unlikely(!prepare_call(interp, func_index))) {
 		interp_error(interp, "prepare");
 		return 0;
 	}
 
 	/* call the function! */
-	if (!interp_code(interp)) {
+	if (unlikely(!interp_code(interp))) {
 		return interp_error(interp, "call %s",
 				get_function_name_for_error(interp, func_index));
 	}
 
-	if (!cursor_pop_callframe(&interp->callframes, &frame))
+	if (unlikely(!cursor_pop_callframe(&interp->callframes, &frame)))
 		return interp_error(interp, "pop callframe");
 
 	return 1;
@@ -2389,9 +2383,8 @@ static int parse_blocktype(struct cursor *cur, struct errors *errs, struct block
 {
 	unsigned char byte;
 
-	if (!pull_byte(cur, &byte)) {
-		note_error(errs, cur, "parse_blocktype: oob\n");
-		return 0;
+	if (unlikely(!pull_byte(cur, &byte))) {
+		return note_error(errs, cur, "parse_blocktype: oob\n");
 	}
 
 	if (byte == 0x40) {
@@ -2432,7 +2425,7 @@ static struct label *index_frame_label(struct wasm_interp *interp, int ind)
 	struct callframe *frame;
 
 	frame = top_callframe(&interp->callframes);
-	if (!frame) {
+	if (unlikely(!frame)) {
 		interp_error(interp, "no callframe?");
 		return NULL;
 	}
@@ -2468,16 +2461,16 @@ static int pop_label_checkpoint(struct wasm_interp *interp)
 	struct callframe *frame;
 	u16 label_ind = 0;
 
-	if (!pop_resolver(interp, &label_ind))
+	if (unlikely(!pop_resolver(interp, &label_ind)))
 		return interp_error(interp, "couldn't pop jump resolver stack");
 
-	if (!(frame = top_callframe(&interp->callframes)))
+	if (unlikely(!(frame = top_callframe(&interp->callframes))))
 		return interp_error(interp, "no callframe?");
 
-	if (!(label = index_label(&interp->labels, frame->fn, label_ind)))
+	if (unlikely(!(label = index_label(&interp->labels, frame->fn, label_ind))))
 		return interp_error(interp, "index label");
 
-	if (!resolve_label(label, &frame->code))
+	if (unlikely(!resolve_label(label, &frame->code)))
 		return interp_error(interp, "resolve label");
 
 	return 1;
@@ -2540,7 +2533,7 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 	      *num_labels, get_function_name(interp->module, fn));
 
 	*ind = *num_labels;
-	if (!(label = index_label(&interp->labels, fn, *ind)))
+	if (unlikely(!(label = index_label(&interp->labels, fn, *ind))))
 		return interp_error(interp, "index label");
 
 	set_label_pos(label, instr_pos);
@@ -2565,24 +2558,25 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	fns = functions_count(interp->module);
 	frame = top_callframe(&interp->callframes);
 
-	if (!frame) {
+	if (unlikely(!frame)) {
 		return interp_error(interp, "no callframes available?");
-	} else if (frame->fn >= fns) {
+	} else if (unlikely(frame->fn >= fns)) {
 		return interp_error(interp, "invalid fn index?");
 	}
 
 	instr_pos = frame->code.p - frame->code.start;
-	if (!upsert_label(interp, frame->fn, instr_pos, &ind)) {
+	if (unlikely(!upsert_label(interp, frame->fn, instr_pos, &ind))) {
 		return interp_error(interp, "upsert label");
 	}
 
-	if (!(*label = index_label(&interp->labels, frame->fn, ind))) {
+	if (unlikely(!(*label = index_label(&interp->labels, frame->fn, ind)))) {
 		return interp_error(interp, "couldn't index label");
 	}
 
-	if (!cursor_push_u16(&interp->resolver_stack, ind)) {
+	if (unlikely(!cursor_push_u16(&interp->resolver_stack, ind))) {
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
+
 	debug("pushed resolver stack %ld\n",
 			cursor_count(&interp->resolver_stack, sizeof(u16)));
 
@@ -2782,14 +2776,14 @@ static int interp_jump(struct wasm_interp *interp, int jmp)
 	struct callframe *frame;
 
 	frame = top_callframe(&interp->callframes);
-	if (!frame) {
+	if (unlikely(!frame)) {
 		return interp_error(interp, "no callframe?");
 	}
 
 	debug("jumping to %04x\n", jmp);
 	frame->code.p = frame->code.start + jmp;
 
-	if (frame->code.p >= frame->code.end) {
+	if (unlikely(frame->code.p >= frame->code.end)) {
 		return interp_error(interp,
 			"code pointer at or past end, evil jump?");
 	}
@@ -2835,20 +2829,20 @@ static int interp_block(struct wasm_interp *interp)
 	struct cursor *code;
 	struct label *label;
 
-	if (!(code = interp_codeptr(interp))) {
+	if (unlikely(!(code = interp_codeptr(interp)))) {
 		interp_error(interp, "empty callstack?");
 		return 0;
 	}
 
-	if (!parse_blocktype(code, &interp->errors, &blocktype)) {
+	if (unlikely(!parse_blocktype(code, &interp->errors, &blocktype))) {
 		return interp_error(interp, "couldn't parse blocktype");
 	}
 
-	if (!push_label_checkpoint(interp, &label)) {
+	if (unlikely(!push_label_checkpoint(interp, &label))) {
 		return interp_error(interp, "block label checkpoint");
 	}
 
-	if (!interp_code(interp)) {
+	if (unlikely(!interp_code(interp))) {
 		return interp_error(interp, "interp code");
 	}
 
@@ -2861,15 +2855,15 @@ static int interp_if(struct wasm_interp *interp)
 	struct blocktype blocktype;
 	struct cursor *code;
 
-	if (!(code = interp_codeptr(interp))) {
+	if (unlikely(!(code = interp_codeptr(interp)))) {
 		return interp_error(interp, "empty callstack?");
 	}
 
-	if (!parse_blocktype(code, &interp->errors, &blocktype)) {
+	if (unlikely(!parse_blocktype(code, &interp->errors, &blocktype))) {
 		return interp_error(interp, "couldn't parse blocktype");
 	}
 
-	if (!cursor_popval(&interp->stack, &cond)) {
+	if (unlikely(!cursor_popval(&interp->stack, &cond))) {
 		return interp_error(interp, "if pop val");
 	}
 
@@ -2877,7 +2871,7 @@ static int interp_if(struct wasm_interp *interp)
 		return 1;
 	}
 
-	if (!branch_jump(interp, i_end)) {
+	if (unlikely(!branch_jump(interp, i_end))) {
 		return interp_error(interp, "jump");
 	}
 
@@ -2888,9 +2882,9 @@ static int interp_i32_eqz(struct wasm_interp *interp)
 {
 	struct val a, res;
 
-	if (!cursor_popval(&interp->stack, &a))
+	if (unlikely(!cursor_popval(&interp->stack, &a)))
 		return interp_error(interp, "if pop val");
-	if (a.type != i32)
+	if (unlikely(a.type != i32))
 		return interp_error(interp, "not an i32 value");
 
 	res.type = i32;
@@ -2914,11 +2908,11 @@ static int interp_br_jump(struct wasm_interp *interp, int index)
 	int ind;
 	struct label *label;
 
-	if (!top_resolver_stack(&interp->resolver_stack, index, &ind)) {
+	if (unlikely(!top_resolver_stack(&interp->resolver_stack, index, &ind))) {
 		return interp_error(interp, "invalid resolver index %d", index);
 	}
 
-	if (!(label = index_frame_label(interp, ind))) {
+	if (unlikely(!(label = index_frame_label(interp, ind)))) {
 		return interp_error(interp, "index label");
 	}
 
@@ -2935,19 +2929,19 @@ static int interp_br_if(struct wasm_interp *interp)
 	u32 ind;
 	int cond = 0;
 
-	if (!(code = interp_codeptr(interp))) {
+	if (unlikely(!(code = interp_codeptr(interp)))) {
 		return interp_error(interp, "codeptr");
 	}
 
-	if (!leb128_read(code, &ind))
+	if (unlikely(!leb128_read(code, &ind)))
 		return interp_error(interp, "read br_if index");
 
 	// TODO: can this be something other than an i32?
-	if (!stack_pop_i32(interp, &cond)) {
+	if (unlikely(!stack_pop_i32(interp, &cond))) {
 		return interp_error(interp, "pop br_if i32");
 	}
 
-	if (cond != 0)
+	if (cond != 1)
 		return interp_br_jump(interp, ind);
 
 	return 1;
@@ -2991,22 +2985,22 @@ int interp_code(struct wasm_interp *interp)
 	struct cursor *code;
 
 	for (;;) {
-		if (!(code = interp_codeptr(interp))) {
+		if (unlikely(!(code = interp_codeptr(interp)))) {
 			return interp_error(interp, "codeptr");
 		}
 
-		if (!pull_byte(code, &tag)) {
+		if (unlikely(!pull_byte(code, &tag))) {
 			//cursor_print_around(code, 10);
 			return interp_error(interp, "instr tag");
 		}
 
-		if (tag == i_end) {
+		if (unlikely(tag == i_end)) {
 			if (!cursor_popint(&interp->locals_offsets, &offset))
 				return interp_error(interp, "pop locals_offset");
 			break;
 		}
 
-		if (!interp_instr(interp, tag)) {
+		if (unlikely(!interp_instr(interp, tag))) {
 			return interp_error(interp, "interp instr %s",
 					instr_name(tag));
 		}

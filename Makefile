@@ -19,6 +19,9 @@ WASMS = wasm/hello-c.wasm \
 
 all: protoverse bench test libprotoverse.a
 
+noinline: CFLAGS += -DNOINLINE
+noinline: all
+
 debug: CFLAGS += -DDEBUG
 debug: all
 
