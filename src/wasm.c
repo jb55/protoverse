@@ -25,16 +25,6 @@
 
 static const int MAX_LABELS = 128;
 
-struct val {
-	enum valtype type;
-	union {
-		int i32;
-		u64 i64;
-		float f32;
-		double f64;
-	};
-};
-
 struct expr_parser {
 	struct wasm_interp *interp; // optional...
 	struct cursor *code;
@@ -82,18 +72,61 @@ static INLINE int offset_stack_top(struct cursor *cur)
 	return *(p - sizeof(*p));
 }
 
-static INLINE struct val *get_local(struct wasm_interp *interp, int ind)
+static INLINE struct local *get_locals(struct func *func, int *num_locals)
 {
-	struct val *p;
-	int offset = offset_stack_top(&interp->locals_offsets);
+	switch (func->type) {
+	case func_type_wasm:
+		*num_locals = func->wasm_func->num_locals;
+		return func->wasm_func->locals;
+	case func_type_builtin:
+		*num_locals = func->builtin->num_locals;
+		return func->builtin->locals;
+	}
+	return NULL;
+}
 
-	if (unlikely(!(p = index_cursor(&interp->locals, offset + ind,
-						sizeof(struct val))))) {
-		interp_error(interp, "%d local oob %d > %ld", ind, offset + ind,
-				interp->locals.end - interp->locals.start);
+static INLINE int is_valid_fn_index(struct module *module, int ind)
+{
+	return ind >= 0 && ind < module->num_funcs;
+}
+
+static INLINE struct func *get_function(struct module *module, int ind)
+{
+	if (unlikely(!is_valid_fn_index(module, ind)))
+		return NULL;
+	return &module->funcs[ind];
+}
+
+static struct val *get_local(struct wasm_interp *interp, int ind)
+{
+	struct callframe *frame;
+	struct func *func;
+	struct local *locals;
+	int num_locals;
+
+	if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
+		interp_error(interp, "no callframe?");
 		return NULL;
 	}
-	return p;
+
+	if (unlikely(!(func = get_function(interp->module, frame->fn)))) {
+		interp_error(interp, "unknown fn %d", frame->fn);
+		return NULL;
+	}
+
+	if (unlikely(!(locals = get_locals(func, &num_locals)))) {
+		interp_error(interp, "couldn't find locals for %s",
+				    func->name);
+		return NULL;
+	}
+
+	if (unlikely(!(ind >= num_locals))) {
+		interp_error(interp, "local index %d too high for %s (max %d)",
+				ind, func->name, num_locals-1);
+		return NULL;
+	}
+
+	return &locals[ind].val;
 }
 
 static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
@@ -560,18 +593,6 @@ static INLINE int count_imported_functions(struct module *module)
 	return count_imports(module, &typ);
 }
 
-static INLINE int is_valid_fn_index(struct module *module, int ind)
-{
-	return ind >= 0 && ind < module->num_funcs;
-}
-
-static INLINE struct func *get_function(struct module *module, int ind)
-{
-	if (unlikely(!is_valid_fn_index(module, ind)))
-		return NULL;
-	return &module->funcs[ind];
-}
-
 static INLINE const char *get_function_name(struct module *module, int fn)
 {
 	struct func *func = NULL;
@@ -932,12 +953,12 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
-	if (unlikely(!leb128_read(&p->cur, &local->n))) {
+	if (unlikely(!leb128_read(&p->cur, (unsigned int*)&local->val.i32))) {
 		parse_err(p, "n");
 		return 0;
 	}
 
-	if (unlikely(!parse_valtype(p, &local->valtype))) {
+	if (unlikely(!parse_valtype(p, &local->val.type))) {
 		parse_err(p, "valtype");
 		return 0;
 	}
@@ -2074,37 +2095,15 @@ static int interp_i32_sub(struct wasm_interp *interp)
 	return cursor_pushval(&interp->stack, &c);
 }
 
-static INLINE int count_locals(struct wasm_interp *interp)
-{
-	int offset = offset_stack_top(&interp->locals_offsets);
-	int count = cursor_count(&interp->locals, sizeof(struct val));
-	return count - offset;
-}
-
 static int set_local(struct wasm_interp *interp, int ind, struct val *val)
 {
 	struct val *local;
-	int nlocals;
 
-	nlocals = count_locals(interp);
-
-	if (ind > nlocals) {
-		/* TODO: if we hit this then we need to push empty locals up to the index */
-		interp_error(interp, "local index out of order");
-		return 0;
+	if (unlikely(!(local = get_local(interp, ind)))) {
+		return interp_error(interp, "no local?");
 	}
 
-	if (ind < nlocals) {
-		debug("memsetting local %d\n", ind);
-		if (!(local = get_local(interp, ind))) {
-			return 0;
-		}
-		memcpy(local, val, sizeof(*val));
-		return 1;
-	}
-
-	cursor_pushval(&interp->locals, val);
-	assert(count_locals(interp) > 0);
+	memcpy(local, val, sizeof(*val));
 	return 1;
 }
 
@@ -2136,7 +2135,6 @@ static int interp_local_set(struct wasm_interp *interp)
 static int interp_local_get(struct wasm_interp *interp)
 {
 	unsigned int index;
-	unsigned int nlocals;
 	struct val *val;
 	struct cursor *code;
 
@@ -2147,13 +2145,6 @@ static int interp_local_get(struct wasm_interp *interp)
 
 	if (unlikely(!leb128_read(code, &index))) {
 		interp_error(interp, "index");
-		return 0;
-	}
-
-	nlocals = count_locals(interp);
-	if (unlikely(index >= nlocals)) {
-		interp_error(interp, "local %d not set (%d locals)", index,
-				nlocals);
 		return 0;
 	}
 
@@ -2295,13 +2286,9 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 				interp->module->code_section.num_funcs);
 	}
 
-	/* record locals offset for indexing locals in the next function */
-	offset = cursor_count(&interp->locals, sizeof(struct val));
-	if (unlikely(!cursor_push_int(&interp->locals_offsets, offset)))
-		return interp_error(interp, "push locals offset");
-
 	offset = count_resolvers(interp);
-	/* this is like locals offsets but for label resolvers */
+	/* push label resolver offsets, used to keep track of per-func resolvers */
+	/* TODO: maybe move this data to struct func? */
 	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
 		return interp_error(interp, "push resolver offset");
 
@@ -2343,8 +2330,8 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 				valtype_name(paramtype));
 		}
 
-		if (unlikely(!cursor_pushval(&interp->locals, &val))) {
-			return interp_error(interp, "push param local");
+		if (unlikely(!set_local(interp, i, &val))) {
+			return interp_error(interp, "set param local %d", i);
 		}
 	}
 
@@ -3089,10 +3076,6 @@ int interp_code(struct wasm_interp *interp)
 					return interp_error(interp,
 							"pop resolver_offsets");
 				}
-				if (!cursor_popint(&interp->locals_offsets,
-						   &offset))
-					return interp_error(interp,
-							"pop locals_offset");
 				break;
 			}
 		}
@@ -3206,8 +3189,6 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	ok =
 		cursor_slice(&interp->mem, &interp->stack, stack_size) &&
 		cursor_slice(&interp->mem, &interp->errors.cur, errors_size) &&
-		cursor_slice(&interp->mem, &interp->locals, locals_size) &&
-		cursor_slice(&interp->mem, &interp->locals_offsets, offsets_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_offsets, resolver_offsets_size) &&
 		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
@@ -3243,8 +3224,6 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->resolver_stack);
 	reset_cursor(&interp->resolver_offsets);
 	reset_cursor(&interp->errors.cur);
-	reset_cursor(&interp->locals);
-	reset_cursor(&interp->locals_offsets);
 	reset_cursor(&interp->callframes);
 	// don't reset labels for perf!
 

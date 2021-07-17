@@ -181,9 +181,18 @@ struct global {
 	struct expr init;
 };
 
+struct val {
+	enum valtype type;
+	union {
+		int i32;
+		u64 i64;
+		float f32;
+		double f64;
+	};
+};
+
 struct local {
-	unsigned int n;
-	enum valtype valtype;
+	struct val val;
 };
 
 /* "code" */
@@ -486,8 +495,6 @@ struct wasm_interp {
 	struct cursor callframes; /* struct callframe */
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
-	struct cursor locals;  /* struct val */
-	struct cursor locals_offsets; /* int */
 	struct cursor resolver_offsets; /* int */
 
 	struct array labels; /* struct labels */
@@ -501,6 +508,8 @@ struct wasm_interp {
 
 struct builtin {
 	const char *name;
+	struct local locals[8];
+	int num_locals;
 	int (*fn)(struct wasm_interp *);
 	int (*prepare_args)(struct wasm_interp *);
 };
