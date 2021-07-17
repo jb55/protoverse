@@ -530,61 +530,55 @@ static void print_table_section(struct tablesec *section)
 	}
 }
 
-static INLINE int imports_count(struct module *module)
+static int count_imports(struct module *module, enum import_type *typ)
 {
-	return !was_section_parsed(module, section_import) ? 0 :
-		module->import_section.num_imports;
-}
-
-static struct import *find_function_import(struct importsec *section, int ind)
-{
-	int i;
+	int i, count = 0;
 	struct import *import;
-	int fns = 0;
+	struct importsec *imports;
 
-	for (i = 0; i < section->num_imports; i++) {
-		import = &section->imports[i];
-		if (import->desc.type == import_func && fns++ == ind) {
-			return import;
+	if (!was_section_parsed(module, section_import))
+		return 0;
+
+	imports = &module->import_section;
+
+	if (typ == NULL)
+		return imports->num_imports;
+
+	for (i = 0; i < imports->num_imports; i++) {
+		import = &imports->imports[i];
+		if (import->desc.type == *typ) {
+			count++;
 		}
 	}
 
-	return NULL;
+	return count;
 }
 
-static const char *get_function_name(struct module *module, int func_index)
+static INLINE int count_imported_functions(struct module *module)
 {
-	struct wexport *export;
-	struct import *import;
-	int i, num_imports;
-
-	num_imports = imports_count(module);
-
-	if (func_index - num_imports < 0) {
-		import = find_function_import(&module->import_section, func_index);
-		if (import == NULL) {
-			return "unknown-import";
-		}
-
-		return import->name;
-	}
-
-	for (i = 0; i < module->export_section.num_exports; i++) {
-		export = &module->export_section.exports[i];
-		if (export->desc == export_func &&
-		    export->index == (unsigned int)func_index) {
-			return export->name;
-		}
-	}
-
-	return "unknown";
+	enum import_type typ = import_func;
+	return count_imports(module, &typ);
 }
 
-static const char *get_function_name_for_error(struct wasm_interp *interp, int func_index)
+static INLINE int is_valid_fn_index(struct module *module, int ind)
 {
-	if (!interp->errors.enabled)
-		return "?";
-	return get_function_name(interp->module, func_index);
+	return ind >= 0 && ind < module->num_funcs;
+}
+
+static INLINE struct func *get_function(struct module *module, int ind)
+{
+	if (unlikely(!is_valid_fn_index(module, ind)))
+		return NULL;
+	return &module->funcs[ind];
+}
+
+static INLINE const char *get_function_name(struct module *module, int fn)
+{
+	struct func *func = NULL;
+	if (unlikely(!(func = get_function(module, fn)))) {
+		return NULL;
+	}
+	return func->name;
 }
 
 static void print_element_section(struct elemsec *section)
@@ -1889,6 +1883,107 @@ static int parse_section(struct wasm_parser *p)
 	return 1;
 }
 
+static INLINE int functions_count(struct module *module)
+{
+	return module->num_funcs;
+}
+
+static struct builtin *builtin_func(int ind)
+{
+	if (unlikely(ind < 0 || ind >= NUM_BUILTINS)) {
+		printf("UNUSUAL: invalid builtin index %d (max %d)\n", ind,
+				NUM_BUILTINS-1);
+		return NULL;
+	}
+	return &BUILTINS[ind];
+}
+
+static INLINE int count_internal_functions(struct module *module)
+{
+	return !was_section_parsed(module, section_code) ? 0 :
+		module->code_section.num_funcs;
+}
+
+static const char *find_exported_function_name(struct module *module, int fn)
+{
+	int i;
+	struct wexport *export;
+
+	if (!was_section_parsed(module, section_export))
+		return "unknown";
+
+	for (i = 0; i < module->export_section.num_exports; i++) {
+		export = &module->export_section.exports[i];
+		if (export->desc == export_func &&
+		    export->index == (unsigned int)fn) {
+			return export->name;
+		}
+	}
+
+	return "unknown";
+}
+
+
+static int make_func_lookup_table(struct wasm_parser *parser)
+{
+	int i, num_imports, num_func_imports, num_internal_funcs, typeidx;
+	struct import *import;
+	struct importsec *imports;
+	struct func *func;
+	int fn = 0;
+
+	imports = &parser->module.import_section;
+	num_func_imports = count_imported_functions(&parser->module);
+	num_internal_funcs = count_internal_functions(&parser->module);
+	parser->module.num_funcs = num_func_imports + num_internal_funcs;
+
+	if (!(parser->module.funcs =
+		cursor_alloc(&parser->mem, sizeof(struct func) *
+			     parser->module.num_funcs))) {
+		return parse_err(parser, "oom");
+	}
+
+	/* imports */
+	num_imports = count_imports(&parser->module, NULL);
+
+	for (i = 0; i < num_imports; i++) {
+		import = &imports->imports[i];
+
+		if (import->desc.type != import_func)
+			continue;
+
+		func = &parser->module.funcs[fn++];
+
+		func->name = import->name;
+		typeidx = import->desc.typeidx;
+		func->functype = &parser->module.type_section.functypes[typeidx];
+		func->type = func_type_builtin;
+
+		if (import->resolved_builtin == -1) {
+			debug("warning: %s not resolved\n", func->name);
+			func->builtin = NULL;
+		} else {
+			func->builtin = builtin_func(import->resolved_builtin);
+		}
+	}
+
+	/* module fns */
+	for (i = 0; i < num_internal_funcs; i++, fn++) {
+		func = &parser->module.funcs[fn];
+
+		typeidx = parser->module.func_section.type_indices[i];
+		func->type = func_type_wasm;
+		func->wasm_func = &parser->module.code_section.funcs[i];
+		func->functype = &parser->module.type_section.functypes[typeidx];
+		func->name = find_exported_function_name(&parser->module, fn);
+	}
+
+	assert(fn == parser->module.num_funcs);
+
+	return 1;
+}
+
+
 int parse_wasm(struct wasm_parser *p)
 {
 	p->module.parsed = 0;
@@ -1912,6 +2007,10 @@ int parse_wasm(struct wasm_parser *p)
 			parse_err(p, "section");
 			goto fail;
 		}
+	}
+
+	if (!make_func_lookup_table(p)) {
+		return parse_err(p, "failed making func lookup table");
 	}
 
 	print_module(&p->module);
@@ -2113,88 +2212,15 @@ static INLINE int code_count(struct module *module)
 		module->code_section.num_funcs;
 }
 
-static INLINE int functions_count(struct module *module)
-{
-	return imports_count(module) + code_count(module);
-}
-
-static struct builtin *builtin_func(int ind)
-{
-	if (unlikely(ind < 0 || ind >= NUM_BUILTINS)) {
-		printf("UNUSUAL: invalid builtin index %d (max %d)\n", ind,
-				NUM_BUILTINS-1);
-		return NULL;
-	}
-	return &BUILTINS[ind];
-}
-
-static int get_import_function(struct module *module, int ind, struct func *func)
-{
-	struct import *import;
-
-	import = find_function_import(&module->import_section, ind);
-
-	if (import->resolved_builtin == -1)
-		return 0;
-
-	func->type = func_type_builtin;
-	func->builtin = builtin_func(import->resolved_builtin);
-
-	return func->builtin != NULL;
-}
-
-static INLINE int get_function(struct module *module, int ind, struct func *func)
-{
-	if ((ind - imports_count(module)) < 0) {
-		return get_import_function(module, ind, func);
-	}
-
-	if (ind >= module->code_section.num_funcs) {
-		return 0;
-	}
-
-	func->type = func_type_wasm;
-	func->wasm_func = &module->code_section.funcs[ind - imports_count(module)];
-
-	return 1;
-}
-
 static struct functype *get_function_type(struct wasm_interp *interp, int ind)
 {
-	int typeidx;
-	struct import *import;
-
-	if (ind >= interp->module->func_section.num_indices) {
+	if (unlikely(!is_valid_fn_index(interp->module, ind))) {
 		interp_error(interp, "ind %d >= num_indices %d",
 				ind,interp->module->func_section.num_indices);
 		return NULL;
 	}
 
-	ind = ind - imports_count(interp->module);
-
-	// imports
-	if (ind < 0) {
-		ind += imports_count(interp->module);
-		import = find_function_import(&interp->module->import_section, ind);
-		if (import == NULL) {
-			interp_error(interp, "couldn't find function import (%d)", ind);
-			return NULL;
-		}
-		typeidx = import->desc.typeidx;
-		debug("found import func %d\n", import->desc.typeidx);
-	} else {
-		typeidx = interp->module->func_section.type_indices[ind];
-	}
-
-	if (typeidx >= interp->module->type_section.num_functypes) {
-		interp_error(interp, "ind %d >= num_functypes %d",
-				ind,
-				interp->module->type_section.num_functypes);
-		return NULL;
-	}
-
-
-	return &interp->module->type_section.functypes[typeidx];
+	return interp->module->funcs[ind].functype;
 }
 
 static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *func, int fn)
@@ -2217,6 +2243,11 @@ static INLINE int call_func(struct wasm_interp *interp, struct func *func, int f
 	case func_type_wasm:
 		return call_wasm_func(interp, func->wasm_func, fn);
 	case func_type_builtin:
+		if (func->builtin == NULL) {
+			return interp_error(interp,
+					"attempted to call unresolved fn: %s",
+					func->name);
+		}
 		return func->builtin->fn(interp);
 	}
 	return interp_error(interp, "corrupt func type: %02x", func->type);
@@ -2249,17 +2280,17 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	int i;
 	struct cursor buf;
 	struct functype *functype;
-	struct func func;
+	struct func *func;
 	struct val val;
 	enum valtype paramtype;
 	unsigned int offset;
 
-	debug("calling %s (%d)\n", get_function_name(interp->module, func_index), func_index);
+	//debug("calling %s (%d)\n", get_function_name(interp->module, func_index), func_index);
 
-	if (!get_function(interp->module, func_index, &func)) {
+	if (unlikely(!(func = get_function(interp->module, func_index)))) {
 		return interp_error(interp,
 				"function %s (%d) not found (%d funcs)",
-				get_function_name_for_error(interp, func_index),
+				get_function_name(interp->module, func_index),
 				func_index,
 				interp->module->code_section.num_funcs);
 	}
@@ -2278,7 +2309,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	if (unlikely(!(functype = get_function_type(interp, func_index)))) {
 		return interp_error(interp,
 			"couldn't get function type for function '%s' (%d)",
-			get_function_name_for_error(interp, func_index),
+			get_function_name(interp->module, func_index),
 			func_index);
 	}
 
@@ -2298,7 +2329,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 
 			return interp_error(interp,
 				"not enough arguments for call to %s: [%s], needed %d args, got %d",
-				get_function_name_for_error(interp, func_index),
+				get_function_name(interp->module, func_index),
 				functype_str(functype, &buf),
 				functype->params.num_valtypes,
 				i);
@@ -2317,7 +2348,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 		}
 	}
 
-	if (unlikely(!call_func(interp, &func, func_index))) {
+	if (unlikely(!call_func(interp, func, func_index))) {
 		return interp_error(interp, "call func");
 	}
 
@@ -2349,7 +2380,7 @@ static int interp_call(struct wasm_interp *interp)
 
 	if (unlikely(!interp_code(interp))) {
 		return interp_error(interp, "call %s",
-				get_function_name_for_error(interp, func_index));
+				get_function_name(interp->module, func_index));
 	}
 
 	if (unlikely(!cursor_pop_callframe(&interp->callframes, &frame)))
@@ -2509,7 +2540,7 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 
 	if (*num_labels + 1 > MAX_LABELS) {
 		interp_error(interp, "too many labels in %s (> %d)",
-			get_function_name_for_error(interp, fn), MAX_LABELS);
+			get_function_name(interp->module, fn), MAX_LABELS);
 		return 0;
 	}
 
@@ -2991,6 +3022,12 @@ static int interp_br_if(struct wasm_interp *interp)
 	return 1;
 }
 
+static int interp_global_get(struct wasm_interp *interp)
+{
+	(void)interp;
+	return 0;
+}
+
 static int interp_instr(struct wasm_interp *interp, u8 tag)
 {
 	interp->ops++;
@@ -3004,6 +3041,7 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_nop: return 1;
 	case i_local_get: return interp_local_get(interp);
 	case i_local_set: return interp_local_set(interp);
+	case i_global_get: return interp_global_get(interp);
 	case i_i32_eqz: return interp_i32_eqz(interp);
 	case i_i32_add: return interp_i32_add(interp);
 	case i_i32_sub: return interp_i32_sub(interp);

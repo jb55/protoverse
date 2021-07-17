@@ -203,7 +203,9 @@ struct func {
 		struct wasm_func *wasm_func;
 		struct builtin *builtin;
 	};
+	struct functype *functype;
 	enum func_type type;
+	const char *name;
 };
 
 struct codesec {
@@ -437,6 +439,10 @@ struct startsec {
 struct module {
 	unsigned int parsed;
 	unsigned int custom_sections;
+
+	// this is a faster lookup than searching though imports/exports
+	struct func *funcs;
+	int num_funcs;
 	int start_fn;
 
 	struct customsec custom_section[MAX_CUSTOM_SECTIONS];
