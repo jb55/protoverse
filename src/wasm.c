@@ -58,9 +58,12 @@ static const char *valtype_name(enum valtype valtype)
 	case val_i64: return "i64";
 	case val_f32: return "f32";
 	case val_f64: return "f64";
+	case val_ref_null: return "null";
+	case val_ref_func: return "func";
+	case val_ref_extern: return "extern";
 	}
 
-	return "unk";
+	return "?";
 }
 
 static INLINE struct local *get_locals(struct func *func, int *num_locals)
@@ -70,6 +73,8 @@ static INLINE struct local *get_locals(struct func *func, int *num_locals)
 		*num_locals = func->wasm_func->num_locals;
 		return func->wasm_func->locals;
 	case func_type_builtin:
+		if (func->builtin == NULL)
+			return NULL;
 		*num_locals = func->builtin->num_locals;
 		return func->builtin->locals;
 	}
@@ -141,17 +146,55 @@ static INLINE struct val *stack_topval(struct wasm_interp *interp)
 	return cursor_topval(&interp->stack);
 }
 
-static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
+static INLINE int cursor_pop_i32(struct cursor *stack, int *i)
 {
 	struct val val;
-	if (unlikely(!cursor_popval(&interp->stack, &val)))
-		return interp_error(interp, "couldn't pop val");
-	if (unlikely(val.type != val_i32)) {
-		return interp_error(interp, "popped type %s instead of i32",
-				valtype_name(val.type));
-	}
+	if (unlikely(!cursor_popval(stack, &val)))
+		return 0;
+	if (unlikely(val.type != val_i32))
+		return 0;
 	*i = val.i32;
 	return 1;
+}
+
+static INLINE int is_number_type(enum valtype vt)
+{
+	switch (vt) {
+		case val_i32:
+		case val_i64:
+		case val_f32:
+		case val_f64:
+			return 1;
+		case val_ref_null:
+		case val_ref_func:
+		case val_ref_extern:
+			return 0;
+	}
+
+	return 0;
+}
+
+static INLINE int cursor_pop_number(struct cursor *stack, struct val *val)
+{
+	if (unlikely(!cursor_popval(stack, val))) {
+		return 0;
+	}
+
+	if (unlikely(!is_number_type(val->type))) {
+		return 0;
+	}
+
+	return 1;
+}
+
+static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
+{
+	return cursor_pop_i32(&interp->stack, i);
+}
+
+static INLINE int stack_pop_number(struct wasm_interp *interp, struct val *val)
+{
+	return cursor_pop_number(&interp->stack, val);
 }
 
 static int builtin_get_args(struct wasm_interp *interp)
@@ -165,6 +208,11 @@ static int builtin_get_args(struct wasm_interp *interp)
 		return interp_error(interp, "argv_buf");
 
 	return 1;
+}
+
+static int builtin_get_args_sizes(struct wasm_interp *interp)
+{
+	return interp_error(interp, "implement get_args_sizes");
 }
 
 static INLINE int cursor_pushval(struct cursor *cur, struct val *val)
@@ -191,13 +239,16 @@ static INLINE int stack_push_i32(struct wasm_interp *interp, int i)
 	return cursor_push_i32(&interp->stack, i);
 }
 
+/*
 static int builtin_get_args_prep(struct wasm_interp *interp)
 {
 	return stack_push_i32(interp, 1) && stack_push_i32(interp, 2);
 }
+*/
 
 static struct builtin BUILTINS[] = {
-	{ .name = "args_get", .fn = builtin_get_args, .prepare_args = builtin_get_args_prep },
+	{ .name = "args_get",       .fn = builtin_get_args },
+	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -206,11 +257,13 @@ static int parse_instr(struct expr_parser *parser, u8 tag, struct instr *op);
 
 static INLINE int is_valtype(unsigned char byte)
 {
-	switch ((enum valtype)byte) {
-		case val_i32:
-		case val_i64:
-		case val_f32:
-		case val_f64:
+	switch (byte) {
+		case 0x7F: // i32
+		case 0x7E: // i64
+		case 0x7D: // f32
+		case 0x7C: // f64
+		case 0x70: // funcref
+		case 0x6F: // externref
 			return 1;
 	}
 
@@ -363,12 +416,17 @@ static char *instr_name(enum instr_tag tag)
 static void print_val(struct val *val)
 {
 	switch (val->type) {
-	case val_i32: printf("%d", val->i32); break;
-	case val_i64: printf("%llu", val->i64); break;
-	case val_f32: printf("%f", val->f32); break;
-	case val_f64: printf("%f", val->f64); break;
+	case val_i32: printf("%d:", val->i32); break;
+	case val_i64: printf("%llu:", val->i64); break;
+	case val_f32: printf("%f:", val->f32); break;
+	case val_f64: printf("%f:", val->f64); break;
+
+	case val_ref_null:
+	case val_ref_func:
+	case val_ref_extern:
+		      break;
 	}
-	printf(":%s\n", valtype_name(val->type));
+	printf("%s\n", valtype_name(val->type));
 }
 
 static INLINE int was_section_parsed(struct module *module,
@@ -1406,7 +1464,13 @@ static int parse_global(struct wasm_parser *p,
 		struct global *global)
 {
 	struct expr_parser parser;
-	make_const_expr_parser(p, &parser);
+	struct cursor stack;
+
+	stack.start = p->mem.p;
+	stack.p = p->mem.p;
+	stack.end = p->mem.end;
+
+	make_const_expr_evaluator(&p->errs, &p->cur, &stack, &parser);
 
 	if (!parse_globaltype(p, &global->type)) {
 		return parse_err(p, "type");
@@ -1414,6 +1478,10 @@ static int parse_global(struct wasm_parser *p,
 
 	if (!parse_const_expr(&parser, &global->init)) {
 		return parse_err(p, "init code");
+	}
+
+	if (!cursor_popval(&stack, &global->val)) {
+		return parse_err(p, "couldn't eval global expr");
 	}
 
 	return 1;
@@ -3193,9 +3261,60 @@ static int interp_global_get(struct wasm_interp *interp)
 	return 1;
 }
 
-static INLINE int active_pages(struct wasm_interp *interp)
+static INLINE u8 *global_init_state(struct wasm_interp *interp, int ind)
 {
-	return cursor_count(&interp->memory, WASM_PAGE_SIZE);
+	u8 *p;
+
+	if (unlikely(!(p = index_cursor(&interp->global_init, ind, 1)))) {
+		interp_error(interp, "global ind %d oob", ind);
+		return NULL;
+	}
+
+	return p;
+}
+
+static struct val *get_global(struct wasm_interp *interp, int ind)
+{
+	struct globalsec *globsec;
+	struct global *global;
+	struct val *val;
+	u8 *init;
+
+	if (unlikely(!was_section_parsed(interp->module, section_global))) {
+		interp_error(interp,
+			"can't get global %d, no global section parsed!", ind);
+		return NULL;
+	}
+
+	globsec = &interp->module->global_section;
+
+	if (unlikely(!(val = index_cursor(&interp->globals, ind, sizeof(*val))))) {
+		interp_error(interp,
+				"invalid global index %d (max %d)",
+				ind, globsec->num_globals-1);
+		return NULL;
+	}
+
+	if (unlikely(!(init = global_init_state(interp, ind)))) {
+		interp_error(interp,
+			"couldn't get global init state for global %d", ind);
+		return NULL;
+	}
+
+	/* global is already initialized, return it */
+	if (*init == 1) {
+		return val;
+	}
+
+	/* initialize global then return it */
+	global = &interp->module->global_section.globals[ind];
+
+	/* copy initialized global from module to global instance */
+	memcpy(val, &global->val, sizeof(*val));
+
+	*init = 1;
+
+	return val;
 }
 
 static INLINE int has_memory_section(struct module *module)
@@ -3204,6 +3323,109 @@ static INLINE int has_memory_section(struct module *module)
 		module->memory_section.num_mems > 0;
 }
 
+static INLINE int bitwidth(enum valtype vt)
+{
+	switch (vt) {
+	case val_i32:
+	case val_f32:
+		return 32;
+
+	case val_i64:
+	case val_f64:
+		return 64;
+
+	/* invalid? */
+	case val_ref_null:
+	case val_ref_func:
+	case val_ref_extern:
+		return 0;
+	}
+
+	return 0;
+}
+
+static int interp_store(struct wasm_interp *interp, int N)
+{
+	struct cursor *code;
+	struct val c;
+	struct memarg memarg;
+	int i, offset, bw, n, size;
+
+	if (unlikely(!has_memory_section(interp->module))) {
+		return interp_error(interp, "no memory section");
+	}
+
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (unlikely(!parse_memarg(code, &memarg))) {
+		return interp_error(interp, "memarg");
+	}
+
+	if (unlikely(!stack_pop_number(interp, &c)))  {
+		return interp_error(interp, "pop stack");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &i)))  {
+		return interp_error(interp, "pop stack");
+	}
+
+	offset = i + memarg.offset;
+	bw = bitwidth(c.type);
+	n = c.i32;
+
+	if (N == 0) {
+		N = bw;
+	} else {
+		n %= 1 << N;
+	}
+
+	size = N/8;
+
+	assert(interp->memory.p > interp->memory.start);
+	if (interp->memory.start + offset + size > interp->memory.p) {
+		return interp_error(interp,
+			"mem store oob off:%d size:%d mem:%d", offset, size,
+				interp->memory.p - interp->memory.start);
+	}
+
+	memcpy(interp->memory.start + offset, &n, size);
+
+	return 1;
+}
+
+static int interp_global_set(struct wasm_interp *interp)
+{
+	struct val *global, setval;
+	int global_ind;
+	struct cursor *code;
+
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (unlikely(!leb128_read(code, (unsigned int*)&global_ind))) {
+		return interp_error(interp, "read global ind");
+	}
+
+	if (unlikely(!(global = get_global(interp, global_ind)))) {
+		return interp_error(interp, "couldn't get global %d", global_ind);
+	}
+
+	if (unlikely(!stack_popval(interp, &setval))) {
+		return interp_error(interp, "couldn't pop stack value");
+	}
+
+	memcpy(global, &setval, sizeof(setval));
+
+	return 1;
+}
+
+static INLINE int active_pages(struct wasm_interp *interp)
+{
+	return cursor_count(&interp->memory, WASM_PAGE_SIZE);
+}
 
 static int interp_memory_grow(struct wasm_interp *interp)
 {
@@ -3280,12 +3502,28 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_local_set: return interp_local_set(interp);
 	case i_local_tee: return interp_local_tee(interp);
 	case i_global_get: return interp_global_get(interp);
+	case i_global_set: return interp_global_set(interp);
 	case i_i32_eqz: return interp_i32_eqz(interp);
 	case i_i32_add: return interp_i32_add(interp);
 	case i_i32_sub: return interp_i32_sub(interp);
 	case i_i32_const: return interp_i32_const(interp);
 	case i_i32_gt_u: return interp_i32_gt_u(interp);
 	case i_i32_lt_s: return interp_i32_lt_s(interp);
+
+	case i_i32_store:
+	case i_f32_store:
+	case i_i64_store32:
+		return interp_store(interp, 32);
+	case i_i64_store:
+	case i_f64_store:
+		return interp_store(interp, 64);
+	case i_i32_store8:
+	case i_i64_store8:
+		return interp_store(interp, 8);
+	case i_i64_store16:
+	case i_i32_store16:
+		return interp_store(interp, 16);
+
 	case i_if: return interp_if(interp);
 	case i_end: return pop_label_checkpoint(interp);
 	case i_call: return interp_call(interp);
@@ -3401,7 +3639,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	unsigned int ok, fns, errors_size, stack_size, locals_size, offsets_size,
 	    callframes_size, resolver_size, labels_size, num_labels_size,
 	    labels_capacity, num_labels_elemsize, memsize, memory_pages_size,
-	    resolver_offsets_size, num_mems;
+	    resolver_offsets_size, num_mems, globals_size, num_globals,
+	    global_init_size;
 
 	memset(interp, 0, sizeof(*interp));
 	interp->module = module;
@@ -3413,6 +3652,12 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	labels_capacity  = fns * MAX_LABELS;
 	num_labels_elemsize = sizeof(u16);
 
+	num_mems = was_section_parsed(module, section_memory)?
+		module->memory_section.num_mems : 0;
+
+	num_globals = was_section_parsed(module, section_global)?
+		module->global_section.num_globals : 0;
+
 	// TODO: make memory limits configurable
 	errors_size      = 0xFFF;
 	stack_size       = sizeof(struct val) * 0xFF;
@@ -3423,9 +3668,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	resolver_offsets_size = offsets_size;
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
-
-	num_mems = was_section_parsed(interp->module, section_memory)?
-		interp->module->memory_section.num_mems : 0;
+	globals_size     = sizeof(struct val) * num_globals;
+	global_init_size = num_globals;
 
 	if (num_mems > 1) {
 		printf("more than one memory instance is not supported\n");
@@ -3435,7 +3679,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	interp->labels.elem_size = sizeof(struct label);
 	interp->num_labels.elem_size = num_labels_elemsize;
 
-	memory_pages_size = 0x8000UL * WASM_PAGE_SIZE;
+	memory_pages_size = 256 * WASM_PAGE_SIZE;
 
 	memsize =
 		errors_size +
@@ -3446,6 +3690,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		offsets_size +
 		resolver_offsets_size +
 		callframes_size +
+		globals_size +
+		global_init_size +
 		resolver_size;
 
 	mem = calloc(1, memsize);
@@ -3464,11 +3710,16 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
+		cursor_slice(&interp->mem, &interp->globals, globals_size) &&
+		cursor_slice(&interp->mem, &interp->global_init, global_init_size) &&
 		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
 	        array_alloc(&interp->mem, &interp->num_labels, fns);
 
+	/* init memory pages */
+	assert((interp->mem.end - interp->mem.start) == memsize);
+
 	if (!ok) {
-		return interp_error(interp, "not enough memory 1");
+		return interp_error(interp, "not enough memory");
 	}
 
 	return 1;
@@ -3483,6 +3734,28 @@ void wasm_interp_free(struct wasm_interp *interp)
 {
 	free(interp->mem.start);
 	free(interp->memory.start);
+}
+
+static int reset_memory(struct wasm_interp *interp)
+{
+	int pages, num_mems;
+
+	num_mems = was_section_parsed(interp->module, section_memory)?
+		interp->module->memory_section.num_mems : 0;
+
+	reset_cursor(&interp->memory);
+
+	if (num_mems == 1) {
+		pages = interp->module->memory_section.mems[0].min;
+		if (!cursor_malloc(&interp->memory, pages * WASM_PAGE_SIZE)) {
+			return interp_error(interp,
+					"could not alloc %d memory pages",
+					pages);
+		}
+		assert(interp->memory.p > interp->memory.start);
+	}
+
+	return 1;
 }
 
 int interp_wasm_module(struct wasm_interp *interp)
@@ -3502,7 +3775,12 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->resolver_offsets);
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->callframes);
-	reset_cursor(&interp->memory);
+
+	if (!reset_memory(interp))
+		return interp_error(interp, "reset memory");
+
+	wipe_cursor(&interp->globals);
+	wipe_cursor(&interp->global_init);
 
 	// don't reset labels for perf!
 

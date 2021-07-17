@@ -28,6 +28,12 @@ static inline void reset_cursor(struct cursor *cursor)
 	cursor->p = cursor->start;
 }
 
+static inline void wipe_cursor(struct cursor *cursor)
+{
+	reset_cursor(cursor);
+	memset(cursor->start, 0, cursor->end - cursor->start);
+}
+
 static inline void make_cursor(u8 *start, u8 *end, struct cursor *cursor)
 {
 	cursor->start = start;
@@ -55,7 +61,7 @@ static inline int cursor_eof(struct cursor *c)
 	return c->p == c->end;
 }
 
-static inline void *cursor_alloc(struct cursor *mem, unsigned long size)
+static inline void *cursor_malloc(struct cursor *mem, unsigned long size)
 {
 	void *ret;
 
@@ -64,9 +70,19 @@ static inline void *cursor_alloc(struct cursor *mem, unsigned long size)
 	}
 
 	ret = mem->p;
-	memset(ret, 0, size);
 	mem->p += size;
 
+	return ret;
+}
+
+static inline void *cursor_alloc(struct cursor *mem, unsigned long size)
+{
+	void *ret;
+	if (!(ret = cursor_malloc(mem, size))) {
+		return 0;
+	}
+
+	memset(ret, 0, size);
 	return ret;
 }
 
