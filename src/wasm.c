@@ -597,7 +597,7 @@ static INLINE const char *get_function_name(struct module *module, int fn)
 {
 	struct func *func = NULL;
 	if (unlikely(!(func = get_function(module, fn)))) {
-		return NULL;
+		return "unknown";
 	}
 	return func->name;
 }
@@ -2244,12 +2244,12 @@ static INLINE int call_func(struct wasm_interp *interp, struct func *func, int f
 	return interp_error(interp, "corrupt func type: %02x", func->type);
 }
 
-static inline int count_resolvers(struct wasm_interp *interp)
+static INLINE int count_resolvers(struct wasm_interp *interp)
 {
 	return cursor_count(&interp->resolver_stack, sizeof(struct resolver));
 }
 
-static inline int count_local_resolvers(struct wasm_interp *interp, int *count)
+static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 {
 	int offset;
 	u8 *p;
@@ -2276,7 +2276,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	enum valtype paramtype;
 	unsigned int offset;
 
-	//debug("calling %s (%d)\n", get_function_name(interp->module, func_index), func_index);
+	debug("calling %s (%d)\n", get_function_name(interp->module, func_index), func_index);
 
 	if (unlikely(!(func = get_function(interp->module, func_index)))) {
 		return interp_error(interp,
