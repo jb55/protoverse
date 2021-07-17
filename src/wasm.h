@@ -15,23 +15,24 @@ static const unsigned char WASM_MAGIC[] = {0,'a','s','m'};
 #include "error.h"
 
 enum valtype {
-	i32 = 0x7F,
-	i64 = 0x7E,
-	f32 = 0x7D,
-	f64 = 0x7C,
-};
-
-enum ref_instr {
-	ref_null    = 0xD0,
-	ref_is_null = 0xD1,
-	ref_func    = 0xD2,
+	val_i32 = 0x7F,
+	val_i64 = 0x7E,
+	val_f32 = 0x7D,
+	val_f64 = 0x7C,
+	val_ref_null,
+	val_ref_func,
+	val_ref_extern,
 };
 
 enum const_instr {
-	const_i32 = 0x41,
-	const_i64 = 0x42,
-	const_f32 = 0x43,
-	const_f64 = 0x44,
+	ci_const_i32   = 0x41,
+	ci_const_i64   = 0x42,
+	ci_const_f32   = 0x43,
+	ci_const_f64   = 0x44,
+	ci_ref_null    = 0xD0,
+	ci_ref_func    = 0xD2,
+	ci_global_get  = 0x23,
+	ci_end         = 0x0B,
 };
 
 enum limit_type {
@@ -176,11 +177,6 @@ struct importsec {
 	int num_imports;
 };
 
-struct global {
-	struct globaltype type;
-	struct expr init;
-};
-
 struct val {
 	enum valtype type;
 	union {
@@ -188,7 +184,15 @@ struct val {
 		u64 i64;
 		float f32;
 		double f64;
+		int addr;
 	};
+};
+
+struct global {
+	struct globaltype type;
+	struct expr init;
+	struct val val;
+	u8 evaluated;
 };
 
 struct local {
@@ -416,6 +420,7 @@ struct instr {
 		struct block blocks[2];
 		unsigned int integer;
 		unsigned char memidx;
+		enum reftype reftype;
 	};
 };
 

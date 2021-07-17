@@ -29,6 +29,7 @@ struct expr_parser {
 	struct wasm_interp *interp; // optional...
 	struct cursor *code;
 	struct errors *errs;
+	struct cursor *stack; // optional
 };
 
 static INLINE struct callframe *top_callframe(struct cursor *cur)
@@ -52,10 +53,10 @@ static INLINE int cursor_popval(struct cursor *cur, struct val *val)
 static const char *valtype_name(enum valtype valtype)
 {
 	switch (valtype) {
-	case i32: return "i32";
-	case i64: return "i64";
-	case f32: return "f32";
-	case f64: return "f64";
+	case val_i32: return "i32";
+	case val_i64: return "i64";
+	case val_f32: return "f32";
+	case val_f64: return "f64";
 	}
 
 	return "unk";
@@ -134,7 +135,7 @@ static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
 	struct val val;
 	if (unlikely(!cursor_popval(&interp->stack, &val)))
 		return interp_error(interp, "couldn't pop val");
-	if (unlikely(val.type != i32)) {
+	if (unlikely(val.type != val_i32)) {
 		return interp_error(interp, "popped type %s instead of i32",
 				valtype_name(val.type));
 	}
@@ -160,13 +161,23 @@ static INLINE int cursor_pushval(struct cursor *cur, struct val *val)
 	return cursor_push(cur, (u8*)val, sizeof(*val));
 }
 
-static INLINE int stack_push_i32(struct wasm_interp *interp, int i)
+static INLINE int stack_pushval(struct wasm_interp *interp, struct val *val)
+{
+	return cursor_pushval(&interp->stack, val);
+}
+
+static INLINE int cursor_push_i32(struct cursor *stack, int i)
 {
 	struct val val;
-	val.type = i32;
+	val.type = val_i32;
 	val.i32 = i;
 
-	return cursor_pushval(&interp->stack, &val);
+	return cursor_pushval(stack, &val);
+}
+
+static INLINE int stack_push_i32(struct wasm_interp *interp, int i)
+{
+	return cursor_push_i32(&interp->stack, i);
 }
 
 static int builtin_get_args_prep(struct wasm_interp *interp)
@@ -185,10 +196,10 @@ static int parse_instr(struct expr_parser *parser, u8 tag, struct instr *op);
 static INLINE int is_valtype(unsigned char byte)
 {
 	switch ((enum valtype)byte) {
-		case i32:
-		case i64:
-		case f32:
-		case f64:
+		case val_i32:
+		case val_i64:
+		case val_f32:
+		case val_f64:
 			return 1;
 	}
 
@@ -341,10 +352,10 @@ static char *instr_name(enum instr_tag tag)
 static void print_val(struct val *val)
 {
 	switch (val->type) {
-	case i32: printf("%d", val->i32); break;
-	case i64: printf("%llu", val->i64); break;
-	case f32: printf("%f", val->f32); break;
-	case f64: printf("%f", val->f64); break;
+	case val_i32: printf("%d", val->i32); break;
+	case val_i64: printf("%llu", val->i64); break;
+	case val_f32: printf("%f", val->f32); break;
+	case val_f64: printf("%f", val->f64); break;
 	}
 	printf(":%s\n", valtype_name(val->type));
 }
@@ -357,6 +368,7 @@ static INLINE int was_section_parsed(struct module *module,
 
 	return module->parsed & (1 << section);
 }
+
 
 static void print_stack(struct cursor *stack)
 {
@@ -1143,117 +1155,6 @@ static int parse_table(struct wasm_parser *p, struct table *table)
 	return 1;
 }
 
-static INLINE int is_valid_ref_instr(u8 tag)
-{
-	switch ((enum ref_instr)tag) {
-	case ref_null: return 1;
-	case ref_is_null: return 1;
-	case ref_func: return 1;
-	}
-	return 0;
-}
-
-static INLINE int is_valid_const_instr(u8 tag)
-{
-	switch ((enum const_instr)tag) {
-	case const_i32: return 1;
-	case const_i64: return 1;
-	case const_f32: return 1;
-	case const_f64: return 1;
-	}
-	return 0;
-}
-
-static int parse_const_instr(struct wasm_parser *p)
-{
-	u8 tag;
-	unsigned int n;
-
-	if (!pull_byte(&p->cur, &tag)) {
-		parse_err(p, "tag");
-		return 0;
-	}
-
-	if (!is_valid_const_instr(tag)) {
-		parse_err(p, "invalid const instr tag 0x%x", tag);
-		p->cur.p--;
-		return 0;
-	}
-
-	switch ((enum const_instr)tag) {
-	case const_i32:
-	case const_i64:
-		if (!leb128_read(&p->cur, &n)) {
-			return parse_err(p, "couldn't read integer");
-		}
-		break;
-	case const_f32:
-	case const_f64:
-		return parse_err(p, "TODO parse float constants");
-	}
-
-	return 1;
-}
-
-static int parse_ref_instr(struct wasm_parser *p)
-{
-	u8 tag;
-	unsigned int idx;
-
-	if (!pull_byte(&p->cur, &tag)) {
-		return parse_err(p, "tag");
-	}
-
-	if (!is_valid_ref_instr(tag)) {
-		//parse_err(p, "invalid ref instr tag 0x%x", tag);
-		p->cur.p--;
-		return 0;
-	}
-
-	switch ((enum ref_instr)tag) {
-	case ref_null:
-		if (!parse_reftype(p, (enum reftype*)&tag)) {
-			return parse_err(p, "invalid ref.null instr reftype 0x%x", tag);
-		}
-		break;
-
-	case ref_is_null:
-		break;
-
-	case ref_func:
-		if (!leb128_read(&p->cur, &idx)) {
-			return parse_err(p, "invalid ref.func idx");
-		}
-		break;
-	}
-
-	return 1;
-}
-
-static INLINE int parse_const_expr_instr(struct wasm_parser *p)
-{
-	return parse_ref_instr(p) || parse_const_instr(p);
-}
-
-static int parse_const_expr(struct wasm_parser *p, struct expr *expr)
-{
-	expr->code = p->cur.p;
-
-	while (p->cur.p < p->cur.end) {
-		if (*p->cur.p == i_end) {
-			p->cur.p++;
-			expr->code_len = p->cur.p - expr->code;
-			return 1;
-		}
-
-		if (!parse_const_expr_instr(p)) {
-			return parse_err(p, "no constant expr found");
-		}
-	}
-
-	return 0;
-}
-
 static int parse_mut(struct wasm_parser *p, enum mut *mut)
 {
 	if (consume_byte(&p->cur, mut_const)) {
@@ -1278,14 +1179,182 @@ static int parse_globaltype(struct wasm_parser *p, struct globaltype *g)
 	return parse_mut(p, &g->mut);
 }
 
+static INLINE void make_expr_parser(struct errors *errs, struct cursor *code,
+		struct expr_parser *p)
+{
+	p->interp = NULL;
+	p->code = code;
+	p->errs = errs;
+	p->stack = NULL;
+}
+
+/*
+static void print_code(u8 *code, int code_len)
+{
+	struct cursor c;
+	struct expr_parser parser;
+	struct errors errs;
+	struct instr op;
+	u8 tag;
+
+	errs.enabled = 0;
+
+	make_expr_parser(&errs, &c, &parser);
+	make_cursor(code, code + code_len, &c);
+
+	for (;;) {
+		if (!pull_byte(&c, &tag)) {
+			break;
+		}
+
+		printf("%s ", instr_name(tag));
+
+		if (!parse_instr(&parser, tag, &op)) {
+			break;
+		}
+	}
+
+	printf("\n");
+}
+*/
+
+static inline int is_const_instr(u8 tag)
+{
+	switch ((enum const_instr)tag) {
+	case ci_global_get:
+	case ci_ref_null:
+	case ci_ref_func:
+	case ci_const_i32:
+	case ci_const_i64:
+	case ci_const_f32:
+	case ci_end:
+	case ci_const_f64:
+		return 1;
+	}
+	return 0;
+}
+
+static int cursor_push_nullval(struct cursor *stack)
+{
+	struct val val;
+	val.type = val_ref_null;
+	return cursor_pushval(stack, &val);
+}
+
+static int eval_const_instr(struct instr *instr, struct errors *errs,
+		struct cursor *stack)
+{
+	switch ((enum const_instr)instr->tag) {
+	case ci_global_get:
+		return note_error(errs, stack, "todo: global_get inside global");
+	case ci_ref_null:
+		if (unlikely(!cursor_push_nullval(stack))) {
+			return note_error(errs, stack, "couldn't push null");
+		}
+		return 1;
+	case ci_ref_func:
+		return note_error(errs, stack, "todo: global func ref");
+	case ci_const_i32:
+		if (unlikely(!cursor_push_i32(stack, instr->integer))) {
+			return note_error(errs, stack,
+					"global push i32 const");
+		}
+		return 1;
+	case ci_const_i64:
+		return note_error(errs, stack, "todo: global push const i64");
+	case ci_const_f32:
+		return note_error(errs, stack, "todo: global push const f32");
+	case ci_end:
+		return note_error(errs, stack, "unexpected end tag");
+	case ci_const_f64:
+		return note_error(errs, stack, "todo: global push const f64");
+	}
+
+	return note_error(errs, stack, "non-const expr instr %s",
+			instr_name(instr->tag));
+}
+
+static int parse_const_expr(struct expr_parser *p, struct expr *expr)
+{
+	u8 tag;
+	struct instr instr;
+
+	expr->code = p->code->p;
+
+	while (1) {
+		if (unlikely(!pull_byte(p->code, &tag))) {
+			return note_error(p->errs, p->code, "oob");
+		}
+
+		if (unlikely(!is_const_instr(tag))) {
+			return note_error(p->errs, p->code,
+					"invalid const expr instruction: '%s'",
+					instr_name(tag));
+		}
+
+		if (tag == i_end) {
+			expr->code_len = p->code->p - expr->code;
+			return 1;
+		}
+
+		if (unlikely(!parse_instr(p, tag, &instr))) {
+			return note_error(p->errs, p->code,
+					"couldn't parse const expr instr '%s'",
+					instr_name(tag));
+		}
+
+		if (p->stack && 
+		    unlikely(!eval_const_instr(&instr, p->errs, p->stack))) {
+			return note_error(p->errs, p->code, "eval const instr");
+		}
+	}
+
+	return 0;
+}
+
+static INLINE void make_const_expr_evaluator(struct errors *errs,
+		struct cursor *code, struct cursor *stack,
+		struct expr_parser *parser)
+{
+	parser->interp = NULL;
+	parser->stack = stack;
+	parser->code = code;
+	parser->errs = errs;
+}
+
+static INLINE void make_const_expr_parser(struct wasm_parser *p,
+		struct expr_parser *parser)
+{
+	parser->interp = NULL;
+	parser->stack = NULL;
+	parser->code = &p->cur;
+	parser->errs = &p->errs;
+}
+
+static INLINE int eval_const_expr(struct expr *expr, struct errors *errs,
+		struct cursor *stack)
+{
+	struct cursor code;
+	struct expr expr_out;
+	struct expr_parser parser;
+
+	make_cursor(expr->code, expr->code + expr->code_len, &code);
+	make_const_expr_evaluator(errs, &code, stack, &parser);
+
+	return parse_const_expr(&parser, &expr_out);
+}
+
 static int parse_global(struct wasm_parser *p,
 		struct global *global)
 {
+	struct expr_parser parser;
+	make_const_expr_parser(p, &parser);
+
 	if (!parse_globaltype(p, &global->type)) {
 		return parse_err(p, "type");
 	}
 
-	if (!parse_const_expr(p, &global->init)) {
+	if (!parse_const_expr(&parser, &global->init)) {
 		return parse_err(p, "init code");
 	}
 
@@ -1324,14 +1393,6 @@ static INLINE void make_interp_expr_parser(struct wasm_interp *interp,
 	p->errs = &interp->errors;
 
 	assert(p->code);
-}
-
-static INLINE void make_expr_parser(struct errors *errs, struct cursor *code,
-		struct expr_parser *p)
-{
-	p->interp = NULL;
-	p->code = code;
-	p->errs = errs;
 }
 
 static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
@@ -1501,6 +1562,7 @@ static INLINE int parse_byte_vector(struct wasm_parser *p, unsigned char **data,
 
 static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 {
+	struct expr_parser parser;
 	u8 tag;
 
 	if (!pull_byte(&p->cur, &tag)) {
@@ -1512,12 +1574,14 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 		return parse_err(p, "invalid datasegment tag: 0x%x", tag);
 	}
 
+	make_const_expr_parser(p, &parser);
+
 	switch (tag) {
 	case 0:
 		data->mode = datamode_active;
 		data->active.mem_index = 0;
 
-		if (!parse_const_expr(p, &data->active.offset_expr)) {
+		if (!parse_const_expr(&parser, &data->active.offset_expr)) {
 			return parse_err(p, "const expr");
 		}
 
@@ -1543,7 +1607,7 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 			return parse_err(p, "read active data mem_index");
 		}
 
-		if (!parse_const_expr(p, &data->active.offset_expr)) {
+		if (!parse_const_expr(&parser, &data->active.offset_expr)) {
 			return parse_err(p, "read active data (w/ mem_index) offset_expr");
 		}
 
@@ -2071,28 +2135,28 @@ static int interp_i32_add(struct wasm_interp *interp)
 {
 	struct val a, b, c;
 
-	if (!interp_prep_binop(interp, &a, &b, &c, i32)) {
+	if (!interp_prep_binop(interp, &a, &b, &c, val_i32)) {
 		interp_error(interp, "add prep");
 		return 0;
 	}
 
 	c.i32 = a.i32 + b.i32;
 
-	return cursor_pushval(&interp->stack, &c);
+	return stack_pushval(interp, &c);
 }
 
 static int interp_i32_sub(struct wasm_interp *interp)
 {
 	struct val a, b, c;
 
-	if (!interp_prep_binop(interp, &a, &b, &c, i32)) {
+	if (!interp_prep_binop(interp, &a, &b, &c, val_i32)) {
 		interp_error(interp, "sub prep");
 		return 0;
 	}
 
 	c.i32 = a.i32 - b.i32;
 
-	return cursor_pushval(&interp->stack, &c);
+	return stack_pushval(interp, &c);
 }
 
 static int set_local(struct wasm_interp *interp, int ind, struct val *val)
@@ -2158,7 +2222,7 @@ static int interp_local_get(struct wasm_interp *interp)
 
 static INLINE void make_i32_val(struct val *val, int v)
 {
-	val->type = i32;
+	val->type = val_i32;
 	val->i32 = v;
 }
 
@@ -2166,7 +2230,7 @@ static INLINE int interp_i32_gt_u(struct wasm_interp *interp)
 {
 	struct val a, b, c;
 
-	if (unlikely(!interp_prep_binop(interp, &a, &b, &c, i32))) {
+	if (unlikely(!interp_prep_binop(interp, &a, &b, &c, val_i32))) {
 		return interp_error(interp, "gt_u prep");
 	}
 
@@ -2257,7 +2321,7 @@ static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 		return interp_error(interp, "no top resolver offset?");
 	}
 	p = interp->resolver_stack.start + offset * sizeof(struct resolver);
-	if (unlikely(p < interp->resolver_stack.start || 
+	if (unlikely(p < interp->resolver_stack.start ||
 		     p >= interp->resolver_stack.end)) {
 		return interp_error(interp, "resolver offset oob?");
 	}
@@ -2667,6 +2731,8 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 	debug("%04lX parsing instr %s (0x%02x)\n",
 		p->code->p - 1 - p->code->start, instr_name(tag), tag);
 
+	op->tag = tag;
+
 	switch (tag) {
 		// two-byte instrs
 		case i_memory_size:
@@ -2898,10 +2964,10 @@ static int interp_i32_eqz(struct wasm_interp *interp)
 
 	if (unlikely(!cursor_popval(&interp->stack, &a)))
 		return interp_error(interp, "if pop val");
-	if (unlikely(a.type != i32))
+	if (unlikely(a.type != val_i32))
 		return interp_error(interp, "not an i32 value");
 
-	res.type = i32;
+	res.type = val_i32;
 	res.i32 = a.i32 == 0;
 
 	return cursor_pushval(&interp->stack, &res);
@@ -3011,8 +3077,33 @@ static int interp_br_if(struct wasm_interp *interp)
 
 static int interp_global_get(struct wasm_interp *interp)
 {
-	(void)interp;
-	return 0;
+	struct globalsec *section = &interp->module->global_section;
+	struct global *global;
+	struct cursor *code;
+	int ind;
+
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (!leb128_read(code, (u32*)&ind)) {
+		return interp_error(interp, "read global index");
+	}
+
+	// TODO imported global indices?
+	if (unlikely(ind >= section->num_globals)) {
+		return interp_error(interp, "invalid global index %d / %d",
+				ind, section->num_globals-1);
+	}
+
+	global = &section->globals[ind];
+
+	if (unlikely(!eval_const_expr(&global->init, &interp->errors,
+					&interp->stack))) {
+		return interp_error(interp, "init global");
+	}
+
+	return 1;
 }
 
 static int interp_instr(struct wasm_interp *interp, u8 tag)
@@ -3229,7 +3320,7 @@ int interp_wasm_module(struct wasm_interp *interp)
 
 	//interp->mem.p = interp->mem.start;
 
-	func = interp->module->start_fn != -1 ? interp->module->start_fn : 
+	func = interp->module->start_fn != -1 ? interp->module->start_fn :
 		find_start_function(interp->module);
 
 	if (func == -1) {
