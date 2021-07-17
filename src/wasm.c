@@ -3208,7 +3208,7 @@ static INLINE int has_memory_section(struct module *module)
 static int interp_memory_grow(struct wasm_interp *interp)
 {
 	struct cursor *code;
-	int pages, prev_size;
+	int pages = 0, prev_size;
 	unsigned int grow;
 	u8 memidx;
 
