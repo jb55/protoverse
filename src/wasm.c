@@ -192,6 +192,26 @@ static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
 	return cursor_pop_i32(&interp->stack, i);
 }
 
+static INLINE int cursor_pop_valtype(struct cursor *stack, enum valtype type,
+		struct val *val)
+{
+	if (unlikely(!cursor_popval(stack, val))) {
+		return 0;
+	}
+
+	if (unlikely(val->type != type)) {
+		return 0;
+	}
+
+	return 1;
+}
+
+static INLINE int stack_pop_valtype(struct wasm_interp *interp,
+		enum valtype type, struct val *val)
+{
+	return cursor_pop_valtype(&interp->stack, type, val);
+}
+
 static INLINE int stack_pop_number(struct wasm_interp *interp, struct val *val)
 {
 	return cursor_pop_number(&interp->stack, val);
@@ -3345,12 +3365,17 @@ static INLINE int bitwidth(enum valtype vt)
 	return 0;
 }
 
-static int interp_store(struct wasm_interp *interp, int N)
+struct memtarget {
+	struct memarg memarg;
+	int size;
+	u8 *pos;
+};
+
+static int interp_mem_offset(struct wasm_interp *interp,
+		int N, int i, enum valtype c, struct memtarget *t)
 {
 	struct cursor *code;
-	struct val c;
-	struct memarg memarg;
-	int i, offset, bw, n, size;
+	int offset, bw;
 
 	if (unlikely(!has_memory_section(interp->module))) {
 		return interp_error(interp, "no memory section");
@@ -3360,11 +3385,36 @@ static int interp_store(struct wasm_interp *interp, int N)
 		return interp_error(interp, "codeptr");
 	}
 
-	if (unlikely(!parse_memarg(code, &memarg))) {
+	if (unlikely(!parse_memarg(code, &t->memarg))) {
 		return interp_error(interp, "memarg");
 	}
 
-	if (unlikely(!stack_pop_number(interp, &c)))  {
+	offset = i + t->memarg.offset;
+	bw = bitwidth(c);
+
+	if (N == 0) {
+		N = bw;
+	}
+
+	t->size = N/8;
+	t->pos = interp->memory.start + offset;
+
+	if (t->pos + t->size > interp->memory.p) {
+		return interp_error(interp,
+			"mem store oob pos:%d size:%d mem:%d", offset, t->size,
+				interp->memory.p - interp->memory.start);
+	}
+
+	return 1;
+}
+
+static int interp_store(struct wasm_interp *interp, enum valtype type, int N)
+{
+	struct val c;
+	struct memtarget target;
+	int i;
+
+	if (unlikely(!stack_pop_valtype(interp, type, &c)))  {
 		return interp_error(interp, "pop stack");
 	}
 
@@ -3372,26 +3422,43 @@ static int interp_store(struct wasm_interp *interp, int N)
 		return interp_error(interp, "pop stack");
 	}
 
-	offset = i + memarg.offset;
-	bw = bitwidth(c.type);
-	n = c.i32;
-
-	if (N == 0) {
-		N = bw;
-	} else {
-		n %= 1 << N;
+	if (unlikely(!interp_mem_offset(interp, N, i, type, &target))) {
+		return interp_error(interp, "memory target");
 	}
 
-	size = N/8;
+	if (N != 0) {
+		return interp_error(interp, "implement wrap val (truncate?)");
+	}
 
-	assert(interp->memory.p > interp->memory.start);
-	if (interp->memory.start + offset + size > interp->memory.p) {
+	memcpy(target.pos, &c.i64, target.size);
+
+	return 1;
+}
+
+static int interp_load(struct wasm_interp *interp, enum valtype type, int N, int sgn)
+{
+	struct memtarget target;
+	struct val out = {0};
+	int i;
+
+	(void)sgn;
+
+	out.type = type;
+
+	if (unlikely(!stack_pop_i32(interp, &i)))  {
+		return interp_error(interp, "pop stack");
+	}
+
+	if (unlikely(!interp_mem_offset(interp, N, i, type, &target))) {
+		return interp_error(interp, "memory target");
+	}
+
+	memcpy(&out.i32, target.pos, target.size);
+
+	if (unlikely(!stack_pushval(interp, &out))) {
 		return interp_error(interp,
-			"mem store oob off:%d size:%d mem:%d", offset, size,
-				interp->memory.p - interp->memory.start);
+			"push to stack after load %s", valtype_name(type));
 	}
-
-	memcpy(interp->memory.start + offset, &n, size);
 
 	return 1;
 }
@@ -3511,19 +3578,30 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_i32_gt_u: return interp_i32_gt_u(interp);
 	case i_i32_lt_s: return interp_i32_lt_s(interp);
 
-	case i_i32_store:
-	case i_f32_store:
-	case i_i64_store32:
-		return interp_store(interp, 32);
-	case i_i64_store:
-	case i_f64_store:
-		return interp_store(interp, 64);
-	case i_i32_store8:
-	case i_i64_store8:
-		return interp_store(interp, 8);
-	case i_i64_store16:
-	case i_i32_store16:
-		return interp_store(interp, 16);
+	case i_i32_store:   return interp_store(interp, val_i32, 0);
+	case i_i32_store8:  return interp_store(interp, val_i32, 8);
+	case i_i32_store16: return interp_store(interp, val_i32, 16);
+	case i_f32_store:   return interp_store(interp, val_f32, 0);
+	case i_f64_store:   return interp_store(interp, val_f64, 0);
+	case i_i64_store:   return interp_store(interp, val_i64, 0);
+	case i_i64_store8:  return interp_store(interp, val_i64, 8);
+	case i_i64_store16: return interp_store(interp, val_i64, 16);
+	case i_i64_store32: return interp_store(interp, val_i64, 32);
+
+	case i_i32_load:     return interp_load(interp, val_i32, 0, -1);
+	case i_i32_load8_s:  return interp_load(interp, val_i32, 8, 1);
+	case i_i32_load8_u:  return interp_load(interp, val_i32, 8, 0);
+	case i_i32_load16_s: return interp_load(interp, val_i32, 16, 1);
+	case i_i32_load16_u: return interp_load(interp, val_i32, 16, 0);
+	case i_f32_load:     return interp_load(interp, val_f32, 0, -1);
+	case i_f64_load:     return interp_load(interp, val_f64, 0, -1);
+	case i_i64_load:     return interp_load(interp, val_i64, 0, -1);
+	case i_i64_load8_s:  return interp_load(interp, val_i64, 8, 1);
+	case i_i64_load8_u:  return interp_load(interp, val_i64, 8, 0);
+	case i_i64_load16_s: return interp_load(interp, val_i64, 16, 1);
+	case i_i64_load16_u: return interp_load(interp, val_i64, 16, 0);
+	case i_i64_load32_s: return interp_load(interp, val_i64, 32, 1);
+	case i_i64_load32_u: return interp_load(interp, val_i64, 32, 0);
 
 	case i_if: return interp_if(interp);
 	case i_end: return pop_label_checkpoint(interp);
