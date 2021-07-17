@@ -15,13 +15,13 @@ static const unsigned char WASM_MAGIC[] = {0,'a','s','m'};
 #include "error.h"
 
 enum valtype {
-	val_i32,
-	val_i64,
-	val_f32,
-	val_f64,
-	val_ref_null,
-	val_ref_func,
-	val_ref_extern,
+	val_i32 = 0x7F,
+	val_i64 = 0x7E,
+	val_f32 = 0x7D,
+	val_f64 = 0x7C,
+	val_ref_null = 0xD0, // not sure if this is right...
+	val_ref_func = 0x70, 
+	val_ref_extern = 0x6F,
 };
 
 enum const_instr {

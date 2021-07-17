@@ -247,8 +247,8 @@ static int builtin_get_args_prep(struct wasm_interp *interp)
 */
 
 static struct builtin BUILTINS[] = {
-	{ .name = "args_get",       .fn = builtin_get_args },
-	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes },
+	{ .name = "args_get",       .fn = builtin_get_args, .num_locals = 2 },
+	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes, .num_locals = 2 },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -257,13 +257,14 @@ static int parse_instr(struct expr_parser *parser, u8 tag, struct instr *op);
 
 static INLINE int is_valtype(unsigned char byte)
 {
-	switch (byte) {
-		case 0x7F: // i32
-		case 0x7E: // i64
-		case 0x7D: // f32
-		case 0x7C: // f64
-		case 0x70: // funcref
-		case 0x6F: // externref
+	switch ((enum valtype)byte) {
+		case val_i32: // i32
+		case val_i64: // i64
+		case val_f32: // f32
+		case val_f64: // f64
+		case val_ref_func: // funcref
+		case val_ref_null: // null
+		case val_ref_extern: // externref
 			return 1;
 	}
 
