@@ -501,7 +501,7 @@ struct wasm_interp {
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
 	struct cursor resolver_offsets; /* int */
-	struct cursor mems; /* struct cursor, memory instance blocks */
+	struct cursor memory; /* memory pages (65536 blocks) */
 
 	struct array labels; /* struct labels */
 	struct array num_labels;

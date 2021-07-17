@@ -22,6 +22,7 @@
 
 #define ERR_STACK_SIZE 16
 #define NUM_LOCALS 0xFFFF
+#define WASM_PAGE_SIZE 65536
 
 static const int MAX_LABELS = 128;
 
@@ -393,11 +394,6 @@ static void print_stack(struct cursor *stack)
 	}
 
 	stack->p = p;
-}
-
-static INLINE int cursor_push_cursor(struct cursor *cur, struct cursor *push)
-{
-	return cursor_push(cur, (u8*)push, sizeof(*push));
 }
 
 static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
@@ -2164,22 +2160,22 @@ fail:
 	return 0;
 }
 
-static int interp_prep_binop(struct wasm_interp *interp, struct val *a,
-		struct val *b, struct val *c, enum valtype typ)
+static int interp_prep_binop(struct wasm_interp *interp, struct val *lhs,
+		struct val *rhs, struct val *c, enum valtype typ)
 {
 	c->type = typ;
 
-	if (!cursor_popval(&interp->stack, a)) {
+	if (!cursor_popval(&interp->stack, rhs)) {
 		return interp_error(interp, "couldn't pop first val");
 	}
 
-	if (!cursor_popval(&interp->stack, b)) {
+	if (!cursor_popval(&interp->stack, lhs)) {
 		return interp_error(interp, "couldn't pop second val");
 	}
 
-	if (a->type != typ || b->type != typ) {
+	if (lhs->type != typ || rhs->type != typ) {
 	        return interp_error(interp, "type mismatch, %s != %s",
-			valtype_name(a->type), valtype_name(b->type));
+			valtype_name(lhs->type), valtype_name(rhs->type));
 	}
 
 	return 1;
@@ -2299,7 +2295,7 @@ static int interp_local_get(struct wasm_interp *interp)
 		return 0;
 	}
 
-	return cursor_pushval(&interp->stack, val);
+	return stack_pushval(interp, val);
 }
 
 static INLINE void make_i32_val(struct val *val, int v)
@@ -2310,15 +2306,28 @@ static INLINE void make_i32_val(struct val *val, int v)
 
 static INLINE int interp_i32_gt_u(struct wasm_interp *interp)
 {
-	struct val a, b, c;
+	struct val lhs, rhs, c;
 
-	if (unlikely(!interp_prep_binop(interp, &a, &b, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
 		return interp_error(interp, "gt_u prep");
 	}
 
-	c.i32 = (unsigned int)b.i32 > (unsigned int)a.i32;
+	c.i32 = (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
 
-	return cursor_pushval(&interp->stack, &c);
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "gt_u prep");
+	}
+
+	c.i32 = (signed int)lhs.i32 < (signed int)rhs.i32;
+
+	return stack_pushval(interp, &c);
 }
 
 static INLINE int interp_i32_const(struct wasm_interp *interp)
@@ -3184,9 +3193,56 @@ static int interp_global_get(struct wasm_interp *interp)
 	return 1;
 }
 
+static INLINE int active_pages(struct wasm_interp *interp)
+{
+	return cursor_count(&interp->memory, WASM_PAGE_SIZE);
+}
+
+static INLINE int has_memory_section(struct module *module)
+{
+	return was_section_parsed(module, section_memory) &&
+		module->memory_section.num_mems > 0;
+}
+
+
+static int interp_memory_grow(struct wasm_interp *interp)
+{
+	struct cursor *code;
+	int pages, prev_size;
+	unsigned int grow;
+	u8 memidx;
+
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (!pull_byte(code, &memidx)) {
+		return interp_error(interp, "memidx");
+	}
+
+	if (unlikely(!has_memory_section(interp->module))) {
+		return interp_error(interp, "no memory section");
+	}
+
+	if (!stack_pop_i32(interp, &pages)) {
+		return interp_error(interp, "pop pages");
+	}
+
+	grow = pages * WASM_PAGE_SIZE;
+	prev_size = active_pages(interp);
+
+	if (interp->memory.p + grow <= interp->memory.end) {
+		interp->memory.p += grow;
+		pages = prev_size;
+	} else {
+		pages = -1;
+	}
+
+	return stack_push_i32(interp, pages);
+}
+
 static int interp_memory_size(struct wasm_interp *interp)
 {
-	struct limits *mem;
 	struct cursor *code;
 	u8 memidx;
 
@@ -3194,19 +3250,16 @@ static int interp_memory_size(struct wasm_interp *interp)
 		return interp_error(interp, "codeptr");
 	}
 
-	if (unlikely(!was_section_parsed(interp->module, section_memory) ||
-		     interp->module->memory_section.num_mems == 0)) {
-		return interp_error(interp, "no memory sections");
-	}
-
-	mem = &interp->module->memory_section.mems[0];
-
-	if (!stack_push_i32(interp, mem->max / 65536)) {
-		return interp_error(interp, "push memory size");
-	}
-
 	if (!pull_byte(code, &memidx)) {
 		return interp_error(interp, "memidx");
+	}
+
+	if (unlikely(!has_memory_section(interp->module))) {
+		return interp_error(interp, "no memory section");
+	}
+
+	if (!stack_push_i32(interp, active_pages(interp))) {
+		return interp_error(interp, "push memory size");
 	}
 
 	return 1;
@@ -3232,12 +3285,14 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_i32_sub: return interp_i32_sub(interp);
 	case i_i32_const: return interp_i32_const(interp);
 	case i_i32_gt_u: return interp_i32_gt_u(interp);
+	case i_i32_lt_s: return interp_i32_lt_s(interp);
 	case i_if: return interp_if(interp);
 	case i_end: return pop_label_checkpoint(interp);
 	case i_call: return interp_call(interp);
 	case i_block: return interp_block(interp);
 	case i_br_if: return interp_br_if(interp);
 	case i_memory_size: return interp_memory_size(interp);
+	case i_memory_grow: return interp_memory_grow(interp);
 	default:
 		    interp_error(interp, "unhandled instruction %s 0x%x",
 				 instr_name(tag), tag);
@@ -3341,13 +3396,12 @@ void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t a
 
 int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 {
-	unsigned char *mem;
-	struct limits *mem_limits;
-	struct cursor mem_inst;
-	int i, ok, fns, errors_size, stack_size, locals_size, offsets_size,
+	unsigned char *mem, *heap;
+
+	unsigned int ok, fns, errors_size, stack_size, locals_size, offsets_size,
 	    callframes_size, resolver_size, labels_size, num_labels_size,
-	    labels_capacity, num_labels_elemsize, memsize, num_mem_sizes,
-	    resolver_offsets_size, num_mems, mems_cursor_sizes;
+	    labels_capacity, num_labels_elemsize, memsize, memory_pages_size,
+	    resolver_offsets_size, num_mems;
 
 	memset(interp, 0, sizeof(*interp));
 	interp->module = module;
@@ -3369,27 +3423,19 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	resolver_offsets_size = offsets_size;
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
-	mems_cursor_sizes = 0;
 
 	num_mems = was_section_parsed(interp->module, section_memory)?
 		interp->module->memory_section.num_mems : 0;
 
+	if (num_mems > 1) {
+		printf("more than one memory instance is not supported\n");
+		return 0;
+	}
+
 	interp->labels.elem_size = sizeof(struct label);
 	interp->num_labels.elem_size = num_labels_elemsize;
 
-	/* memory sizes */
-	num_mem_sizes = 0;
-	for (i = 0; i < num_mems; i++) {
-		mem_limits = &interp->module->memory_section.mems[i];
-		if (mem_limits->type == limit_min) {
-			debug("min mems push %d\n", mem_limits->min);
-			num_mem_sizes += mem_limits->min;
-		} else {
-			debug("max mems push %d\n", mem_limits->max);
-			num_mem_sizes += mem_limits->max;
-		}
-		mems_cursor_sizes += sizeof(struct cursor);
-	}
+	memory_pages_size = 0x8000UL * WASM_PAGE_SIZE;
 
 	memsize =
 		errors_size +
@@ -3400,12 +3446,13 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		offsets_size +
 		resolver_offsets_size +
 		callframes_size +
-		num_mem_sizes +
-		mems_cursor_sizes +
 		resolver_size;
 
 	mem = calloc(1, memsize);
+	heap = malloc(memory_pages_size);
+
 	make_cursor(mem, mem + memsize, &interp->mem);
+	make_cursor(heap, heap + memory_pages_size, &interp->memory);
 
 	// enable error reporting by default
 	interp->errors.enabled = 1;
@@ -3417,26 +3464,11 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
-		cursor_slice(&interp->mem, &interp->mems, mems_cursor_sizes) &&
 		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
 	        array_alloc(&interp->mem, &interp->num_labels, fns);
 
 	if (!ok) {
 		return interp_error(interp, "not enough memory 1");
-	}
-
-	/* memory instances */
-	num_mem_sizes = 0;
-	for (i = 0; i < num_mems; i++) {
-		mem_limits = &interp->module->memory_section.mems[i];
-		ok = ok && cursor_slice(&interp->mem, &mem_inst, mem_limits->max);
-		if (!ok || !cursor_push_cursor(&interp->mems, &mem_inst)) {
-			return interp_error(interp, "push mems cursor");
-		}
-	}
-
-	if (!ok) {
-		return interp_error(interp, "not enough memory");
 	}
 
 	return 1;
@@ -3450,12 +3482,12 @@ void wasm_parser_free(struct wasm_parser *parser)
 void wasm_interp_free(struct wasm_interp *interp)
 {
 	free(interp->mem.start);
+	free(interp->memory.start);
 }
 
 int interp_wasm_module(struct wasm_interp *interp)
 {
-	int func, mems, i;
-	struct cursor *cursor;
+	int func;
 
 	interp->ops = 0;
 
@@ -3470,12 +3502,7 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->resolver_offsets);
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->callframes);
-
-	mems = cursor_count(&interp->mems, sizeof(struct cursor));
-	for (i = 0; i < mems; i++) {
-		cursor = &((struct cursor*)&interp->mems.p)[i];
-		reset_cursor(cursor);
-	}
+	reset_cursor(&interp->memory);
 
 	// don't reset labels for perf!
 
