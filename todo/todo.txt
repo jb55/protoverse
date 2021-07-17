@@ -1,1 +1,2 @@
 chunked envelope (1280-byte sized chunks) @net
+do we need to reset function locals on return? @wasm +locals
