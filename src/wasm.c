@@ -121,13 +121,28 @@ static struct val *get_local(struct wasm_interp *interp, int ind)
 		return NULL;
 	}
 
-	if (unlikely(!(ind >= num_locals))) {
+	if (unlikely(ind >= num_locals)) {
 		interp_error(interp, "local index %d too high for %s (max %d)",
 				ind, func->name, num_locals-1);
 		return NULL;
 	}
 
 	return &locals[ind].val;
+}
+
+static INLINE int stack_popval(struct wasm_interp *interp, struct val *val)
+{
+	return cursor_popval(&interp->stack, val);
+}
+
+static INLINE struct val *cursor_topval(struct cursor *stack)
+{
+	return (struct val *)cursor_top(stack, sizeof(struct val));
+}
+
+static INLINE struct val *stack_topval(struct wasm_interp *interp)
+{
+	return cursor_topval(&interp->stack);
 }
 
 static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
@@ -2171,13 +2186,13 @@ static int set_local(struct wasm_interp *interp, int ind, struct val *val)
 	return 1;
 }
 
-static int interp_local_set(struct wasm_interp *interp)
+static int interp_local_tee(struct wasm_interp *interp)
 {
-	struct val val;
+	struct val *val;
 	unsigned int index;
 	struct cursor *code;
 
-	if (unlikely(!cursor_popval(&interp->stack, &val))) {
+	if (unlikely(!(val = stack_topval(interp)))) {
 		return interp_error(interp, "pop");
 	}
 
@@ -2189,8 +2204,23 @@ static int interp_local_set(struct wasm_interp *interp)
 		return interp_error(interp, "read index");
 	}
 
-	if (unlikely(!set_local(interp, index, &val))) {
+	if (unlikely(!set_local(interp, index, val))) {
 		return interp_error(interp, "set local");
+	}
+
+	return 1;
+}
+
+static int interp_local_set(struct wasm_interp *interp)
+{
+	struct val val;
+
+	if (unlikely(!interp_local_tee(interp))) {
+		return interp_error(interp, "tee set");
+	}
+
+	if (unlikely(!stack_popval(interp, &val))) {
+		return interp_error(interp, "pop");
 	}
 
 	return 1;
@@ -3119,6 +3149,7 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_nop: return 1;
 	case i_local_get: return interp_local_get(interp);
 	case i_local_set: return interp_local_set(interp);
+	case i_local_tee: return interp_local_tee(interp);
 	case i_global_get: return interp_global_get(interp);
 	case i_i32_eqz: return interp_i32_eqz(interp);
 	case i_i32_add: return interp_i32_add(interp);
