@@ -20,7 +20,10 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 		return 0;
 	}
 
-	wasm_interp_init(&interp, &p.module);
+	if (!wasm_interp_init(&interp, &p.module)) {
+		print_error_backtrace(&interp.errors);
+		return 0;
+	}
 	interp.errors.enabled = 0;
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);

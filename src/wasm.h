@@ -501,6 +501,7 @@ struct wasm_interp {
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
 	struct cursor resolver_offsets; /* int */
+	struct cursor mems; /* struct cursor, memory instance blocks */
 
 	struct array labels; /* struct labels */
 	struct array num_labels;
@@ -529,7 +530,7 @@ struct wasm_parser {
 
 int run_wasm(unsigned char *wasm, unsigned long len);
 int parse_wasm(struct wasm_parser *p);
-void wasm_interp_init(struct wasm_interp *interp, struct module *module);
+int wasm_interp_init(struct wasm_interp *interp, struct module *module);
 void wasm_parser_free(struct wasm_parser *parser);
 void wasm_parser_init(struct wasm_parser *parser, u8 *wasm, size_t wasm_len, size_t arena_size);
 void wasm_interp_free(struct wasm_interp *interp);

@@ -395,6 +395,11 @@ static void print_stack(struct cursor *stack)
 	stack->p = p;
 }
 
+static INLINE int cursor_push_cursor(struct cursor *cur, struct cursor *push)
+{
+	return cursor_push(cur, (u8*)push, sizeof(*push));
+}
+
 static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
 {
 	return cursor_push(cur, (u8*)frame, sizeof(*frame));
@@ -2110,8 +2115,6 @@ static int make_func_lookup_table(struct wasm_parser *parser)
 		func->wasm_func = &parser->module.code_section.funcs[i];
 		func->functype = &parser->module.type_section.functypes[typeidx];
 		func->name = find_exported_function_name(&parser->module, fn);
-		debug("func %s, %d params\n", func->name,
-				func->functype->params.num_valtypes);
 	}
 
 	assert(fn == parser->module.num_funcs);
@@ -2864,7 +2867,10 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_br_if:
 		case i_i32_const:
 		case i_i64_const:
-			return leb128_read(p->code, &op->integer);
+			if (unlikely(!leb128_read(p->code, &op->integer))) {
+				return note_error(p->errs, p->code, "failed to read integer");
+			}
+			return 1;
 
 		case i_f32_const:
 		case i_f64_const:
@@ -3178,6 +3184,34 @@ static int interp_global_get(struct wasm_interp *interp)
 	return 1;
 }
 
+static int interp_memory_size(struct wasm_interp *interp)
+{
+	struct limits *mem;
+	struct cursor *code;
+	u8 memidx;
+
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (unlikely(!was_section_parsed(interp->module, section_memory) ||
+		     interp->module->memory_section.num_mems == 0)) {
+		return interp_error(interp, "no memory sections");
+	}
+
+	mem = &interp->module->memory_section.mems[0];
+
+	if (!stack_push_i32(interp, mem->max / 65536)) {
+		return interp_error(interp, "push memory size");
+	}
+
+	if (!pull_byte(code, &memidx)) {
+		return interp_error(interp, "memidx");
+	}
+
+	return 1;
+}
+
 static int interp_instr(struct wasm_interp *interp, u8 tag)
 {
 	interp->ops++;
@@ -3203,6 +3237,7 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_call: return interp_call(interp);
 	case i_block: return interp_block(interp);
 	case i_br_if: return interp_br_if(interp);
+	case i_memory_size: return interp_memory_size(interp);
 	default:
 		    interp_error(interp, "unhandled instruction %s 0x%x",
 				 instr_name(tag), tag);
@@ -3304,12 +3339,15 @@ void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t a
 	cursor_slice(&p->mem, &p->errs.cur, 0xFFFF);
 }
 
-void wasm_interp_init(struct wasm_interp *interp, struct module *module)
+int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 {
 	unsigned char *mem;
-	int ok, fns, errors_size, stack_size, locals_size, offsets_size,
+	struct limits *mem_limits;
+	struct cursor mem_inst;
+	int i, ok, fns, errors_size, stack_size, locals_size, offsets_size,
 	    callframes_size, resolver_size, labels_size, num_labels_size,
-	    labels_capacity, num_labels_elemsize, memsize, resolver_offsets_size;
+	    labels_capacity, num_labels_elemsize, memsize, num_mem_sizes,
+	    resolver_offsets_size, num_mems, mems_cursor_sizes;
 
 	memset(interp, 0, sizeof(*interp));
 	interp->module = module;
@@ -3331,9 +3369,27 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	resolver_offsets_size = offsets_size;
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
+	mems_cursor_sizes = 0;
+
+	num_mems = was_section_parsed(interp->module, section_memory)?
+		interp->module->memory_section.num_mems : 0;
 
 	interp->labels.elem_size = sizeof(struct label);
 	interp->num_labels.elem_size = num_labels_elemsize;
+
+	/* memory sizes */
+	num_mem_sizes = 0;
+	for (i = 0; i < num_mems; i++) {
+		mem_limits = &interp->module->memory_section.mems[i];
+		if (mem_limits->type == limit_min) {
+			debug("min mems push %d\n", mem_limits->min);
+			num_mem_sizes += mem_limits->min;
+		} else {
+			debug("max mems push %d\n", mem_limits->max);
+			num_mem_sizes += mem_limits->max;
+		}
+		mems_cursor_sizes += sizeof(struct cursor);
+	}
 
 	memsize =
 		errors_size +
@@ -3344,6 +3400,8 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		offsets_size +
 		resolver_offsets_size +
 		callframes_size +
+		num_mem_sizes +
+		mems_cursor_sizes +
 		resolver_size;
 
 	mem = calloc(1, memsize);
@@ -3358,10 +3416,30 @@ void wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		cursor_slice(&interp->mem, &interp->resolver_offsets, resolver_offsets_size) &&
 		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
 		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
+		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
+		cursor_slice(&interp->mem, &interp->mems, mems_cursor_sizes) &&
 		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
 	        array_alloc(&interp->mem, &interp->num_labels, fns);
 
-	assert(ok);
+	if (!ok) {
+		return interp_error(interp, "not enough memory 1");
+	}
+
+	/* memory instances */
+	num_mem_sizes = 0;
+	for (i = 0; i < num_mems; i++) {
+		mem_limits = &interp->module->memory_section.mems[i];
+		ok = ok && cursor_slice(&interp->mem, &mem_inst, mem_limits->max);
+		if (!ok || !cursor_push_cursor(&interp->mems, &mem_inst)) {
+			return interp_error(interp, "push mems cursor");
+		}
+	}
+
+	if (!ok) {
+		return interp_error(interp, "not enough memory");
+	}
+
+	return 1;
 }
 
 void wasm_parser_free(struct wasm_parser *parser)
@@ -3376,7 +3454,8 @@ void wasm_interp_free(struct wasm_interp *interp)
 
 int interp_wasm_module(struct wasm_interp *interp)
 {
-	int func;
+	int func, mems, i;
+	struct cursor *cursor;
 
 	interp->ops = 0;
 
@@ -3391,6 +3470,13 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->resolver_offsets);
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->callframes);
+
+	mems = cursor_count(&interp->mems, sizeof(struct cursor));
+	for (i = 0; i < mems; i++) {
+		cursor = &((struct cursor*)&interp->mems.p)[i];
+		reset_cursor(cursor);
+	}
+
 	// don't reset labels for perf!
 
 	//interp->mem.p = interp->mem.start;
@@ -3431,7 +3517,10 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 		return 0;
 	}
 
-	wasm_interp_init(&interp, &p.module);
+	if (!wasm_interp_init(&interp, &p.module)) {
+		print_error_backtrace(&interp.errors);
+		return 0;
+	}
 	ok = interp_wasm_module(&interp);
 	print_error_backtrace(&interp.errors);
 	printf("ops: %ld\nstack:\n", interp.ops);
