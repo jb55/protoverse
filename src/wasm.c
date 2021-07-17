@@ -87,20 +87,14 @@ static INLINE struct func *get_function(struct module *module, int ind)
 	return &module->funcs[ind];
 }
 
-static struct val *get_local(struct wasm_interp *interp, int ind)
+static struct val *get_fn_local(struct wasm_interp *interp, int fn, int ind)
 {
-	struct callframe *frame;
 	struct func *func;
 	struct local *locals;
 	int num_locals;
 
-	if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
-		interp_error(interp, "no callframe?");
-		return NULL;
-	}
-
-	if (unlikely(!(func = get_function(interp->module, frame->fn)))) {
-		interp_error(interp, "unknown fn %d", frame->fn);
+	if (unlikely(!(func = get_function(interp->module, fn)))) {
+		interp_error(interp, "unknown fn %d", fn);
 		return NULL;
 	}
 
@@ -117,6 +111,18 @@ static struct val *get_local(struct wasm_interp *interp, int ind)
 	}
 
 	return &locals[ind].val;
+}
+
+static struct val *get_local(struct wasm_interp *interp, int ind)
+{
+	struct callframe *frame;
+
+	if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
+		interp_error(interp, "no callframe?");
+		return NULL;
+	}
+
+	return get_fn_local(interp, frame->fn, ind);
 }
 
 static INLINE int stack_popval(struct wasm_interp *interp, struct val *val)
@@ -839,8 +845,9 @@ static int parse_valtype(struct wasm_parser *p, enum valtype *valtype)
 	}
 
 	if (unlikely(!is_valtype((unsigned char)*valtype))) {
+		cursor_print_around(&p->cur, 10);
 		p->cur.p = start;
-		return parse_err(p, "%c is not a valid valtype tag", *valtype);
+		return parse_err(p, "0x%02x is not a valid valtype tag", *valtype);
 	}
 
 	return 1;
@@ -970,13 +977,13 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
 	if (unlikely(!leb128_read(&p->cur, (unsigned int*)&local->val.i32))) {
-		parse_err(p, "n");
-		return 0;
+		debug("fail parse local\n");
+		return parse_err(p, "n");
 	}
 
 	if (unlikely(!parse_valtype(p, &local->val.type))) {
-		parse_err(p, "valtype");
-		return 0;
+		debug("fail parse valtype\n");
+		return parse_err(p, "valtype");
 	}
 
 	return 1;
@@ -1000,68 +1007,114 @@ static int parse_vector(struct wasm_parser *p, unsigned int item_size,
 	return 1;
 }
 
-static int parse_func(struct wasm_parser *p, struct wasm_func *func)
+static int parse_func(struct wasm_parser *p, struct wasm_func *func,
+		struct functype *functype)
 {
-	unsigned int elems, size, i;
+	unsigned int size, code_locals, i;
 	unsigned char *start;
 	struct local *locals;
 
 	if (!leb128_read(&p->cur, &size)) {
-		parse_err(p, "code size");
-		return 0;
+		return parse_err(p, "code size");
 	}
 
 	start = p->cur.p;
+	locals = (struct local*)p->mem.p;
 
-	if (!parse_vector(p, sizeof(*locals), &elems, (void**)&locals)) {
-		parse_err(p, "locals");
-		return 0;
+	if (!leb128_read(&p->cur, &code_locals)) {
+		return parse_err(p, "read locals vec");
 	}
 
-	for (i = 0; i < elems; i++) {
+	func->num_locals = functype->params.num_valtypes + code_locals;
+
+	if (!cursor_alloc(&p->mem, sizeof(*locals) * func->num_locals)) {
+		return parse_err(p, "oom alloc param locals");
+	}
+
+	if (p->cur.p > p->cur.end) {
+		return parse_err(p, "corrupt functype?");
+	}
+
+	for (i = 0; i < code_locals; i++) {
 		if (!parse_local(p, &locals[i])) {
-			parse_err(p, "local #%d", i);
-			return 0;
+			return parse_err(p, "local #%d", i);
 		}
 	}
 
 	func->locals = locals;
-	func->num_locals = elems;
 	func->code.code_len = size - (p->cur.p - start);
 
 	if (!pull_data_into_cursor(&p->cur, &p->mem, &func->code.code,
 				func->code.code_len)) {
-		parse_err(p, "code oom");
-		return 0;
+		return parse_err(p, "code oom");
 	}
 
 	if (!(func->code.code[func->code.code_len-1] == i_end)) {
-		parse_err(p, "no end tag (corruption?)");
-		return 0;
+		return parse_err(p, "no end tag (corruption?)");
 	}
 
 	return 1;
 }
 
+/* this is needed in the parsing phase when we haven't built a function map yet */
+static struct functype *get_code_function_type(struct module *module, int code_ind)
+{
+	int typeidx;
+
+	if (code_ind < 0 || code_ind >= module->func_section.num_indices) {
+		printf("UNUSUAL: func index oob %d of %d\n", code_ind,
+				module->code_section.num_funcs);
+		return 0;
+	}
+
+	typeidx = module->func_section.type_indices[code_ind];
+
+	if (typeidx < 0 || typeidx >= module->type_section.num_functypes) {
+		printf("UNUSUAL: type index oob %d of %d\n", typeidx,
+				module->type_section.num_functypes);
+		return 0;
+	}
+
+	return &module->type_section.functypes[typeidx];
+}
+
+static INLINE int count_internal_functions(struct module *module)
+{
+	return !was_section_parsed(module, section_code) ? 0 :
+		module->code_section.num_funcs;
+}
+
+
 static int parse_code_section(struct wasm_parser *p,
 		struct codesec *code_section)
 {
 	struct wasm_func *funcs;
-	unsigned int elems, i;
+	struct functype *functype;
+	int i;
 
-	if (!parse_vector(p, sizeof(*funcs), &elems, (void**)&funcs)) {
-		parse_err(p, "funcs");
-		return 0;
+	if (!parse_vector(p, sizeof(*funcs),
+			  (unsigned int*)&code_section->num_funcs,
+			  (void**)&funcs)) {
+		return parse_err(p, "funcs");
 	}
 
-	for (i = 0; i < elems; i++) {
-		if (!parse_func(p, &funcs[i])) {
-			parse_err(p, "func #%d", i);
-			return 0;
+	if (code_section->num_funcs < 0) {
+		return parse_err(p, "code_section num_funcs < 0");
+	}
+
+	for (i = 0; i < code_section->num_funcs; i++) {
+		if (unlikely(!(functype =
+				get_code_function_type(&p->module, i)))) {
+			return parse_err(p,
+					"couldn't get code func type %d of %d",
+					i, p->module.code_section.num_funcs);
+		}
+
+		if (!parse_func(p, &funcs[i], functype)) {
+			return parse_err(p, "func #%d", i);
 		}
 	}
 
-	code_section->num_funcs = elems;
 	code_section->funcs = funcs;
 
 	return 1;
@@ -1307,7 +1360,7 @@ static int parse_const_expr(struct expr_parser *p, struct expr *expr)
 					instr_name(tag));
 		}
 
-		if (p->stack && 
+		if (p->stack &&
 		    unlikely(!eval_const_instr(&instr, p->errs, p->stack))) {
 			return note_error(p->errs, p->code, "eval const instr");
 		}
@@ -1958,13 +2011,11 @@ static int parse_section(struct wasm_parser *p)
 	}
 
 	if (!leb128_read(&p->cur, &bytes)) {
-		parse_err(p, "section len");
-		return 0;
+		return parse_err(p, "section len");
 	}
 
 	if (!parse_section_by_tag(p, tag, bytes)) {
-		parse_err(p, "%s (%d bytes)", section_name(tag), bytes);
-		return 0;
+		return parse_err(p, "%s (%d bytes)", section_name(tag), bytes);
 	}
 
 	p->module.parsed |= 1 << tag;
@@ -1985,12 +2036,6 @@ static struct builtin *builtin_func(int ind)
 		return NULL;
 	}
 	return &BUILTINS[ind];
-}
-
-static INLINE int count_internal_functions(struct module *module)
-{
-	return !was_section_parsed(module, section_code) ? 0 :
-		module->code_section.num_funcs;
 }
 
 static const char *find_exported_function_name(struct module *module, int fn)
@@ -2065,6 +2110,8 @@ static int make_func_lookup_table(struct wasm_parser *parser)
 		func->wasm_func = &parser->module.code_section.funcs[i];
 		func->functype = &parser->module.type_section.functypes[typeidx];
 		func->name = find_exported_function_name(&parser->module, fn);
+		debug("func %s, %d params\n", func->name,
+				func->functype->params.num_valtypes);
 	}
 
 	assert(fn == parser->module.num_funcs);
@@ -2163,16 +2210,29 @@ static int interp_i32_sub(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
-static int set_local(struct wasm_interp *interp, int ind, struct val *val)
+static INLINE int set_fn_local(struct wasm_interp *interp, int fn, int ind,
+			       struct val *val)
 {
 	struct val *local;
 
-	if (unlikely(!(local = get_local(interp, ind)))) {
+	if (unlikely(!(local = get_fn_local(interp, fn, ind)))) {
 		return interp_error(interp, "no local?");
 	}
 
 	memcpy(local, val, sizeof(*val));
 	return 1;
+}
+
+static INLINE int set_local(struct wasm_interp *interp, int ind,
+			    struct val *val)
+{
+	struct callframe *frame;
+
+	if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
+		return interp_error(interp, "no callframe?");
+	}
+
+	return set_fn_local(interp, frame->fn, ind, val);
 }
 
 static int interp_local_tee(struct wasm_interp *interp)
@@ -2406,7 +2466,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 				valtype_name(paramtype));
 		}
 
-		if (unlikely(!set_local(interp, i, &val))) {
+		if (unlikely(!set_fn_local(interp, func_index, i, &val))) {
 			return interp_error(interp, "set param local %d", i);
 		}
 	}
@@ -3238,6 +3298,8 @@ void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t a
 
 	make_cursor(wasm, wasm + wasm_len, &p->cur);
 	make_cursor(mem, mem + arena_size, &p->mem);
+
+	p->errs.enabled = 1;
 
 	cursor_slice(&p->mem, &p->errs.cur, 0xFFFF);
 }
