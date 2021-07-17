@@ -62,17 +62,6 @@ static const char *valtype_name(enum valtype valtype)
 	return "unk";
 }
 
-static INLINE int offset_stack_top(struct cursor *cur)
-{
-	int *p = (int*)cur->p;
-
-	if (unlikely(cur->p == cur->start)) {
-		return 0;
-	}
-
-	return *(p - sizeof(*p));
-}
-
 static INLINE struct local *get_locals(struct func *func, int *num_locals)
 {
 	switch (func->type) {
@@ -2288,13 +2277,6 @@ static INLINE int interp_i32_const(struct wasm_interp *interp)
 	make_i32_val(&val, read);
 
 	return cursor_pushval(&interp->stack, &val);
-}
-
-static INLINE int code_count(struct module *module)
-{
-	// I guess not having any code and is technically possible?
-	return !was_section_parsed(module, section_code) ? 0 :
-		module->code_section.num_funcs;
 }
 
 static struct functype *get_function_type(struct wasm_interp *interp, int ind)

@@ -487,7 +487,7 @@ struct callframe {
 struct resolver {
 	u16 label;
 	u8 end_tag;
-	u8 __unused;
+	unsigned char unused;
 };
 
 struct wasm_interp {
