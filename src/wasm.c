@@ -4217,13 +4217,61 @@ static INLINE int interp_parse_instr(struct wasm_interp *interp,
 	return 1;
 }
 
-static int interp_code(struct wasm_interp *interp)
+enum interp_end {
+	interp_end_err,
+	interp_end_done,
+	interp_end_cont,
+	interp_end_next,
+};
+
+// tricky...
+static enum interp_end interp_code_end(struct wasm_interp *interp,
+		struct callframe *frame, struct cursor *code)
 {
-	int offset, num_resolvers = 0;
-	struct instr instr;
-	struct expr_parser parser;
 	struct resolver *resolver;
 	struct label *label;
+	int offset, num_resolvers = 0;
+
+	if (unlikely(!(resolver = top_resolver(interp, 0)))) {
+		// no more resolvers, we done.
+		return interp_end_done;
+	}
+
+	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
+		return interp_error(interp, "count local resolvers");
+	}
+
+	if (num_resolvers == 0) {
+		if (!cursor_popint(&interp->resolver_offsets, &offset)) {
+			return interp_error(interp, "pop resolver_offsets");
+		}
+		return interp_end_done;
+	}
+
+	// if we hit the end of a loop, continue at the start
+	if (resolver && resolver->start_tag == i_loop) {
+		if (unlikely(!(label =
+			index_label(&interp->labels, frame->fn,
+				    resolver->label)))) {
+			return interp_error(interp, "no loop label?");
+		}
+
+		resolve_label(label, code);
+
+		if (!interp_jump(interp, label_instr_pos(label))) {
+			return interp_error(interp, "jump to loop label");
+		}
+
+		return interp_end_cont;
+	}
+
+	return interp_end_next;
+}
+
+static int interp_code(struct wasm_interp *interp)
+{
+	struct instr instr;
+	struct expr_parser parser;
 	struct cursor *code;
 	struct callframe *frame;
 
@@ -4243,41 +4291,11 @@ static int interp_code(struct wasm_interp *interp)
 		}
 
 		if (instr.tag == i_end) {
-			if (unlikely(!(resolver = top_resolver(interp, 0)))) {
-				// no more resolvers, we done.
-				return 1;
-			}
-
-			if (unlikely(!count_local_resolvers(interp,
-							    &num_resolvers))) {
-				return interp_error(interp,
-						"count local resolvers");
-			}
-
-			if (num_resolvers == 0) {
-				if (!cursor_popint(&interp->resolver_offsets,
-						   &offset)) {
-					return interp_error(interp,
-							"pop resolver_offsets");
-				}
-				break;
-			}
-
-			// if we hit the end of a loop, continue at the start
-			if (resolver && resolver->start_tag == i_loop) {
-				if (unlikely(!(label =
-					index_label(&interp->labels, frame->fn,
-						    resolver->label)))) {
-					return interp_error(interp, "no loop label?");
-				}
-
-				resolve_label(label, code);
-
-				if (!interp_jump(interp, label_instr_pos(label))) {
-					return interp_error(interp, "jump to loop label");
-				}
-
-				continue;
+			switch (interp_code_end(interp, frame, code)) {
+				case interp_end_err: return 0;
+				case interp_end_done: return 1;
+				case interp_end_cont: continue;
+				case interp_end_next: break;
 			}
 		}
 
