@@ -2440,28 +2440,61 @@ static INLINE void make_i32_val(struct val *val, int v)
 	val->i32 = v;
 }
 
-static INLINE int interp_i32_gt_u(struct wasm_interp *interp)
+static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sgn)
 {
 	struct val lhs, rhs, c;
+	(void)sgn;
 
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, vt))) {
 		return interp_error(interp, "gt_u prep");
 	}
 
-	c.i32 = (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
+	switch (vt) {
+	case val_i32:
+		c.i32 = sgn? (signed int)lhs.i32 > (signed int)rhs.i32
+			   : (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
+		break;
+	case val_i64:
+		c.i64 = sgn? (int64_t)lhs.i64 > (int64_t)rhs.i64
+			   : (uint64_t)lhs.i64 > (uint64_t)rhs.i64;
+		break;
+	default:
+		return interp_error(interp, "todo: interp_gt %s",
+				valtype_name(vt));
+	}
 
 	return stack_pushval(interp, &c);
 }
 
-static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
+static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sgn)
 {
 	struct val lhs, rhs, c;
 
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, vt))) {
 		return interp_error(interp, "gt_u prep");
 	}
 
-	c.i32 = (signed int)lhs.i32 < (signed int)rhs.i32;
+	switch (vt) {
+	case val_i32:
+		c.i32 = sgn? (signed int)  lhs.i32 < (signed int)  rhs.i32
+			   : (unsigned int)lhs.i32 < (unsigned int)rhs.i32;
+		break;
+	case val_i64:
+		c.i64 = sgn? (signed int)  lhs.i64 < (signed int)  rhs.i64
+			   : (unsigned int)lhs.i64 < (unsigned int)rhs.i64;
+		break;
+	case val_f32:
+		c.f32 = lhs.f32 < rhs.f32;
+		break;
+	case val_f64:
+		c.f64 = lhs.f64 < rhs.f64;
+		break;
+	case val_ref_null:
+	case val_ref_func:
+	case val_ref_extern:
+		return interp_error(interp, "reftype lt? for %s",
+				valtype_name(vt));
+	}
 
 	return stack_pushval(interp, &c);
 }
@@ -2577,7 +2610,7 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 	enum valtype paramtype;
 	unsigned int offset;
 
-	debug("calling %s (%d)\n", get_function_name(interp->module, func_index), func_index);
+	debug("calling %s:%d\n", get_function_name(interp->module, func_index), func_index);
 
 	if (unlikely(!(func = get_function(interp->module, func_index)))) {
 		return interp_error(interp,
@@ -2667,8 +2700,9 @@ static int interp_call(struct wasm_interp *interp)
 	}
 
 	if (unlikely(!interp_code(interp))) {
-		return interp_error(interp, "call %s",
-				get_function_name(interp->module, func_index));
+		return interp_error(interp, "call %s:%d",
+				get_function_name(interp->module, func_index),
+				func_index);
 	}
 
 	if (unlikely(!cursor_pop_callframe(&interp->callframes, &frame)))
@@ -3200,10 +3234,8 @@ static int interp_i32_eqz(struct wasm_interp *interp)
 {
 	struct val a, res;
 
-	if (unlikely(!cursor_popval(&interp->stack, &a)))
+	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
 		return interp_error(interp, "if pop val");
-	if (unlikely(a.type != val_i32))
-		return interp_error(interp, "not an i32 value");
 
 	res.type = val_i32;
 	res.i32 = a.i32 == 0;
@@ -3289,11 +3321,27 @@ static int interp_br_jump(struct wasm_interp *interp, int index)
 	return unresolved_break(interp, index);
 }
 
-static int interp_br_if(struct wasm_interp *interp)
+static int interp_br(struct wasm_interp *interp)
 {
 	struct cursor *code;
+	int ind;
+
+	if (unlikely(!(code = interp_codeptr(interp)))) {
+		return interp_error(interp, "codeptr");
+	}
+
+	if (unlikely(!leb128_read(code, (unsigned int*)&ind)))
+		return interp_error(interp, "read br index");
+
+	return interp_br_jump(interp, ind);
+}
+
+static int interp_br_if(struct wasm_interp *interp)
+{
 	u32 ind;
 	int cond = 0;
+
+	struct cursor *code;
 
 	if (unlikely(!(code = interp_codeptr(interp)))) {
 		return interp_error(interp, "codeptr");
@@ -3470,6 +3518,20 @@ static int interp_mem_offset(struct wasm_interp *interp,
 	return 1;
 }
 
+static int wrap_val(struct val *val, int size) {
+	switch (val->type) {
+	case val_i32:
+		val->i32 &= (1 << size)-1;
+		break;
+	case val_i64:
+		val->i64 &= (1UL << size)-1;
+		break;
+	default:
+		return 0;
+	}
+	return 1;
+}
+
 static int interp_store(struct wasm_interp *interp, enum valtype type, int N)
 {
 	struct val c;
@@ -3488,11 +3550,15 @@ static int interp_store(struct wasm_interp *interp, enum valtype type, int N)
 		return interp_error(interp, "memory target");
 	}
 
-	if (N != 0) {
-		return interp_error(interp, "implement wrap val (truncate?)");
+	if (N != 0) { 
+		if (!wrap_val(&c, N)) {
+			return interp_error(interp,
+				"implement wrap val (truncate?) for %s",
+				valtype_name(c.type));
+		}
 	}
 
-	memcpy(target.pos, &c.i64, target.size);
+	memcpy(target.pos, &c.i32, target.size);
 
 	return 1;
 }
@@ -3617,15 +3683,25 @@ static int interp_memory_size(struct wasm_interp *interp)
 	return 1;
 }
 
-static int interp_i32_shl(struct wasm_interp *interp)
+static int interp_shl(struct wasm_interp *interp, enum valtype typ)
 {
 	struct val lhs, rhs, c;
 
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, typ))) {
 		return interp_error(interp, "gt_u prep");
 	}
 
-	c.i32 = lhs.i32 << rhs.i32;
+	switch (typ) {
+	case val_i32:
+		c.i32 = lhs.i32 << rhs.i32;
+		break;
+	case val_i64:
+		c.i64 = lhs.i64 << rhs.i64;
+		break;
+	default:
+		return interp_error(interp, "todo: shl for %s",
+				valtype_name(typ));
+	}
 
 	return stack_pushval(interp, &c);
 }
@@ -3670,13 +3746,15 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_local_tee:   return interp_local_tee(interp);
 	case i_global_get:  return interp_global_get(interp);
 	case i_global_set:  return interp_global_set(interp);
+
 	case i_i32_eqz:     return interp_i32_eqz(interp);
 	case i_i32_add:     return interp_i32_add(interp);
 	case i_i32_sub:     return interp_i32_sub(interp);
 	case i_i32_const:   return interp_i32_const(interp);
-	case i_i32_gt_u:    return interp_i32_gt_u(interp);
-	case i_i32_lt_s:    return interp_i32_lt_s(interp);
-	case i_i32_shl:     return interp_i32_shl(interp);
+	case i_i32_gt_u:    return interp_gt(interp, val_i32, 0);
+	case i_i32_lt_s:    return interp_lt(interp, val_i32, 1);
+	case i_i32_lt_u:    return interp_lt(interp, val_i32, 0);
+	case i_i32_shl:     return interp_shl(interp, val_i32);
 
 	case i_i32_store:   return interp_store(interp, val_i32, 0);
 	case i_i32_store8:  return interp_store(interp, val_i32, 8);
@@ -3707,9 +3785,11 @@ static int interp_instr(struct wasm_interp *interp, u8 tag)
 	case i_end: return pop_label_checkpoint(interp);
 	case i_call: return interp_call(interp);
 	case i_block: return interp_block(interp);
+	case i_br: return interp_br(interp);
 	case i_br_if: return interp_br_if(interp);
 	case i_memory_size: return interp_memory_size(interp);
 	case i_memory_grow: return interp_memory_grow(interp);
+	case i_return: return 1;
 	default:
 		    interp_error(interp, "unhandled instruction %s 0x%x",
 				 instr_name(tag), tag);
