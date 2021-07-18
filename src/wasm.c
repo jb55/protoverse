@@ -993,6 +993,11 @@ static int leb128_read(struct cursor *read, unsigned int *val)
 	return 0;
 }
 
+static INLINE int read_int(struct cursor *read, int *val)
+{
+	return leb128_read(read, (unsigned int *)val);
+}
+
 static int parse_section_tag(struct cursor *cur, enum section_tag *section)
 {
 	unsigned char byte;
@@ -1043,7 +1048,7 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 	rt->valtypes = 0;
 	start = p->mem.p;
 
-	if (unlikely(!leb128_read(&p->cur, (unsigned int*)&elems))) {
+	if (unlikely(!read_int(&p->cur, &elems))) {
 		parse_err(p, "vec len");
 		return 0;
 	}
@@ -1156,7 +1161,7 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
-	if (unlikely(!leb128_read(&p->cur, (unsigned int*)&local->val.i32))) {
+	if (unlikely(!read_int(&p->cur, &local->val.i32))) {
 		debug("fail parse local\n");
 		return parse_err(p, "n");
 	}
@@ -1651,7 +1656,7 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
        *parsed_instrs = p->code->p;
        *instr_len = 0;
 
-       debug("parse_instrs_until starting\n");
+       //debug("parse_instrs_until starting\n");
        for (;;) {
                if (!pull_byte(p->code, &tag))
                        return note_error(p->errs, p->code, "oob");
@@ -1663,7 +1668,7 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
 
 	       if (tag == stop_instr ||
 		   (stop_instr == i_if && (tag == i_else || tag == i_end))) {
-		       debug("parse_instrs_until ending\n");
+		       //debug("parse_instrs_until ending\n");
 		       *instr_len = p->code->p - *parsed_instrs;
                        return 1;
                }
@@ -1787,7 +1792,7 @@ static int parse_memory_section(struct wasm_parser *p,
 static int parse_start_section(struct wasm_parser *p,
 		struct startsec *start_section)
 {
-	if (!leb128_read(&p->cur, (unsigned int*)&start_section->start_fn)) {
+	if (!read_int(&p->cur, &start_section->start_fn)) {
 		return parse_err(p, "start_fn index");
 	}
 
@@ -1797,7 +1802,7 @@ static int parse_start_section(struct wasm_parser *p,
 static INLINE int parse_byte_vector(struct wasm_parser *p, unsigned char **data,
 		int *data_len)
 {
-	if (!leb128_read(&p->cur, (unsigned int*)data_len)) {
+	if (!read_int(&p->cur, data_len)) {
 		return parse_err(p, "len");
 	}
 
@@ -1854,7 +1859,7 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 	case 2:
 		data->mode = datamode_active;
 
-		if (!leb128_read(&p->cur, (unsigned int*)&data->active.mem_index))  {
+		if (!read_int(&p->cur, &data->active.mem_index))  {
 			return parse_err(p, "read active data mem_index");
 		}
 
@@ -2507,36 +2512,41 @@ static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sig
 	return stack_pushval(interp, &c);
 }
 
-static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sign)
+static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, vt))) {
-		return interp_error(interp, "gt_u prep");
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "binop prep");
 	}
+	c.i32 = (signed int)lhs.i32 < (signed int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
 
-	switch (vt) {
-	case val_i32:
-		c.i32 = sign? (signed int)  lhs.i32 < (signed int)  rhs.i32
-			   : (unsigned int)lhs.i32 < (unsigned int)rhs.i32;
-		break;
-	case val_i64:
-		c.i64 = sign? (signed int)  lhs.i64 < (signed int)  rhs.i64
-			   : (unsigned int)lhs.i64 < (unsigned int)rhs.i64;
-		break;
-	case val_f32:
-		c.f32 = lhs.f32 < rhs.f32;
-		break;
-	case val_f64:
-		c.f64 = lhs.f64 < rhs.f64;
-		break;
-	case val_ref_null:
-	case val_ref_func:
-	case val_ref_extern:
-		return interp_error(interp, "reftype lt? for %s",
-				valtype_name(vt));
+static INLINE int interp_i32_lt_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "binop prep");
 	}
+	c.i32 = (unsigned int)lhs.i32 < (unsigned int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
 
+static INLINE int interp_i32_le_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.i32 = (unsigned int)lhs.i32 <= (unsigned int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_le_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.i32 = (signed int)lhs.i32 <= (signed int)rhs.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3032,6 +3042,38 @@ static INLINE int parse_memarg(struct cursor *code, struct memarg *memarg)
 	       leb128_read(code, &memarg->align);
 }
 
+static int parse_call_indirect(struct cursor *code,
+		struct call_indirect *call_indirect)
+{
+	return read_int(code, &call_indirect->typeidx) && 
+	       read_int(code, &call_indirect->tableidx);
+}
+
+static int parse_br_table(struct cursor *code, struct errors *errs,
+		struct br_table *br_table)
+{
+	int i;
+
+	if (unlikely(!read_int(code, &br_table->num_label_indices))) {
+		return note_error(errs, code, "fail read br_table num_indices");
+	}
+
+	br_table->label_indices = (int*)code->p;
+
+	for (i = 0; i < br_table->num_label_indices; i++) {
+		if (unlikely(!read_int(code, &br_table->label_indices[i]))) {
+			return note_error(errs, code,
+					  "failed to read br_table label %d/%d",
+					  i+1, br_table->num_label_indices);
+		}
+	}
+
+	if (unlikely(!read_int(code, &br_table->default_label))) {
+		return note_error(errs, code, "failed to parse default label");
+	}
+
+	return 1;
+}
 
 static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 {
@@ -3096,8 +3138,10 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 			return parse_memarg(p->code, &op->memarg);
 
 		case i_br_table:
+			return parse_br_table(p->code, p->errs, &op->br_table);
+
 		case i_call_indirect:
-			return note_error(p->errs, p->code, "consume dynamic-size op");
+			return parse_call_indirect(p->code, &op->call_indirect);
 
 		case i_f32_const:
 		case i_f64_const:
@@ -4124,8 +4168,10 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_sub:     return interp_i32_sub(interp);
 	case i_i32_const:   return interp_i32_const(interp, instr->integer);
 	case i_i32_gt_u:    return interp_gt(interp, val_i32, 0);
-	case i_i32_lt_s:    return interp_lt(interp, val_i32, 1);
-	case i_i32_lt_u:    return interp_lt(interp, val_i32, 0);
+	case i_i32_le_s:    return interp_i32_le_s(interp);
+	case i_i32_le_u:    return interp_i32_le_u(interp);
+	case i_i32_lt_s:    return interp_i32_lt_s(interp);
+	case i_i32_lt_u:    return interp_i32_lt_u(interp);
 	case i_i32_shl:     return interp_i32_shl(interp);
 	case i_i32_or:      return interp_i32_or(interp);
 	case i_i32_and:     return interp_i32_and(interp);
@@ -4208,9 +4254,8 @@ static INLINE int interp_parse_instr(struct wasm_interp *interp,
 
 	instr->tag = tag;
 
-	if (is_control_instr(tag)) {
-		debug("control instr %s\n", instr_name(tag));
-	} else if (!parse_instr(parser, instr->tag, instr)) {
+	if (!is_control_instr(tag) &&
+	    !parse_instr(parser, instr->tag, instr)) {
 		return interp_error(interp, "parse instr");
 	}
 

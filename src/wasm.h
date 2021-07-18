@@ -474,10 +474,23 @@ struct memarg {
 	unsigned int align;
 };
 
+struct br_table {
+	int num_label_indices;
+	int *label_indices;
+	int default_label;
+};
+
+struct call_indirect {
+	int typeidx;
+	int tableidx;
+};
+
 struct instr {
 	enum instr_tag tag;
 	int pos;
 	union {
+		struct br_table br_table;
+		struct call_indirect call_indirect;
 		struct memarg memarg;
 		struct block block;
 		double fp_double;
