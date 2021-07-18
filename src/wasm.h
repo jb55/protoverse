@@ -482,6 +482,7 @@ struct instr {
 		double fp_double;
 		float fp_single;
 		unsigned int integer;
+		int64_t i64;
 		unsigned char memidx;
 		enum reftype reftype;
 	};

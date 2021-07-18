@@ -237,7 +237,7 @@ static void print_val(struct val *val)
 {
 	switch (val->type) {
 	case val_i32: printf("%d", val->i32); break;
-	case val_i64: printf("%llu", val->i64); break;
+	case val_i64: printf("%lu", val->i64); break;
 	case val_f32: printf("%f", val->f32); break;
 	case val_f64: printf("%f", val->f64); break;
 
@@ -2469,6 +2469,12 @@ static INLINE int interp_local_get(struct wasm_interp *interp, int index)
 	return stack_pushval(interp, val);
 }
 
+static INLINE void make_i64_val(struct val *val, int64_t v)
+{
+	val->type = val_i64;
+	val->i64 = v;
+}
+
 static INLINE void make_i32_val(struct val *val, int v)
 {
 	val->type = val_i32;
@@ -2533,6 +2539,14 @@ static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sig
 
 	return stack_pushval(interp, &c);
 }
+
+static INLINE int interp_i64_const(struct wasm_interp *interp, int64_t c)
+{
+	struct val val;
+	make_i64_val(&val, c);
+	return cursor_pushval(&interp->stack, &val);
+}
+
 
 static INLINE int interp_i32_const(struct wasm_interp *interp, int c)
 {
@@ -3720,6 +3734,30 @@ static INLINE int interp_i32_and(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static int interp_i64_or(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64))) {
+		return interp_error(interp, "binop prep");
+	}
+
+	c.i64 = lhs.i64 | rhs.i64;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_shl(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64))) {
+		return interp_error(interp, "binop prep");
+	}
+
+	c.i64 = lhs.i64 << rhs.i64;
+	return stack_pushval(interp, &c);
+}
+
 static int interp_i32_shl(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -4048,6 +4086,10 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_and:     return interp_i32_and(interp);
 	case i_i32_mul:     return interp_i32_mul(interp);
 
+	case i_i64_shl:     return interp_i64_shl(interp);
+	case i_i64_or:      return interp_i64_or(interp);
+
+	case i_i64_const:   return interp_i64_const(interp, instr->i64);
 	case i_i64_extend_i32_u: return interp_extend(interp, val_i64, val_i32, 0);
 	case i_i64_extend_i32_s: return interp_extend(interp, val_i64, val_i32, 1);
 
