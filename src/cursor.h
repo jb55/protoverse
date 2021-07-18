@@ -49,7 +49,7 @@ static inline void make_array(struct array *a, u8* start, u8 *end, unsigned int 
 
 static inline unsigned char *array_index(struct array *a, int ind)
 {
-	u8 *p = a->cur.start + a->elem_size * ind; 
+	u8 *p = a->cur.start + a->elem_size * ind;
 	if (unlikely(p >= a->cur.end)) {
 		return NULL;
 	}
@@ -176,6 +176,17 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 }
 
 
+static inline int cursor_drop(struct cursor *cur, int len)
+{
+	if (unlikely(cur->p - len < cur->start)) {
+		printf("cursor drop oob\n");
+		return 0;
+	}
+
+	cur->p -= len;
+	return 1;
+}
+
 static inline unsigned char *cursor_top(struct cursor *cur, int len)
 {
 	if (unlikely(cur->p - len < cur->start)) {
@@ -200,7 +211,7 @@ static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
 		printf("cursor_pop oob\n");
 		return 0;
 	}
-	
+
 	cur->p -= len;
 	memcpy(data, cur->p, len);
 

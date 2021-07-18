@@ -476,6 +476,7 @@ struct memarg {
 
 struct instr {
 	enum instr_tag tag;
+	int pos;
 	union {
 		struct memarg memarg;
 		struct block block;
@@ -551,6 +552,7 @@ struct callframe {
 struct resolver {
 	u16 label;
 	u8 end_tag;
+	u8 start_tag;
 	unsigned char unused;
 };
 
