@@ -66,6 +66,22 @@ static const char *valtype_name(enum valtype valtype)
 	return "?";
 }
 
+static const char *valtype_literal(enum valtype valtype)
+{
+	switch (valtype) {
+	case val_i32: return "";
+	case val_i64: return "l";
+	case val_f32: return "";
+	case val_f64: return "f";
+	case val_ref_null: return "null";
+	case val_ref_func: return "func";
+	case val_ref_extern: return "extern";
+	}
+
+	return "?";
+}
+
+
 static INLINE struct local *get_locals(struct func *func, int *num_locals)
 {
 	switch (func->type) {
@@ -111,8 +127,8 @@ static struct val *get_fn_local(struct wasm_interp *interp, int fn, int ind)
 	}
 
 	if (unlikely(ind >= num_locals)) {
-		interp_error(interp, "local index %d too high for %s (max %d)",
-				ind, func->name, num_locals-1);
+		interp_error(interp, "local index %d too high for %s:%d (max %d)",
+				ind, func->name, fn, num_locals-1);
 		return NULL;
 	}
 
@@ -217,6 +233,43 @@ static INLINE int stack_pop_number(struct wasm_interp *interp, struct val *val)
 	return cursor_pop_number(&interp->stack, val);
 }
 
+static void print_val(struct val *val)
+{
+	switch (val->type) {
+	case val_i32: printf("%d", val->i32); break;
+	case val_i64: printf("%llu", val->i64); break;
+	case val_f32: printf("%f", val->f32); break;
+	case val_f64: printf("%f", val->f64); break;
+
+	case val_ref_null:
+	case val_ref_func:
+	case val_ref_extern:
+		      break;
+	}
+	printf("%s", valtype_literal(val->type));
+}
+
+static void print_stack(struct cursor *stack)
+{
+	struct val val;
+	int i;
+	u8 *p = stack->p;
+
+	if (stack->p == stack->start) {
+		printf("empty stack\n");
+		return;
+	}
+
+	for (i = 0; stack->p > stack->start; i++) {
+		cursor_popval(stack, &val);
+		printf("[%d] ", i);
+		print_val(&val);
+		printf("\n");
+	}
+
+	stack->p = p;
+}
+
 static int builtin_get_args(struct wasm_interp *interp)
 {
 	struct val *argv, *argv_buf;
@@ -227,22 +280,16 @@ static int builtin_get_args(struct wasm_interp *interp)
 	if (!(argv_buf = get_local(interp, 1)))
 		return interp_error(interp, "argv_buf");
 
-	return 1;
-}
+	print_stack(&interp->stack);
 
-static int builtin_get_args_sizes(struct wasm_interp *interp)
-{
-	return interp_error(interp, "implement get_args_sizes");
+	debug("get args %d %d\n", argv->i32, argv_buf->i32);
+
+	return 1;
 }
 
 static INLINE int cursor_pushval(struct cursor *cur, struct val *val)
 {
 	return cursor_push(cur, (u8*)val, sizeof(*val));
-}
-
-static INLINE int stack_pushval(struct wasm_interp *interp, struct val *val)
-{
-	return cursor_pushval(&interp->stack, val);
 }
 
 static INLINE int cursor_push_i32(struct cursor *stack, int i)
@@ -259,16 +306,42 @@ static INLINE int stack_push_i32(struct wasm_interp *interp, int i)
 	return cursor_push_i32(&interp->stack, i);
 }
 
-/*
-static int builtin_get_args_prep(struct wasm_interp *interp)
+
+static int builtin_get_args_sizes(struct wasm_interp *interp)
 {
-	return stack_push_i32(interp, 1) && stack_push_i32(interp, 2);
+	struct val *argc, *argv_buf_size;
+
+	if (!(argc = get_local(interp, 0)))
+		return interp_error(interp, "argc");
+
+	if (!(argv_buf_size = get_local(interp, 1)))
+		return interp_error(interp, "argv_buf_size");
+
+	debug("get_args_sizes %d %d\n", argc->i32, argv_buf_size->i32);
+
+	return stack_push_i32(interp, 0);
 }
-*/
+
+static INLINE int stack_pushval(struct wasm_interp *interp, struct val *val)
+{
+	return cursor_pushval(&interp->stack, val);
+}
+
+static int interp_exit(struct wasm_interp *interp)
+{
+	interp->quitting = 1;
+	return 0;
+}
+
+static int builtin_proc_exit(struct wasm_interp *interp)
+{
+	return interp_exit(interp);
+}
 
 static struct builtin BUILTINS[] = {
 	{ .name = "args_get",       .fn = builtin_get_args, .num_locals = 2 },
 	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes, .num_locals = 2 },
+	{ .name = "proc_exit",      .fn = builtin_proc_exit, .num_locals = 2 },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -434,22 +507,6 @@ static char *instr_name(enum instr_tag tag)
 	return unk;
 }
 
-static void print_val(struct val *val)
-{
-	switch (val->type) {
-	case val_i32: printf("%d:", val->i32); break;
-	case val_i64: printf("%llu:", val->i64); break;
-	case val_f32: printf("%f:", val->f32); break;
-	case val_f64: printf("%f:", val->f64); break;
-
-	case val_ref_null:
-	case val_ref_func:
-	case val_ref_extern:
-		      break;
-	}
-	printf("%s\n", valtype_name(val->type));
-}
-
 static INLINE int was_section_parsed(struct module *module,
 	enum section_tag section)
 {
@@ -459,21 +516,6 @@ static INLINE int was_section_parsed(struct module *module,
 	return module->parsed & (1 << section);
 }
 
-
-static void print_stack(struct cursor *stack)
-{
-	struct val val;
-	int i;
-	u8 *p = stack->p;
-
-	for (i = 0; stack->p > stack->start; i++) {
-		cursor_popval(stack, &val);
-		printf("[%d] ", i);
-		print_val(&val);
-	}
-
-	stack->p = p;
-}
 
 static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
 {
@@ -1551,15 +1593,19 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
        *parsed_instrs = p->code->p;
        *instr_len = 0;
 
+       debug("parse_instrs_until starting\n");
        for (;;) {
                if (!pull_byte(p->code, &tag))
                        return note_error(p->errs, p->code, "oob");
 
-               if (!parse_instr(p, tag, &op))
+               if (!parse_instr(p, tag, &op)) {
                        return note_error(p->errs, p->code,
-				  "parse %s instr (0x%x)", instr_name(tag), tag);
+			  "parse %s instr (0x%x)", instr_name(tag), tag);
+	       }
 
-               if (tag == stop_instr) {
+	       if (tag == stop_instr || 
+		   (stop_instr == i_if && (tag == i_else || tag == i_end))) {
+		       debug("parse_instrs_until ending\n");
 		       *instr_len = p->code->p - *parsed_instrs;
                        return 1;
                }
@@ -2308,6 +2354,7 @@ static INLINE int set_fn_local(struct wasm_interp *interp, int fn, int ind,
 	}
 
 	memcpy(local, val, sizeof(*val));
+
 	return 1;
 }
 
@@ -2465,6 +2512,23 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 	return 1;
 }
 
+static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *builtin, int fn)
+{
+	struct callframe callframe = {0};
+
+	/* update current function and push it to the callframe as well */
+	callframe.fn = fn;
+
+	if (unlikely(!cursor_push_callframe(&interp->callframes, &callframe))) {
+		return interp_error(interp, "oob cursor_pushcode");
+	}
+
+	if (!builtin->fn(interp))
+		return interp_error(interp, "builtin trap");
+
+	return cursor_pop_callframe(&interp->callframes, &callframe);
+}
+
 static INLINE int call_func(struct wasm_interp *interp, struct func *func, int fn)
 {
 	switch (func->type) {
@@ -2476,7 +2540,7 @@ static INLINE int call_func(struct wasm_interp *interp, struct func *func, int f
 					"attempted to call unresolved fn: %s",
 					func->name);
 		}
-		return func->builtin->fn(interp);
+		return call_builtin_func(interp, func->builtin, fn);
 	}
 	return interp_error(interp, "corrupt func type: %02x", func->type);
 }
@@ -2918,9 +2982,6 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 			return parse_block(p, &op->blocks[0], i_end);
 
 		case i_else:
-			return parse_block(p, &op->blocks[0], i_else) &&
-			       parse_block(p, &op->blocks[1], i_end);
-
 		case i_end:
 			return 1;
 
@@ -3077,7 +3138,8 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 
 	// consume instructions, use resolver stack to resolve jumps
 	if (!parse_instrs_until(&parser, end_tag, &instrs, &instrs_len)) {
-		return interp_error(interp, "parse instrs");
+		return interp_error(interp, "parse instrs end @ %s",
+				instr_name(end_tag));
 	}
 
 	return pop_label_checkpoint(interp);
@@ -3127,7 +3189,7 @@ static int interp_if(struct wasm_interp *interp)
 		return 1;
 	}
 
-	if (unlikely(!branch_jump(interp, i_end))) {
+	if (unlikely(!branch_jump(interp, i_if))) {
 		return interp_error(interp, "jump");
 	}
 
@@ -3555,28 +3617,66 @@ static int interp_memory_size(struct wasm_interp *interp)
 	return 1;
 }
 
+static int interp_i32_shl(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "gt_u prep");
+	}
+
+	c.i32 = lhs.i32 << rhs.i32;
+
+	return stack_pushval(interp, &c);
+}
+
+static void print_linestack(struct cursor *stack)
+{
+	struct val *val;
+	int first = 1;
+
+	val = (struct val*)stack->p;
+
+	while (--val >= (struct val*)stack->start) {
+		if (first) {
+			first = 0;
+		} else {
+			printf(", ");
+		}
+		print_val(val);
+	}
+
+	printf("\n");
+}
+
 static int interp_instr(struct wasm_interp *interp, u8 tag)
 {
 	interp->ops++;
 
-	debug("%04lX %s\n",
+	debug("%04lX %s\t",
 		interp_codeptr(interp)->p - 1 - interp_codeptr(interp)->start,
-		instr_name(tag));
+		instr_name(tag)
+		);
+
+#if DEBUG
+	print_linestack(&interp->stack);
+#endif
 
 	switch (tag) {
 	case i_unreachable: return 1;
-	case i_nop: return 1;
-	case i_local_get: return interp_local_get(interp);
-	case i_local_set: return interp_local_set(interp);
-	case i_local_tee: return interp_local_tee(interp);
-	case i_global_get: return interp_global_get(interp);
-	case i_global_set: return interp_global_set(interp);
-	case i_i32_eqz: return interp_i32_eqz(interp);
-	case i_i32_add: return interp_i32_add(interp);
-	case i_i32_sub: return interp_i32_sub(interp);
-	case i_i32_const: return interp_i32_const(interp);
-	case i_i32_gt_u: return interp_i32_gt_u(interp);
-	case i_i32_lt_s: return interp_i32_lt_s(interp);
+	case i_nop:         return 1;
+	case i_local_get:   return interp_local_get(interp);
+	case i_local_set:   return interp_local_set(interp);
+	case i_local_tee:   return interp_local_tee(interp);
+	case i_global_get:  return interp_global_get(interp);
+	case i_global_set:  return interp_global_set(interp);
+	case i_i32_eqz:     return interp_i32_eqz(interp);
+	case i_i32_add:     return interp_i32_add(interp);
+	case i_i32_sub:     return interp_i32_sub(interp);
+	case i_i32_const:   return interp_i32_const(interp);
+	case i_i32_gt_u:    return interp_i32_gt_u(interp);
+	case i_i32_lt_s:    return interp_i32_lt_s(interp);
+	case i_i32_shl:     return interp_i32_shl(interp);
 
 	case i_i32_store:   return interp_store(interp, val_i32, 0);
 	case i_i32_store8:  return interp_store(interp, val_i32, 8);
@@ -3722,6 +3822,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	    global_init_size;
 
 	memset(interp, 0, sizeof(*interp));
+
+	interp->quitting = 0;
 	interp->module = module;
 	interp->module->start_fn = -1;
 	interp->prev_resolvers = 0;
@@ -3883,6 +3985,10 @@ int interp_wasm_module(struct wasm_interp *interp)
 
 	if (interp_code(interp)) {
 		debug("interp success!!\n");
+	} else if (interp->quitting) {
+		debug("finished running via process exit\n");
+	} else {
+		return interp_error(interp, "interp_code");
 	}
 
 	return 1;
@@ -3905,9 +4011,9 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 		print_error_backtrace(&interp.errors);
 		return 0;
 	}
-	ok = interp_wasm_module(&interp);
-	print_error_backtrace(&interp.errors);
-	printf("ops: %ld\nstack:\n", interp.ops);
+	if (!interp_wasm_module(&interp)) {
+		print_error_backtrace(&interp.errors);
+	}
 	print_stack(&interp.stack);
 	wasm_interp_free(&interp);
 	wasm_parser_free(&p);

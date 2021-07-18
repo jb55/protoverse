@@ -491,7 +491,7 @@ struct resolver {
 
 struct wasm_interp {
 	struct module *module;
-	int prev_resolvers;
+	int prev_resolvers, quitting;
 
 	struct errors errors; /* struct error */
 	size_t ops;

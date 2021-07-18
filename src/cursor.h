@@ -179,7 +179,6 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 static inline unsigned char *cursor_top(struct cursor *cur, int len)
 {
 	if (unlikely(cur->p - len < cur->start)) {
-		printf("cursor_top oob\n");
 		return NULL;
 	}
 	return cur->p - len;
