@@ -81,22 +81,6 @@ static const char *valtype_literal(enum valtype valtype)
 	return "?";
 }
 
-
-static INLINE struct local *get_locals(struct func *func, int *num_locals)
-{
-	switch (func->type) {
-	case func_type_wasm:
-		*num_locals = func->wasm_func->num_locals;
-		return func->wasm_func->locals;
-	case func_type_builtin:
-		if (func->builtin == NULL)
-			return NULL;
-		*num_locals = func->builtin->num_locals;
-		return func->builtin->locals;
-	}
-	return NULL;
-}
-
 static INLINE int is_valid_fn_index(struct module *module, int ind)
 {
 	return ind >= 0 && ind < module->num_funcs;
@@ -112,27 +96,19 @@ static INLINE struct func *get_function(struct module *module, int ind)
 static struct val *get_fn_local(struct wasm_interp *interp, int fn, int ind)
 {
 	struct func *func;
-	struct local *locals;
-	int num_locals;
 
 	if (unlikely(!(func = get_function(interp->module, fn)))) {
 		interp_error(interp, "unknown fn %d", fn);
 		return NULL;
 	}
 
-	if (unlikely(!(locals = get_locals(func, &num_locals)))) {
-		interp_error(interp, "couldn't find locals for %s",
-				    func->name);
-		return NULL;
-	}
-
-	if (unlikely(ind >= num_locals)) {
+	if (unlikely(ind >= func->num_locals)) {
 		interp_error(interp, "local index %d too high for %s:%d (max %d)",
-				ind, func->name, fn, num_locals-1);
+				ind, func->name, fn, func->num_locals-1);
 		return NULL;
 	}
 
-	return &locals[ind].val;
+	return &func->locals[ind].val;
 }
 
 static struct val *get_local(struct wasm_interp *interp, int ind)
@@ -339,9 +315,9 @@ static int builtin_proc_exit(struct wasm_interp *interp)
 }
 
 static struct builtin BUILTINS[] = {
-	{ .name = "args_get",       .fn = builtin_get_args, .num_locals = 2 },
-	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes, .num_locals = 2 },
-	{ .name = "proc_exit",      .fn = builtin_proc_exit, .num_locals = 2 },
+	{ .name = "args_get",       .fn = builtin_get_args },
+	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes },
+	{ .name = "proc_exit",      .fn = builtin_proc_exit  },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -1192,10 +1168,10 @@ static int parse_vector(struct wasm_parser *p, unsigned int item_size,
 	return 1;
 }
 
-static int parse_func(struct wasm_parser *p, struct wasm_func *func,
-		struct functype *functype)
+static int parse_func(struct wasm_parser *p, struct wasm_func *func)
 {
-	unsigned int size, code_locals, i;
+	unsigned int size;
+	int i;
 	unsigned char *start;
 	struct local *locals;
 
@@ -1206,11 +1182,9 @@ static int parse_func(struct wasm_parser *p, struct wasm_func *func,
 	start = p->cur.p;
 	locals = (struct local*)p->mem.p;
 
-	if (!leb128_read(&p->cur, &code_locals)) {
+	if (!read_int(&p->cur, &func->num_locals)) {
 		return parse_err(p, "read locals vec");
 	}
-
-	func->num_locals = functype->params.num_valtypes + code_locals;
 
 	if (!cursor_alloc(&p->mem, sizeof(*locals) * func->num_locals)) {
 		return parse_err(p, "oom alloc param locals");
@@ -1220,7 +1194,7 @@ static int parse_func(struct wasm_parser *p, struct wasm_func *func,
 		return parse_err(p, "corrupt functype?");
 	}
 
-	for (i = 0; i < code_locals; i++) {
+	for (i = 0; i < func->num_locals; i++) {
 		if (!parse_local(p, &locals[i])) {
 			return parse_err(p, "local #%d", i);
 		}
@@ -1241,28 +1215,6 @@ static int parse_func(struct wasm_parser *p, struct wasm_func *func,
 	return 1;
 }
 
-/* this is needed in the parsing phase when we haven't built a function map yet */
-static struct functype *get_code_function_type(struct module *module, int code_ind)
-{
-	int typeidx;
-
-	if (code_ind < 0 || code_ind >= module->func_section.num_indices) {
-		printf("UNUSUAL: func index oob %d of %d\n", code_ind,
-				module->code_section.num_funcs);
-		return 0;
-	}
-
-	typeidx = module->func_section.type_indices[code_ind];
-
-	if (typeidx < 0 || typeidx >= module->type_section.num_functypes) {
-		printf("UNUSUAL: type index oob %d of %d\n", typeidx,
-				module->type_section.num_functypes);
-		return 0;
-	}
-
-	return &module->type_section.functypes[typeidx];
-}
-
 static INLINE int count_internal_functions(struct module *module)
 {
 	return !was_section_parsed(module, section_code) ? 0 :
@@ -1274,7 +1226,6 @@ static int parse_code_section(struct wasm_parser *p,
 		struct codesec *code_section)
 {
 	struct wasm_func *funcs;
-	struct functype *functype;
 	int i;
 
 	if (!parse_vector(p, sizeof(*funcs),
@@ -1288,14 +1239,7 @@ static int parse_code_section(struct wasm_parser *p,
 	}
 
 	for (i = 0; i < code_section->num_funcs; i++) {
-		if (unlikely(!(functype =
-				get_code_function_type(&p->module, i)))) {
-			return parse_err(p,
-					"couldn't get code func type %d of %d",
-					i, p->module.code_section.num_funcs);
-		}
-
-		if (!parse_func(p, &funcs[i], functype)) {
+		if (!parse_func(p, &funcs[i])) {
 			return parse_err(p, "func #%d", i);
 		}
 	}
@@ -4404,6 +4348,57 @@ void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t a
 	cursor_slice(&p->mem, &p->errs.cur, 0xFFFF);
 }
 
+static int count_fn_locals(struct func *func)
+{
+	int i, num_locals = 0;
+
+	num_locals += func->functype->params.num_valtypes;
+
+	if (func->type == func_type_wasm) {
+		for (i = 0; i < func->wasm_func->num_locals; i++) {
+			num_locals += func->wasm_func->locals->val.i32;
+		}
+	}
+
+	return num_locals;
+}
+
+static int calculate_locals_size(struct module *module)
+{
+	int i, locals_size = 0;
+	struct func *func;
+
+	for (i = 0; i < module->num_funcs; i++) {
+		func = &module->funcs[i];
+		locals_size += count_fn_locals(func) * sizeof(struct val);
+	}
+
+	return locals_size;
+}
+
+static int alloc_locals(struct module *module, struct cursor *mem,
+		struct errors *errs)
+{
+	int i, num_locals;
+	struct func *func;
+
+	for (i = 0; i < module->num_funcs; i++) {
+		func = &module->funcs[i];
+		num_locals = count_fn_locals(func);
+
+		func->locals = (struct local*)mem->p;
+		func->num_locals = num_locals;
+
+		if (!cursor_alloc(mem, num_locals * sizeof(struct val))) {
+			return note_error(errs, mem,
+					"could not alloc locals for %s",
+					func->name);
+		}
+	}
+
+	return 1;
+}
+
 int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 {
 	unsigned char *mem, *heap;
@@ -4443,6 +4438,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
 	globals_size     = sizeof(struct val) * num_globals;
+	locals_size      = calculate_locals_size(module);
 	global_init_size = num_globals;
 
 	if (num_mems > 1) {
@@ -4466,6 +4462,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		callframes_size +
 		globals_size +
 		global_init_size +
+		locals_size +
 		resolver_size;
 
 	mem = calloc(1, memsize);
@@ -4487,7 +4484,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		cursor_slice(&interp->mem, &interp->globals, globals_size) &&
 		cursor_slice(&interp->mem, &interp->global_init, global_init_size) &&
 		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
-	        array_alloc(&interp->mem, &interp->num_labels, fns);
+	        array_alloc(&interp->mem, &interp->num_labels, fns) &&
+		alloc_locals(interp->module, &interp->mem, &interp->errors);
 
 	/* init memory pages */
 	assert((interp->mem.end - interp->mem.start) == memsize);

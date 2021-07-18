@@ -215,6 +215,8 @@ struct func {
 		struct wasm_func *wasm_func;
 		struct builtin *builtin;
 	};
+	struct local *locals;
+	int num_locals;
 	struct functype *functype;
 	enum func_type type;
 	const char *name;
@@ -596,8 +598,6 @@ struct wasm_interp {
 
 struct builtin {
 	const char *name;
-	struct local locals[8];
-	int num_locals;
 	int (*fn)(struct wasm_interp *);
 	int (*prepare_args)(struct wasm_interp *);
 };
