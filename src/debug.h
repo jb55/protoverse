@@ -7,7 +7,7 @@
 #define unusual(...) fprintf(stderr, "UNUSUAL: " __VA_ARGS__)
 
 #ifdef DEBUG
-#define debug(...) fprintf(stderr, __VA_ARGS__)
+#define debug(...) printf(__VA_ARGS__)
 #else
 #define debug(...)
 #endif

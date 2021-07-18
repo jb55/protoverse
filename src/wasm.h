@@ -416,7 +416,8 @@ struct instr {
 	union {
 		struct memarg memarg;
 		struct block block;
-		struct block blocks[2];
+		double fp_double;
+		float fp_single;
 		unsigned int integer;
 		unsigned char memidx;
 		enum reftype reftype;

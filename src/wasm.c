@@ -2370,22 +2370,12 @@ static INLINE int set_local(struct wasm_interp *interp, int ind,
 	return set_fn_local(interp, frame->fn, ind, val);
 }
 
-static int interp_local_tee(struct wasm_interp *interp)
+static INLINE int interp_local_tee(struct wasm_interp *interp, int index)
 {
 	struct val *val;
-	unsigned int index;
-	struct cursor *code;
 
 	if (unlikely(!(val = stack_topval(interp)))) {
 		return interp_error(interp, "pop");
-	}
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (unlikely(!leb128_read(code, &index))) {
-		return interp_error(interp, "read index");
 	}
 
 	if (unlikely(!set_local(interp, index, val))) {
@@ -2395,11 +2385,11 @@ static int interp_local_tee(struct wasm_interp *interp)
 	return 1;
 }
 
-static int interp_local_set(struct wasm_interp *interp)
+static int interp_local_set(struct wasm_interp *interp, int index)
 {
 	struct val val;
 
-	if (unlikely(!interp_local_tee(interp))) {
+	if (unlikely(!interp_local_tee(interp, index))) {
 		return interp_error(interp, "tee set");
 	}
 
@@ -2410,25 +2400,12 @@ static int interp_local_set(struct wasm_interp *interp)
 	return 1;
 }
 
-static int interp_local_get(struct wasm_interp *interp)
+static INLINE int interp_local_get(struct wasm_interp *interp, int index)
 {
-	unsigned int index;
 	struct val *val;
-	struct cursor *code;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		interp_error(interp, "codeptr");
-		return 0;
-	}
-
-	if (unlikely(!leb128_read(code, &index))) {
-		interp_error(interp, "index");
-		return 0;
-	}
 
 	if (unlikely(!(val = get_local(interp, index)))) {
-		interp_error(interp, "get local");
-		return 0;
+		return interp_error(interp, "get local");
 	}
 
 	return stack_pushval(interp, val);
@@ -2499,24 +2476,10 @@ static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sgn
 	return stack_pushval(interp, &c);
 }
 
-static INLINE int interp_i32_const(struct wasm_interp *interp)
+static INLINE int interp_i32_const(struct wasm_interp *interp, int c)
 {
 	struct val val;
-	unsigned int read;
-	struct cursor *code;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		interp_error(interp, "codeptr");
-		return 0;
-	}
-
-	if (unlikely(!leb128_read(code, &read))) {
-		interp_error(interp, "invalid constant value");
-		return 0;
-	}
-
-	make_i32_val(&val, read);
-
+	make_i32_val(&val, c);
 	return cursor_pushval(&interp->stack, &val);
 }
 
@@ -2678,21 +2641,9 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 
 int interp_code(struct wasm_interp *interp);
 
-static int interp_call(struct wasm_interp *interp)
+static int interp_call(struct wasm_interp *interp, int func_index)
 {
-	unsigned int func_index;
-	struct cursor *code;
 	struct callframe frame;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		interp_error(interp, "codeptr");
-		return 0;
-	}
-
-	if (unlikely(!leb128_read(code, &func_index))) {
-		interp_error(interp, "read func index");
-		return 0;
-	}
 
 	if (unlikely(!prepare_call(interp, func_index))) {
 		interp_error(interp, "prepare");
@@ -2970,6 +2921,7 @@ static int parse_block(struct expr_parser *p, struct block *block, u8 end_tag)
 		return note_error(p->errs, p->code, "push checkpoint");
 
 	if (label && is_label_resolved(label)) {
+		debug("label is resolved, skipping block parse\n");
 		// TODO verify this is correct
 		block->instrs     = p->code->start + label_instr_pos(label);
 		block->instrs_len = (p->code->start + label->jump) - block->instrs;
@@ -2999,8 +2951,10 @@ static INLINE int parse_memarg(struct cursor *code, struct memarg *memarg)
 
 static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 {
+	/*
 	debug("%04lX parsing instr %s (0x%02x)\n",
 		p->code->p - 1 - p->code->start, instr_name(tag), tag);
+		*/
 
 	op->tag = tag;
 
@@ -3013,7 +2967,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_block:
 		case i_loop:
 		case i_if:
-			return parse_block(p, &op->blocks[0], i_end);
+			return parse_block(p, &op->block, i_end);
 
 		case i_else:
 		case i_end:
@@ -3025,6 +2979,10 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_local_tee:
 		case i_global_get:
 		case i_global_set:
+		case i_br:
+		case i_br_if:
+		case i_i32_const:
+		case i_i64_const:
 			return leb128_read(p->code, &op->integer);
 
 		case i_i32_load:
@@ -3055,15 +3013,6 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_br_table:
 		case i_call_indirect:
 			return note_error(p->errs, p->code, "consume dynamic-size op");
-
-		case i_br:
-		case i_br_if:
-		case i_i32_const:
-		case i_i64_const:
-			if (unlikely(!leb128_read(p->code, &op->integer))) {
-				return note_error(p->errs, p->code, "failed to read integer");
-			}
-			return 1;
 
 		case i_f32_const:
 		case i_f64_const:
@@ -3181,9 +3130,9 @@ static int branch_jump(struct wasm_interp *interp, u8 end_tag)
 
 static int interp_block(struct wasm_interp *interp)
 {
-	struct blocktype blocktype;
 	struct cursor *code;
 	struct label *label;
+	struct blocktype blocktype;
 
 	if (unlikely(!(code = interp_codeptr(interp)))) {
 		interp_error(interp, "empty callstack?");
@@ -3321,34 +3270,14 @@ static int interp_br_jump(struct wasm_interp *interp, int index)
 	return unresolved_break(interp, index);
 }
 
-static int interp_br(struct wasm_interp *interp)
+static INLINE int interp_br(struct wasm_interp *interp, int ind)
 {
-	struct cursor *code;
-	int ind;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (unlikely(!leb128_read(code, (unsigned int*)&ind)))
-		return interp_error(interp, "read br index");
-
 	return interp_br_jump(interp, ind);
 }
 
-static int interp_br_if(struct wasm_interp *interp)
+static INLINE int interp_br_if(struct wasm_interp *interp, int ind)
 {
-	u32 ind;
 	int cond = 0;
-
-	struct cursor *code;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (unlikely(!leb128_read(code, &ind)))
-		return interp_error(interp, "read br_if index");
 
 	// TODO: can this be something other than an i32?
 	if (unlikely(!stack_pop_i32(interp, &cond))) {
@@ -3357,37 +3286,6 @@ static int interp_br_if(struct wasm_interp *interp)
 
 	if (cond != 0)
 		return interp_br_jump(interp, ind);
-
-	return 1;
-}
-
-static int interp_global_get(struct wasm_interp *interp)
-{
-	struct globalsec *section = &interp->module->global_section;
-	struct global *global;
-	struct cursor *code;
-	int ind;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (!leb128_read(code, (u32*)&ind)) {
-		return interp_error(interp, "read global index");
-	}
-
-	// TODO imported global indices?
-	if (unlikely(ind >= section->num_globals)) {
-		return interp_error(interp, "invalid global index %d / %d",
-				ind, section->num_globals-1);
-	}
-
-	global = &section->globals[ind];
-
-	if (unlikely(!eval_const_expr(&global->init, &interp->errors,
-					&interp->stack))) {
-		return interp_error(interp, "init global");
-	}
 
 	return 1;
 }
@@ -3448,6 +3346,24 @@ static struct val *get_global(struct wasm_interp *interp, int ind)
 	return val;
 }
 
+static int interp_global_get(struct wasm_interp *interp, int ind)
+{
+	struct globalsec *section = &interp->module->global_section;
+	struct val *global;
+
+	// TODO imported global indices?
+	if (unlikely(ind >= section->num_globals)) {
+		return interp_error(interp, "invalid global index %d / %d",
+				ind, section->num_globals-1);
+	}
+
+	if (!(global = get_global(interp, ind))) {
+		return interp_error(interp, "get global");
+	}
+
+	return stack_pushval(interp, global);
+}
+
 static INLINE int has_memory_section(struct module *module)
 {
 	return was_section_parsed(module, section_memory) &&
@@ -3476,30 +3392,21 @@ static INLINE int bitwidth(enum valtype vt)
 }
 
 struct memtarget {
-	struct memarg memarg;
 	int size;
 	u8 *pos;
 };
 
 static int interp_mem_offset(struct wasm_interp *interp,
-		int N, int i, enum valtype c, struct memtarget *t)
+		int N, int i, enum valtype c, struct memarg *memarg,
+		struct memtarget *t)
 {
-	struct cursor *code;
 	int offset, bw;
 
 	if (unlikely(!has_memory_section(interp->module))) {
 		return interp_error(interp, "no memory section");
 	}
 
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (unlikely(!parse_memarg(code, &t->memarg))) {
-		return interp_error(interp, "memarg");
-	}
-
-	offset = i + t->memarg.offset;
+	offset = i + memarg->offset;
 	bw = bitwidth(c);
 
 	if (N == 0) {
@@ -3532,7 +3439,8 @@ static int wrap_val(struct val *val, int size) {
 	return 1;
 }
 
-static int interp_store(struct wasm_interp *interp, enum valtype type, int N)
+static int interp_store(struct wasm_interp *interp, struct memarg *memarg,
+		enum valtype type, int N)
 {
 	struct val c;
 	struct memtarget target;
@@ -3546,7 +3454,7 @@ static int interp_store(struct wasm_interp *interp, enum valtype type, int N)
 		return interp_error(interp, "pop stack");
 	}
 
-	if (unlikely(!interp_mem_offset(interp, N, i, type, &target))) {
+	if (unlikely(!interp_mem_offset(interp, N, i, type, memarg, &target))) {
 		return interp_error(interp, "memory target");
 	}
 
@@ -3563,7 +3471,8 @@ static int interp_store(struct wasm_interp *interp, enum valtype type, int N)
 	return 1;
 }
 
-static int interp_load(struct wasm_interp *interp, enum valtype type, int N, int sgn)
+static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
+		enum valtype type, int N, int sgn)
 {
 	struct memtarget target;
 	struct val out = {0};
@@ -3577,7 +3486,7 @@ static int interp_load(struct wasm_interp *interp, enum valtype type, int N, int
 		return interp_error(interp, "pop stack");
 	}
 
-	if (unlikely(!interp_mem_offset(interp, N, i, type, &target))) {
+	if (unlikely(!interp_mem_offset(interp, N, i, type, memarg, &target))) {
 		return interp_error(interp, "memory target");
 	}
 
@@ -3591,19 +3500,9 @@ static int interp_load(struct wasm_interp *interp, enum valtype type, int N, int
 	return 1;
 }
 
-static int interp_global_set(struct wasm_interp *interp)
+static INLINE int interp_global_set(struct wasm_interp *interp, int global_ind)
 {
 	struct val *global, setval;
-	int global_ind;
-	struct cursor *code;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (unlikely(!leb128_read(code, (unsigned int*)&global_ind))) {
-		return interp_error(interp, "read global ind");
-	}
 
 	if (unlikely(!(global = get_global(interp, global_ind)))) {
 		return interp_error(interp, "couldn't get global %d", global_ind);
@@ -3623,20 +3522,12 @@ static INLINE int active_pages(struct wasm_interp *interp)
 	return cursor_count(&interp->memory, WASM_PAGE_SIZE);
 }
 
-static int interp_memory_grow(struct wasm_interp *interp)
+static int interp_memory_grow(struct wasm_interp *interp, u8 memidx)
 {
-	struct cursor *code;
 	int pages = 0, prev_size;
 	unsigned int grow;
-	u8 memidx;
 
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (!pull_byte(code, &memidx)) {
-		return interp_error(interp, "memidx");
-	}
+	(void)memidx;
 
 	if (unlikely(!has_memory_section(interp->module))) {
 		return interp_error(interp, "no memory section");
@@ -3659,18 +3550,9 @@ static int interp_memory_grow(struct wasm_interp *interp)
 	return stack_push_i32(interp, pages);
 }
 
-static int interp_memory_size(struct wasm_interp *interp)
+static INLINE int interp_memory_size(struct wasm_interp *interp, u8 memidx)
 {
-	struct cursor *code;
-	u8 memidx;
-
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		return interp_error(interp, "codeptr");
-	}
-
-	if (!pull_byte(code, &memidx)) {
-		return interp_error(interp, "memidx");
-	}
+	(void)memidx;
 
 	if (unlikely(!has_memory_section(interp->module))) {
 		return interp_error(interp, "no memory section");
@@ -3725,85 +3607,271 @@ static void print_linestack(struct cursor *stack)
 	printf("\n");
 }
 
-static int interp_instr(struct wasm_interp *interp, u8 tag)
+static const char *show_instr(struct instr *instr) 
+{
+	struct cursor buf;
+	static char buffer[64]; 
+	static char tmp[32]; 
+	int len, i;
+
+	buffer[sizeof(buffer)-1] = 0;
+	make_cursor((u8*)buffer, (u8*)buffer + sizeof(buffer) - 1, &buf);
+
+	cursor_push_str(&buf, instr_name(instr->tag));
+	len = buf.p - buf.start;
+
+	for (i = 0; i < 12-len; i++)
+		cursor_push_byte(&buf, ' ');
+
+	switch (instr->tag) {
+		// two-byte instrs
+		case i_memory_size:
+		case i_memory_grow:
+			sprintf(tmp, "0x%02x", instr->memidx);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_block:
+		case i_loop:
+		case i_if:
+			break;
+
+		case i_else:
+		case i_end:
+			break;
+
+		case i_call:
+		case i_local_get:
+		case i_local_set:
+		case i_local_tee:
+		case i_global_get:
+		case i_global_set:
+		case i_br:
+		case i_br_if:
+		case i_i32_const:
+		case i_i64_const:
+			sprintf(tmp, "%d", instr->integer);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_i32_load:
+		case i_i64_load:
+		case i_f32_load:
+		case i_f64_load:
+		case i_i32_load8_s:
+		case i_i32_load8_u:
+		case i_i32_load16_s:
+		case i_i32_load16_u:
+		case i_i64_load8_s:
+		case i_i64_load8_u:
+		case i_i64_load16_s:
+		case i_i64_load16_u:
+		case i_i64_load32_s:
+		case i_i64_load32_u:
+		case i_i32_store:
+		case i_i64_store:
+		case i_f32_store:
+		case i_f64_store:
+		case i_i32_store8:
+		case i_i32_store16:
+		case i_i64_store8:
+		case i_i64_store16:
+		case i_i64_store32:
+			sprintf(tmp, "%d:%d", instr->memarg.offset, instr->memarg.align);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_br_table:
+		case i_call_indirect:
+			break;
+
+		case i_f32_const:
+			sprintf(tmp, "%f", instr->fp_single);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_f64_const:
+			sprintf(tmp, "%f", instr->fp_double);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		// single-tag ops
+		case i_unreachable:
+		case i_nop:
+		case i_return:
+		case i_drop:
+		case i_select:
+		case i_i32_eqz:
+		case i_i32_eq:
+		case i_i32_ne:
+		case i_i32_lt_s:
+		case i_i32_lt_u:
+		case i_i32_gt_s:
+		case i_i32_gt_u:
+		case i_i32_le_s:
+		case i_i32_le_u:
+		case i_i32_ge_s:
+		case i_i32_ge_u:
+		case i_i64_eqz:
+		case i_i64_eq:
+		case i_i64_ne:
+		case i_i64_lt_s:
+		case i_i64_lt_u:
+		case i_i64_gt_s:
+		case i_i64_gt_u:
+		case i_i64_le_s:
+		case i_i64_le_u:
+		case i_i64_ge_s:
+		case i_i64_ge_u:
+		case i_f32_eq:
+		case i_f32_ne:
+		case i_f32_lt:
+		case i_f32_gt:
+		case i_f32_le:
+		case i_f32_ge:
+		case i_f64_eq:
+		case i_f64_ne:
+		case i_f64_lt:
+		case i_f64_gt:
+		case i_f64_le:
+		case i_f64_ge:
+		case i_i32_clz:
+		case i_i32_add:
+		case i_i32_sub:
+		case i_i32_mul:
+		case i_i32_div_s:
+		case i_i32_div_u:
+		case i_i32_rem_s:
+		case i_i32_rem_u:
+		case i_i32_and:
+		case i_i32_or:
+		case i_i32_xor:
+		case i_i32_shl:
+		case i_i32_shr_s:
+		case i_i32_shr_u:
+		case i_i32_rotl:
+		case i_i32_rotr:
+		case i_i64_clz:
+		case i_i64_ctz:
+		case i_i64_popcnt:
+		case i_i64_add:
+		case i_i64_sub:
+		case i_i64_mul:
+		case i_i64_div_s:
+		case i_i64_div_u:
+		case i_i64_rem_s:
+		case i_i64_rem_u:
+		case i_i64_and:
+		case i_i64_or:
+		case i_i64_xor:
+		case i_i64_shl:
+		case i_i64_shr_s:
+		case i_i64_shr_u:
+		case i_i64_rotl:
+		case i_i64_rotr:
+			break;
+	}
+
+	cursor_push_byte(&buf, 0);
+	return buffer;
+}
+
+static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 {
 	interp->ops++;
 
-	debug("%04lX %s\t",
+	debug("%04lX %-30s | ",
 		interp_codeptr(interp)->p - 1 - interp_codeptr(interp)->start,
-		instr_name(tag)
-		);
+		show_instr(instr));
 
 #if DEBUG
 	print_linestack(&interp->stack);
 #endif
 
-	switch (tag) {
+	switch (instr->tag) {
 	case i_unreachable: return 1;
 	case i_nop:         return 1;
-	case i_local_get:   return interp_local_get(interp);
-	case i_local_set:   return interp_local_set(interp);
-	case i_local_tee:   return interp_local_tee(interp);
-	case i_global_get:  return interp_global_get(interp);
-	case i_global_set:  return interp_global_set(interp);
+
+	case i_local_get:   return interp_local_get(interp, instr->integer);
+	case i_local_set:   return interp_local_set(interp, instr->integer);
+	case i_local_tee:   return interp_local_tee(interp, instr->integer);
+	case i_global_get:  return interp_global_get(interp, instr->integer);
+	case i_global_set:  return interp_global_set(interp, instr->integer);
 
 	case i_i32_eqz:     return interp_i32_eqz(interp);
 	case i_i32_add:     return interp_i32_add(interp);
 	case i_i32_sub:     return interp_i32_sub(interp);
-	case i_i32_const:   return interp_i32_const(interp);
+	case i_i32_const:   return interp_i32_const(interp, instr->integer);
+
 	case i_i32_gt_u:    return interp_gt(interp, val_i32, 0);
 	case i_i32_lt_s:    return interp_lt(interp, val_i32, 1);
 	case i_i32_lt_u:    return interp_lt(interp, val_i32, 0);
 	case i_i32_shl:     return interp_shl(interp, val_i32);
 
-	case i_i32_store:   return interp_store(interp, val_i32, 0);
-	case i_i32_store8:  return interp_store(interp, val_i32, 8);
-	case i_i32_store16: return interp_store(interp, val_i32, 16);
-	case i_f32_store:   return interp_store(interp, val_f32, 0);
-	case i_f64_store:   return interp_store(interp, val_f64, 0);
-	case i_i64_store:   return interp_store(interp, val_i64, 0);
-	case i_i64_store8:  return interp_store(interp, val_i64, 8);
-	case i_i64_store16: return interp_store(interp, val_i64, 16);
-	case i_i64_store32: return interp_store(interp, val_i64, 32);
+	case i_i32_store:   return interp_store(interp, &instr->memarg, val_i32, 0);
+	case i_i32_store8:  return interp_store(interp, &instr->memarg, val_i32, 8);
+	case i_i32_store16: return interp_store(interp, &instr->memarg, val_i32, 16);
+	case i_f32_store:   return interp_store(interp, &instr->memarg, val_f32, 0);
+	case i_f64_store:   return interp_store(interp, &instr->memarg, val_f64, 0);
+	case i_i64_store:   return interp_store(interp, &instr->memarg, val_i64, 0);
+	case i_i64_store8:  return interp_store(interp, &instr->memarg, val_i64, 8);
+	case i_i64_store16: return interp_store(interp, &instr->memarg, val_i64, 16);
+	case i_i64_store32: return interp_store(interp, &instr->memarg, val_i64, 32);
 
-	case i_i32_load:     return interp_load(interp, val_i32, 0, -1);
-	case i_i32_load8_s:  return interp_load(interp, val_i32, 8, 1);
-	case i_i32_load8_u:  return interp_load(interp, val_i32, 8, 0);
-	case i_i32_load16_s: return interp_load(interp, val_i32, 16, 1);
-	case i_i32_load16_u: return interp_load(interp, val_i32, 16, 0);
-	case i_f32_load:     return interp_load(interp, val_f32, 0, -1);
-	case i_f64_load:     return interp_load(interp, val_f64, 0, -1);
-	case i_i64_load:     return interp_load(interp, val_i64, 0, -1);
-	case i_i64_load8_s:  return interp_load(interp, val_i64, 8, 1);
-	case i_i64_load8_u:  return interp_load(interp, val_i64, 8, 0);
-	case i_i64_load16_s: return interp_load(interp, val_i64, 16, 1);
-	case i_i64_load16_u: return interp_load(interp, val_i64, 16, 0);
-	case i_i64_load32_s: return interp_load(interp, val_i64, 32, 1);
-	case i_i64_load32_u: return interp_load(interp, val_i64, 32, 0);
+	case i_i32_load:     return interp_load(interp, &instr->memarg, val_i32, 0, -1);
+	case i_i32_load8_s:  return interp_load(interp, &instr->memarg, val_i32, 8, 1);
+	case i_i32_load8_u:  return interp_load(interp, &instr->memarg, val_i32, 8, 0);
+	case i_i32_load16_s: return interp_load(interp, &instr->memarg, val_i32, 16, 1);
+	case i_i32_load16_u: return interp_load(interp, &instr->memarg, val_i32, 16, 0);
+	case i_f32_load:     return interp_load(interp, &instr->memarg, val_f32, 0, -1);
+	case i_f64_load:     return interp_load(interp, &instr->memarg, val_f64, 0, -1);
+	case i_i64_load:     return interp_load(interp, &instr->memarg, val_i64, 0, -1);
+	case i_i64_load8_s:  return interp_load(interp, &instr->memarg, val_i64, 8, 1);
+	case i_i64_load8_u:  return interp_load(interp, &instr->memarg, val_i64, 8, 0);
+	case i_i64_load16_s: return interp_load(interp, &instr->memarg, val_i64, 16, 1);
+	case i_i64_load16_u: return interp_load(interp, &instr->memarg, val_i64, 16, 0);
+	case i_i64_load32_s: return interp_load(interp, &instr->memarg, val_i64, 32, 1);
+	case i_i64_load32_u: return interp_load(interp, &instr->memarg, val_i64, 32, 0);
 
 	case i_if: return interp_if(interp);
 	case i_end: return pop_label_checkpoint(interp);
-	case i_call: return interp_call(interp);
+	case i_call: return interp_call(interp, instr->integer);
 	case i_block: return interp_block(interp);
-	case i_br: return interp_br(interp);
-	case i_br_if: return interp_br_if(interp);
-	case i_memory_size: return interp_memory_size(interp);
-	case i_memory_grow: return interp_memory_grow(interp);
+	case i_br: return interp_br(interp, instr->integer);
+	case i_br_if: return interp_br_if(interp, instr->integer);
+	case i_memory_size: return interp_memory_size(interp, instr->memidx);
+	case i_memory_grow: return interp_memory_grow(interp, instr->memidx);
 	case i_return: return 1;
 	default:
 		    interp_error(interp, "unhandled instruction %s 0x%x",
-				 instr_name(tag), tag);
+				 instr_name(instr->tag), instr->tag);
 		    return 0;
 	}
 
 	return 0;
 }
 
+static int is_control_instr(u8 tag)
+{
+	switch (tag) {
+		case i_if:
+		case i_block:
+		case i_loop:
+		case i_else:
+			return 1;
+	}
+	return 0;
+}
+
 int interp_code(struct wasm_interp *interp)
 {
-	unsigned char tag;
 	int offset, num_resolvers = 0;
 	struct cursor *code;
+	struct instr instr;
+	struct expr_parser parser;
+	u8 tag;
+
+	make_interp_expr_parser(interp, &parser);
 
 	for (;;) {
 		if (unlikely(!(code = interp_codeptr(interp)))) {
@@ -3814,7 +3882,14 @@ int interp_code(struct wasm_interp *interp)
 			return interp_error(interp, "no more instrs to pull");
 		}
 
-		if (tag == i_end) {
+		instr.tag = tag;
+
+		if (!is_control_instr(instr.tag) &&
+		    !parse_instr(&parser, instr.tag, &instr)) {
+			return interp_error(interp, "parse instr");
+		}
+
+		if (instr.tag == i_end) {
 			if (unlikely(!count_local_resolvers(interp,
 							    &num_resolvers))) {
 				return interp_error(interp,
@@ -3831,9 +3906,9 @@ int interp_code(struct wasm_interp *interp)
 			}
 		}
 
-		if (unlikely(!interp_instr(interp, tag))) {
+		if (unlikely(!interp_instr(interp, &instr))) {
 			return interp_error(interp, "interp instr %s",
-					instr_name(tag));
+					instr_name(instr.tag));
 		}
 	}
 
