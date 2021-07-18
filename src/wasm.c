@@ -2475,10 +2475,10 @@ static INLINE void make_i32_val(struct val *val, int v)
 	val->i32 = v;
 }
 
-static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sgn)
+static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sign)
 {
 	struct val lhs, rhs, c;
-	(void)sgn;
+	(void)sign;
 
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, vt))) {
 		return interp_error(interp, "gt_u prep");
@@ -2486,11 +2486,11 @@ static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sgn
 
 	switch (vt) {
 	case val_i32:
-		c.i32 = sgn? (signed int)lhs.i32 > (signed int)rhs.i32
+		c.i32 = sign? (signed int)lhs.i32 > (signed int)rhs.i32
 			   : (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
 		break;
 	case val_i64:
-		c.i64 = sgn? (int64_t)lhs.i64 > (int64_t)rhs.i64
+		c.i64 = sign? (int64_t)lhs.i64 > (int64_t)rhs.i64
 			   : (uint64_t)lhs.i64 > (uint64_t)rhs.i64;
 		break;
 	default:
@@ -2501,7 +2501,7 @@ static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sgn
 	return stack_pushval(interp, &c);
 }
 
-static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sgn)
+static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sign)
 {
 	struct val lhs, rhs, c;
 
@@ -2511,11 +2511,11 @@ static INLINE int interp_lt(struct wasm_interp *interp, enum valtype vt, int sgn
 
 	switch (vt) {
 	case val_i32:
-		c.i32 = sgn? (signed int)  lhs.i32 < (signed int)  rhs.i32
+		c.i32 = sign? (signed int)  lhs.i32 < (signed int)  rhs.i32
 			   : (unsigned int)lhs.i32 < (unsigned int)rhs.i32;
 		break;
 	case val_i64:
-		c.i64 = sgn? (signed int)  lhs.i64 < (signed int)  rhs.i64
+		c.i64 = sign? (signed int)  lhs.i64 < (signed int)  rhs.i64
 			   : (unsigned int)lhs.i64 < (unsigned int)rhs.i64;
 		break;
 	case val_f32:
@@ -3588,13 +3588,13 @@ static int interp_store(struct wasm_interp *interp, struct memarg *memarg,
 }
 
 static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
-		enum valtype type, int N, int sgn)
+		enum valtype type, int N, int sign)
 {
 	struct memtarget target;
 	struct val out = {0};
 	int i;
 
-	(void)sgn;
+	(void)sign;
 
 	out.type = type;
 
@@ -3686,7 +3686,7 @@ static INLINE int interp_i32_mul(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
-		return interp_error(interp, "gt_u prep");
+		return interp_error(interp, "binop prep");
 	}
 
 	c.i32 = lhs.i32 * rhs.i32;
@@ -3699,7 +3699,7 @@ static INLINE int interp_i32_or(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
-		return interp_error(interp, "gt_u prep");
+		return interp_error(interp, "binop prep");
 	}
 
 	c.i32 = lhs.i32 | rhs.i32;
@@ -3712,7 +3712,7 @@ static INLINE int interp_i32_and(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
-		return interp_error(interp, "gt_u prep");
+		return interp_error(interp, "binop prep");
 	}
 
 	c.i32 = lhs.i32 & rhs.i32;
@@ -3725,7 +3725,7 @@ static int interp_i32_shl(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
-		return interp_error(interp, "gt_u prep");
+		return interp_error(interp, "binop prep");
 	}
 
 	c.i32 = lhs.i32 << rhs.i32;
@@ -3978,6 +3978,42 @@ static const char *show_instr(struct instr *instr)
 	return buffer;
 }
 
+static int interp_extend(struct wasm_interp *interp, enum valtype to,
+		enum valtype from, int sign)
+{
+	struct val *val;
+	int64_t i64;
+	int i32;
+	(void)sign;
+
+	if (unlikely(!(val = stack_topval(interp)))) {
+		return interp_error(interp, "no value on stack");
+	}
+
+	if (val->type != from) {
+		return interp_error(interp,
+				"value on stack is of type %s, expected %s",
+				valtype_name(val->type), valtype_name(from));
+	}
+
+	switch (from) {
+	case val_i32:
+		i64 = val->i32;
+		val->i64 = i64;
+		break;
+	case val_i64:
+		i32 = val->i64;
+		val->i32 = i32;
+		break;
+	default:
+		return interp_error(interp, "unhandled extend from %s to %s",
+				valtype_name(from), valtype_name(to));
+	}
+
+	val->type = to;
+	return 1;
+}
+
 static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 {
 	interp->ops++;
@@ -4011,6 +4047,9 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_or:      return interp_i32_or(interp);
 	case i_i32_and:     return interp_i32_and(interp);
 	case i_i32_mul:     return interp_i32_mul(interp);
+
+	case i_i64_extend_i32_u: return interp_extend(interp, val_i64, val_i32, 0);
+	case i_i64_extend_i32_s: return interp_extend(interp, val_i64, val_i32, 1);
 
 	case i_i32_store:   return interp_store(interp, &instr->memarg, val_i32, 0);
 	case i_i32_store8:  return interp_store(interp, &instr->memarg, val_i32, 8);
