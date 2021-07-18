@@ -501,6 +501,64 @@ static char *instr_name(enum instr_tag tag)
 		case i_i64_shr_u: return "i64_shr_u";
 		case i_i64_rotl: return "i64_rotl";
 		case i_i64_rotr: return "i64_rotr";
+		case i_f32_abs: return "f32_abs";
+		case i_f32_neg: return "f32_neg";
+		case i_f32_ceil: return "f32_ceil";
+		case i_f32_floor: return "f32_floor";
+		case i_f32_trunc: return "f32_trunc";
+		case i_f32_nearest: return "f32_nearest";
+		case i_f32_sqrt: return "f32_sqrt";
+		case i_f32_add: return "f32_add";
+		case i_f32_sub: return "f32_sub";
+		case i_f32_mul: return "f32_mul";
+		case i_f32_div: return "f32_div";
+		case i_f32_min: return "f32_min";
+		case i_f32_max: return "f32_max";
+		case i_f32_copysign: return "f32_copysign";
+		case i_f64_abs: return "f64_abs";
+		case i_f64_neg: return "f64_neg";
+		case i_f64_ceil: return "f64_ceil";
+		case i_f64_floor: return "f64_floor";
+		case i_f64_trunc: return "f64_trunc";
+		case i_f64_nearest: return "f64_nearest";
+		case i_f64_sqrt: return "f64_sqrt";
+		case i_f64_add: return "f64_add";
+		case i_f64_sub: return "f64_sub";
+		case i_f64_mul: return "f64_mul";
+		case i_f64_div: return "f64_div";
+		case i_f64_min: return "f64_min";
+		case i_f64_max: return "f64_max";
+		case i_f64_copysign: return "f64_copysign";
+		case i_i32_wrap_i64: return "i32_wrap_i64";
+		case i_i32_trunc_f32_s: return "i32_trunc_f32_s";
+		case i_i32_trunc_f32_u: return "i32_trunc_f32_u";
+		case i_i32_trunc_f64_s: return "i32_trunc_f64_s";
+		case i_i32_trunc_f64_u: return "i32_trunc_f64_u";
+		case i_i64_extend_i32_s: return "i64_extend_i32_s";
+		case i_i64_extend_i32_u: return "i64_extend_i32_u";
+		case i_i64_trunc_f32_s: return "i64_trunc_f32_s";
+		case i_i64_trunc_f32_u: return "i64_trunc_f32_u";
+		case i_i64_trunc_f64_s: return "i64_trunc_f64_s";
+		case i_i64_trunc_f64_u: return "i64_trunc_f64_u";
+		case i_f32_convert_i32_s: return "f32_convert_i32_s";
+		case i_f32_convert_i32_u: return "f32_convert_i32_u";
+		case i_f32_convert_i64_s: return "f32_convert_i64_s";
+		case i_f32_convert_i64_u: return "f32_convert_i64_u";
+		case i_f32_demote_f64: return "f32_demote_f64";
+		case i_f64_convert_i32_s: return "f64_convert_i32_s";
+		case i_f64_convert_i32_u: return "f64_convert_i32_u";
+		case i_f64_convert_i64_s: return "f64_convert_i64_s";
+		case i_f64_convert_i64_u: return "f64_convert_i64_u";
+		case i_f64_promote_f32: return "f64_promote_f32";
+		case i_i32_reinterpret_f32: return "i32_reinterpret_f32";
+		case i_i64_reinterpret_f64: return "i64_reinterpret_f64";
+		case i_f32_reinterpret_i32: return "f32_reinterpret_i32";
+		case i_f64_reinterpret_i64: return "f64_reinterpret_i64";
+		case i_i32_extend8_s: return "i32_extend8_s";
+		case i_i32_extend16_s: return "i32_extend16_s";
+		case i_i64_extend8_s: return "i64_extend8_s";
+		case i_i64_extend16_s: return "i64_extend16_s";
+		case i_i64_extend32_s: return "i64_extend32_s";
 	}
 
 	snprintf(unk, sizeof(unk), "0x%02x", tag);
@@ -1603,7 +1661,7 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
 			  "parse %s instr (0x%x)", instr_name(tag), tag);
 	       }
 
-	       if (tag == stop_instr || 
+	       if (tag == stop_instr ||
 		   (stop_instr == i_if && (tag == i_else || tag == i_end))) {
 		       debug("parse_instrs_until ending\n");
 		       *instr_len = p->code->p - *parsed_instrs;
@@ -3092,6 +3150,64 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_i64_shr_u:
 		case i_i64_rotl:
 		case i_i64_rotr:
+		case i_f32_abs:
+		case i_f32_neg:
+		case i_f32_ceil:
+		case i_f32_floor:
+		case i_f32_trunc:
+		case i_f32_nearest:
+		case i_f32_sqrt:
+		case i_f32_add:
+		case i_f32_sub:
+		case i_f32_mul:
+		case i_f32_div:
+		case i_f32_min:
+		case i_f32_max:
+		case i_f32_copysign:
+		case i_f64_abs:
+		case i_f64_neg:
+		case i_f64_ceil:
+		case i_f64_floor:
+		case i_f64_trunc:
+		case i_f64_nearest:
+		case i_f64_sqrt:
+		case i_f64_add:
+		case i_f64_sub:
+		case i_f64_mul:
+		case i_f64_div:
+		case i_f64_min:
+		case i_f64_max:
+		case i_f64_copysign:
+		case i_i32_wrap_i64:
+		case i_i32_trunc_f32_s:
+		case i_i32_trunc_f32_u:
+		case i_i32_trunc_f64_s:
+		case i_i32_trunc_f64_u:
+		case i_i64_extend_i32_s:
+		case i_i64_extend_i32_u:
+		case i_i64_trunc_f32_s:
+		case i_i64_trunc_f32_u:
+		case i_i64_trunc_f64_s:
+		case i_i64_trunc_f64_u:
+		case i_f32_convert_i32_s:
+		case i_f32_convert_i32_u:
+		case i_f32_convert_i64_s:
+		case i_f32_convert_i64_u:
+		case i_f32_demote_f64:
+		case i_f64_convert_i32_s:
+		case i_f64_convert_i32_u:
+		case i_f64_convert_i64_s:
+		case i_f64_convert_i64_u:
+		case i_f64_promote_f32:
+		case i_i32_reinterpret_f32:
+		case i_i64_reinterpret_f64:
+		case i_f32_reinterpret_i32:
+		case i_f64_reinterpret_i64:
+		case i_i32_extend8_s:
+		case i_i32_extend16_s:
+		case i_i64_extend8_s:
+		case i_i64_extend16_s:
+		case i_i64_extend32_s:
 			return 1;
 	}
 
@@ -3458,7 +3574,7 @@ static int interp_store(struct wasm_interp *interp, struct memarg *memarg,
 		return interp_error(interp, "memory target");
 	}
 
-	if (N != 0) { 
+	if (N != 0) {
 		if (!wrap_val(&c, N)) {
 			return interp_error(interp,
 				"implement wrap val (truncate?) for %s",
@@ -3565,26 +3681,54 @@ static INLINE int interp_memory_size(struct wasm_interp *interp, u8 memidx)
 	return 1;
 }
 
-static int interp_shl(struct wasm_interp *interp, enum valtype typ)
+static INLINE int interp_i32_mul(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
 
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, typ))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
 		return interp_error(interp, "gt_u prep");
 	}
 
-	switch (typ) {
-	case val_i32:
-		c.i32 = lhs.i32 << rhs.i32;
-		break;
-	case val_i64:
-		c.i64 = lhs.i64 << rhs.i64;
-		break;
-	default:
-		return interp_error(interp, "todo: shl for %s",
-				valtype_name(typ));
+	c.i32 = lhs.i32 * rhs.i32;
+
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_or(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "gt_u prep");
 	}
 
+	c.i32 = lhs.i32 | rhs.i32;
+
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_and(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "gt_u prep");
+	}
+
+	c.i32 = lhs.i32 & rhs.i32;
+
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i32_shl(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "gt_u prep");
+	}
+
+	c.i32 = lhs.i32 << rhs.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3607,11 +3751,11 @@ static void print_linestack(struct cursor *stack)
 	printf("\n");
 }
 
-static const char *show_instr(struct instr *instr) 
+static const char *show_instr(struct instr *instr)
 {
 	struct cursor buf;
-	static char buffer[64]; 
-	static char tmp[32]; 
+	static char buffer[64];
+	static char tmp[32];
 	int len, i;
 
 	buffer[sizeof(buffer)-1] = 0;
@@ -3677,7 +3821,7 @@ static const char *show_instr(struct instr *instr)
 		case i_i64_store8:
 		case i_i64_store16:
 		case i_i64_store32:
-			sprintf(tmp, "%d:%d", instr->memarg.offset, instr->memarg.align);
+			sprintf(tmp, "%d %d", instr->memarg.offset, instr->memarg.align);
 			cursor_push_str(&buf, tmp);
 			break;
 
@@ -3769,6 +3913,64 @@ static const char *show_instr(struct instr *instr)
 		case i_i64_shr_u:
 		case i_i64_rotl:
 		case i_i64_rotr:
+		case i_f32_abs:
+		case i_f32_neg:
+		case i_f32_ceil:
+		case i_f32_floor:
+		case i_f32_trunc:
+		case i_f32_nearest:
+		case i_f32_sqrt:
+		case i_f32_add:
+		case i_f32_sub:
+		case i_f32_mul:
+		case i_f32_div:
+		case i_f32_min:
+		case i_f32_max:
+		case i_f32_copysign:
+		case i_f64_abs:
+		case i_f64_neg:
+		case i_f64_ceil:
+		case i_f64_floor:
+		case i_f64_trunc:
+		case i_f64_nearest:
+		case i_f64_sqrt:
+		case i_f64_add:
+		case i_f64_sub:
+		case i_f64_mul:
+		case i_f64_div:
+		case i_f64_min:
+		case i_f64_max:
+		case i_f64_copysign:
+		case i_i32_wrap_i64:
+		case i_i32_trunc_f32_s:
+		case i_i32_trunc_f32_u:
+		case i_i32_trunc_f64_s:
+		case i_i32_trunc_f64_u:
+		case i_i64_extend_i32_s:
+		case i_i64_extend_i32_u:
+		case i_i64_trunc_f32_s:
+		case i_i64_trunc_f32_u:
+		case i_i64_trunc_f64_s:
+		case i_i64_trunc_f64_u:
+		case i_f32_convert_i32_s:
+		case i_f32_convert_i32_u:
+		case i_f32_convert_i64_s:
+		case i_f32_convert_i64_u:
+		case i_f32_demote_f64:
+		case i_f64_convert_i32_s:
+		case i_f64_convert_i32_u:
+		case i_f64_convert_i64_s:
+		case i_f64_convert_i64_u:
+		case i_f64_promote_f32:
+		case i_i32_reinterpret_f32:
+		case i_i64_reinterpret_f64:
+		case i_f32_reinterpret_i32:
+		case i_f64_reinterpret_i64:
+		case i_i32_extend8_s:
+		case i_i32_extend16_s:
+		case i_i64_extend8_s:
+		case i_i64_extend16_s:
+		case i_i64_extend32_s:
 			break;
 	}
 
@@ -3802,11 +4004,13 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_add:     return interp_i32_add(interp);
 	case i_i32_sub:     return interp_i32_sub(interp);
 	case i_i32_const:   return interp_i32_const(interp, instr->integer);
-
 	case i_i32_gt_u:    return interp_gt(interp, val_i32, 0);
 	case i_i32_lt_s:    return interp_lt(interp, val_i32, 1);
 	case i_i32_lt_u:    return interp_lt(interp, val_i32, 0);
-	case i_i32_shl:     return interp_shl(interp, val_i32);
+	case i_i32_shl:     return interp_i32_shl(interp);
+	case i_i32_or:      return interp_i32_or(interp);
+	case i_i32_and:     return interp_i32_and(interp);
+	case i_i32_mul:     return interp_i32_mul(interp);
 
 	case i_i32_store:   return interp_store(interp, &instr->memarg, val_i32, 0);
 	case i_i32_store8:  return interp_store(interp, &instr->memarg, val_i32, 8);
