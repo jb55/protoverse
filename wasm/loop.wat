@@ -16,10 +16,6 @@
 		local.get 0
 		i32.const 1
 		i32.add
-		block
-		  i32.const 2
-		  br 1
-		end
 		local.set 0
 		local.get 0
 		i32.const 4

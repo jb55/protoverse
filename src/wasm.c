@@ -1612,6 +1612,8 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
                        return 1;
                }
 
+		debug("%04lX parsing instr %s (0x%02x)\n",
+			p->code->p - 1 - p->code->start, instr_name(tag), tag);
                if (!parse_instr(p, tag, &op)) {
                        return note_error(p->errs, p->code,
 			  "parse %s instr (0x%x)", instr_name(tag), tag);
@@ -2810,7 +2812,7 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 	if (!cursor_pop(&interp->resolver_stack, (u8*)resolver, sizeof(*resolver))) {
 		return interp_error(interp, "pop resolver");
 	}
-	debug("popped stack %d i_%s i_%s %d\n",
+	debug("popped resolver %d i_%s i_%s %d\n",
 			resolver->label,
 			instr_name(resolver->start_tag),
 			instr_name(resolver->end_tag),
@@ -2856,6 +2858,7 @@ static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
 	struct label *label;
 
 	num_labels = func_num_labels(interp, fn);
+
 	if (!(label = index_label(&interp->labels, fn, 0)))
 		return interp_error(interp, "index label");
 
@@ -2895,10 +2898,8 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 		return 0;
 	}
 
-	/*
 	debug("upsert_label: %d labels for %s:%d\n",
 	      *num_labels, get_function_name(interp->module, fn), fn);
-	      */
 
 	*ind = *num_labels;
 	if (unlikely(!(label = index_label(&interp->labels, fn, *ind))))
@@ -3058,8 +3059,6 @@ static int parse_br_table(struct cursor *code, struct errors *errs,
 		return note_error(errs, code, "fail read br_table num_indices");
 	}
 
-	br_table->label_indices = (int*)code->p;
-
 	for (i = 0; i < br_table->num_label_indices; i++) {
 		if (unlikely(!read_int(code, &br_table->label_indices[i]))) {
 			return note_error(errs, code,
@@ -3077,8 +3076,6 @@ static int parse_br_table(struct cursor *code, struct errors *errs,
 
 static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 {
-	debug("%04lX parsing instr %s (0x%02x)\n",
-		p->code->p - 1 - p->code->start, instr_name(tag), tag);
 
 	op->pos = p->code->p - 1 - p->code->start;
 	op->tag = tag;

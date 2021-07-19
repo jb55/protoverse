@@ -478,7 +478,7 @@ struct memarg {
 
 struct br_table {
 	int num_label_indices;
-	int *label_indices;
+	int label_indices[32];
 	int default_label;
 };
 
