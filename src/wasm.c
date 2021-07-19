@@ -2485,6 +2485,42 @@ static INLINE int interp_i32_le_u(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static INLINE int interp_i32_gt_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.i32 = (signed int)lhs.i32 > (signed int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_gt_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.i32 = (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_ge_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.i32 = (unsigned int)lhs.i32 >= (unsigned int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_ge_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.i32 = (signed int)lhs.i32 >= (signed int)rhs.i32;
+	return stack_pushval(interp, &c);
+}
+
 static INLINE int interp_i32_le_s(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -2669,7 +2705,9 @@ static int interp_code(struct wasm_interp *interp);
 
 static int interp_call(struct wasm_interp *interp, int func_index)
 {
-	struct callframe frame;
+	struct callframe frame, *prev_frame;
+
+	prev_frame = top_callframe(&interp->callframes);
 
 	if (unlikely(!prepare_call(interp, func_index))) {
 		interp_error(interp, "prepare");
@@ -2684,6 +2722,12 @@ static int interp_call(struct wasm_interp *interp, int func_index)
 
 	if (unlikely(!cursor_pop_callframe(&interp->callframes, &frame)))
 		return interp_error(interp, "pop callframe");
+
+	debug("returning from %s:%d to %s:%d\n",
+			get_function_name(interp->module, func_index),
+			func_index,
+			prev_frame ? get_function_name(interp->module, prev_frame->fn) : "",
+			prev_frame ? prev_frame->fn : -1);
 
 	return 1;
 }
@@ -3062,7 +3106,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_br_if:
 		case i_i32_const:
 		case i_i64_const:
-			return leb128_read(p->code, &op->integer);
+			return leb128_read(p->code, (unsigned int*)&op->integer);
 
 		case i_i32_load:
 		case i_i64_load:
@@ -3260,7 +3304,9 @@ static int branch_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
 
 	// consume instructions, use resolver stack to resolve jumps
 	if (!parse_instrs_until(&parser, end_tag, &instrs, &instrs_len)) {
-		return interp_error(interp, "parse instrs end @ %s",
+		cursor_print_around(interp_codeptr(interp), 10);
+		return interp_error(interp, "parse instrs start @ %s end @ %s",
+				instr_name(start_tag),
 				instr_name(end_tag));
 	}
 
@@ -4111,7 +4157,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 #endif
 
 	switch (instr->tag) {
-	case i_unreachable: return 1;
+	case i_unreachable: return interp_error(interp, "unreachable");
 	case i_nop:         return 1;
 
 	case i_local_get:   return interp_local_get(interp, instr->integer);
@@ -4124,7 +4170,10 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_add:     return interp_i32_add(interp);
 	case i_i32_sub:     return interp_i32_sub(interp);
 	case i_i32_const:   return interp_i32_const(interp, instr->integer);
-	case i_i32_gt_u:    return interp_gt(interp, val_i32, 0);
+	case i_i32_ge_u:    return interp_i32_ge_u(interp);
+	case i_i32_ge_s:    return interp_i32_ge_s(interp);
+	case i_i32_gt_u:    return interp_i32_gt_u(interp);
+	case i_i32_gt_s:    return interp_i32_gt_s(interp);
 	case i_i32_le_s:    return interp_i32_le_s(interp);
 	case i_i32_le_u:    return interp_i32_le_u(interp);
 	case i_i32_lt_s:    return interp_i32_lt_s(interp);
