@@ -2884,7 +2884,7 @@ static int upsert_label(struct wasm_interp *interp, int fn,
 
 	num_labels = func_num_labels(interp, fn);
 
-	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) == 0)) {
+	if (*num_labels > 0 && ((*ind = find_label(interp, fn, instr_pos)) != -1)) {
 		// we already have the label
 		return 1;
 	}
