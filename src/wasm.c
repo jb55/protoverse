@@ -1605,17 +1605,18 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
                if (!pull_byte(p->code, &tag))
                        return note_error(p->errs, p->code, "oob");
 
-               if (!parse_instr(p, tag, &op)) {
-                       return note_error(p->errs, p->code,
-			  "parse %s instr (0x%x)", instr_name(tag), tag);
-	       }
-
 	       if (tag == stop_instr ||
 		   (stop_instr == i_if && (tag == i_else || tag == i_end))) {
 		       //debug("parse_instrs_until ending\n");
 		       *instr_len = p->code->p - *parsed_instrs;
                        return 1;
                }
+
+               if (!parse_instr(p, tag, &op)) {
+                       return note_error(p->errs, p->code,
+			  "parse %s instr (0x%x)", instr_name(tag), tag);
+	       }
+
        }
 }
 
@@ -2796,6 +2797,10 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 	label->jump = code->p - code->start;
 	label->instr_pos |= 0x80000000;
 
+	debug("resolving label %04x to %04x\n",
+			label_instr_pos(label),
+			label->jump);
+
 	return 1;
 }
 
@@ -3072,9 +3077,8 @@ static int parse_br_table(struct cursor *code, struct errors *errs,
 
 static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 {
-	/*debug("%04lX parsing instr %s (0x%02x)\n",
+	debug("%04lX parsing instr %s (0x%02x)\n",
 		p->code->p - 1 - p->code->start, instr_name(tag), tag);
-		*/
 
 	op->pos = p->code->p - 1 - p->code->start;
 	op->tag = tag;
