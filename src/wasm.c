@@ -2708,9 +2708,12 @@ static int interp_code(struct wasm_interp *interp);
 
 static int interp_call(struct wasm_interp *interp, int func_index)
 {
-	struct callframe frame, *prev_frame;
+	struct callframe frame;
+#ifdef DEBUG
+	struct callframe *prev_frame;
 
 	prev_frame = top_callframe(&interp->callframes);
+#endif
 
 	if (unlikely(!prepare_call(interp, func_index))) {
 		interp_error(interp, "prepare");
@@ -2809,14 +2812,27 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 static INLINE int pop_resolver(struct wasm_interp *interp,
 		struct resolver *resolver)
 {
+#ifdef DEBUG
+	int num_resolvers;
+#endif
+
 	if (!cursor_pop(&interp->resolver_stack, (u8*)resolver, sizeof(*resolver))) {
 		return interp_error(interp, "pop resolver");
 	}
-	debug("popped resolver %d i_%s i_%s %d\n",
+
+#ifdef DEBUG
+	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
+		return interp_error(interp, "local resolvers fn start");
+	};
+#endif
+
+	debug("popped resolver %d i_%s i_%s %d local_resolvers:%d\n",
 			resolver->label,
 			instr_name(resolver->start_tag),
 			instr_name(resolver->end_tag),
-			count_resolvers(interp));
+			count_resolvers(interp),
+			num_resolvers
+			);
 	return 1;
 }
 
@@ -2931,6 +2947,10 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	struct resolver resolver;
 	struct callframe *frame;
 
+#ifdef DEBUG
+	int num_resolvers;
+#endif
+
 	resolver.start_tag = start_tag;
 	resolver.end_tag = end_tag;
 	resolver.label = 0;
@@ -2961,11 +2981,17 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
-	debug("pushed resolver %d i_%s i_%s %ld \n",
+#ifdef DEBUG
+	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
+		return interp_error(interp, "local resolvers fn start");
+	};
+#endif
+	debug("pushed resolver %d i_%s i_%s %ld local_resolvers:%d \n",
 			resolver.label,
 			instr_name(resolver.start_tag),
 			instr_name(resolver.end_tag),
-			cursor_count(&interp->resolver_stack, sizeof(resolver)));
+			cursor_count(&interp->resolver_stack, sizeof(resolver)),
+			num_resolvers);
 
 	return 1;
 }
@@ -2995,12 +3021,19 @@ static INLINE int jump_to_label(struct wasm_interp *interp, struct label *label)
 	return interp_jump(interp, label->jump);
 }
 
-static int pop_label_and_jump(struct wasm_interp *interp, int jump)
+static int pop_label_and_jump(struct wasm_interp *interp, struct label *label, int times)
 {
-	if (!pop_label_checkpoint(interp))
-		return interp_error(interp, "pop checkpoint");
+	int i;
+	assert(is_label_resolved(label));
 
-	return interp_jump(interp, jump);
+	for (i = 0; i < times; i++) {
+		if (!cursor_drop(&interp->resolver_stack,
+					sizeof(struct resolver))) {
+			return interp_error(interp, "drop label");
+		}
+	}
+
+	return interp_jump(interp, label->jump);
 }
 
 static int parse_block(struct expr_parser *p, struct block *block, u8 start_tag, u8 end_tag)
@@ -3025,7 +3058,7 @@ static int parse_block(struct expr_parser *p, struct block *block, u8 start_tag,
 			return interp_error(p->interp, "jump is before instr_pos ??");
 		}
 
-		return pop_label_and_jump(p->interp, label->jump);
+		return pop_label_and_jump(p->interp, label, 1);
 	}
 
 	if (!parse_instrs_until(p, end_tag, &block->instrs, &block->instrs_len))
@@ -3298,7 +3331,7 @@ static int branch_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
 	}
 
 	if (is_label_resolved(label)) {
-		return pop_label_and_jump(interp, label->jump);
+		return pop_label_and_jump(interp, label, 1);
 	}
 
 	make_interp_expr_parser(interp, &parser);
@@ -3432,7 +3465,7 @@ static int unresolved_break(struct wasm_interp *interp, int index)
 
 		// TODO: breaking from functions (return)
 		if (is_label_resolved(label)) {
-			if (!pop_label_and_jump(interp, label->jump))
+			if (!pop_label_and_jump(interp, label, 1))
 				return interp_error(interp, "pop and jump");
 			else
 				continue;
@@ -3462,7 +3495,7 @@ static int interp_br_jump(struct wasm_interp *interp, int index)
 	}
 
 	if (is_label_resolved(label)) {
-		return pop_label_and_jump(interp, label->jump);
+		return pop_label_and_jump(interp, label, index+1);
 	}
 
 	return unresolved_break(interp, index);
@@ -4292,6 +4325,8 @@ static enum interp_end interp_code_end(struct wasm_interp *interp,
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "count local resolvers");
 	}
+
+	debug("interp_code_end local resolvers: %d\n", num_resolvers);
 
 	if (num_resolvers == 0) {
 		if (!cursor_popint(&interp->resolver_offsets, &offset)) {
