@@ -556,9 +556,9 @@ static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *fr
 	return cursor_push(cur, (u8*)frame, sizeof(*frame));
 }
 
-static INLINE int cursor_pop_callframe(struct cursor *cur, struct callframe *frame)
+static INLINE int cursor_drop_callframe(struct cursor *cur)
 {
-	return cursor_pop(cur, (u8*)frame, sizeof(*frame));
+	return cursor_drop(cur, sizeof(struct callframe));
 }
 
 static INLINE int cursor_popint(struct cursor *cur, int *i)
@@ -2587,7 +2587,7 @@ static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *
 	if (!builtin->fn(interp))
 		return interp_error(interp, "builtin trap");
 
-	return cursor_pop_callframe(&interp->callframes, &callframe);
+	return cursor_drop_callframe(&interp->callframes);
 }
 
 static INLINE int call_func(struct wasm_interp *interp, struct func *func, int fn)
@@ -2708,7 +2708,6 @@ static int interp_code(struct wasm_interp *interp);
 
 static int interp_call(struct wasm_interp *interp, int func_index)
 {
-	struct callframe frame;
 #ifdef DEBUG
 	struct callframe *prev_frame;
 
@@ -2726,7 +2725,7 @@ static int interp_call(struct wasm_interp *interp, int func_index)
 				func_index);
 	}
 
-	if (unlikely(!cursor_pop_callframe(&interp->callframes, &frame)))
+	if (unlikely(!cursor_drop_callframe(&interp->callframes)))
 		return interp_error(interp, "pop callframe");
 
 	debug("returning from %s:%d to %s:%d\n",
