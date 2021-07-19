@@ -47,15 +47,6 @@ static inline void make_array(struct array *a, u8* start, u8 *end, unsigned int 
 	a->elem_size = elem_size;
 }
 
-static inline unsigned char *array_index(struct array *a, int ind)
-{
-	u8 *p = a->cur.start + a->elem_size * ind;
-	if (unlikely(p >= a->cur.end)) {
-		return NULL;
-	}
-	return p;
-}
-
 static inline int cursor_eof(struct cursor *c)
 {
 	return c->p == c->end;

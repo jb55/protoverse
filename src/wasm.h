@@ -550,10 +550,8 @@ struct module {
 	unsigned int parsed;
 	unsigned int custom_sections;
 
-	// this is a faster lookup than searching though imports/exports
 	struct func *funcs;
 	int num_funcs;
-	int start_fn;
 
 	struct customsec custom_section[MAX_CUSTOM_SECTIONS];
 	struct typesec type_section;
@@ -586,8 +584,26 @@ struct resolver {
 	u8 start_tag;
 };
 
+struct global_inst {
+	struct val val;
+};
+
+struct module_inst {
+	struct table_inst *tables;
+	int num_tables;
+
+	struct global_inst *globals;
+	unsigned char *globals_init;
+	int num_globals;
+
+
+	int start_fn;
+};
+
 struct wasm_interp {
 	struct module *module;
+	struct module_inst module_inst;
+
 	int prev_resolvers, quitting;
 
 	struct errors errors; /* struct error */
@@ -597,16 +613,11 @@ struct wasm_interp {
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
 	struct cursor resolver_offsets; /* int */
-	struct cursor globals; /* struct val */
-	struct cursor global_init; /* u8 */
-
-	struct table_inst *tables;
-	int num_tables;
 
 	struct cursor memory; /* memory pages (65536 blocks) */
 
-	struct array labels; /* struct labels */
-	struct array num_labels;
+	struct cursor labels; /* struct labels */
+	struct cursor num_labels;
 
 	// resolve stack for the current function. every time a control
 	// instruction is encountered, the label index is pushed. When an

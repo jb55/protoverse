@@ -149,36 +149,6 @@ static INLINE int cursor_pop_i32(struct cursor *stack, int *i)
 	return 1;
 }
 
-static INLINE int is_number_type(enum valtype vt)
-{
-	switch (vt) {
-		case val_i32:
-		case val_i64:
-		case val_f32:
-		case val_f64:
-			return 1;
-		case val_ref_null:
-		case val_ref_func:
-		case val_ref_extern:
-			return 0;
-	}
-
-	return 0;
-}
-
-static INLINE int cursor_pop_number(struct cursor *stack, struct val *val)
-{
-	if (unlikely(!cursor_popval(stack, val))) {
-		return 0;
-	}
-
-	if (unlikely(!is_number_type(val->type))) {
-		return 0;
-	}
-
-	return 1;
-}
-
 static INLINE int stack_pop_i32(struct wasm_interp *interp, int *i)
 {
 	return cursor_pop_i32(&interp->stack, i);
@@ -204,16 +174,11 @@ static INLINE int stack_pop_valtype(struct wasm_interp *interp,
 	return cursor_pop_valtype(&interp->stack, type, val);
 }
 
-static INLINE int stack_pop_number(struct wasm_interp *interp, struct val *val)
-{
-	return cursor_pop_number(&interp->stack, val);
-}
-
 static void print_val(struct val *val)
 {
 	switch (val->type) {
 	case val_i32: printf("%d", val->num.i32); break;
-	case val_i64: printf("%lu", val->num.i64); break;
+	case val_i64: printf("%llu", val->num.i64); break;
 	case val_f32: printf("%f", val->num.f32); break;
 	case val_f64: printf("%f", val->num.f64); break;
 
@@ -1508,6 +1473,7 @@ static INLINE void make_const_expr_parser(struct wasm_parser *p,
 	parser->errs = &p->errs;
 }
 
+/*
 static INLINE int eval_const_expr(struct expr *expr, struct errors *errs,
 		struct cursor *stack)
 {
@@ -1520,6 +1486,8 @@ static INLINE int eval_const_expr(struct expr *expr, struct errors *errs,
 
 	return parse_const_expr(&parser, &expr_out);
 }
+*/
+
 
 static int parse_global(struct wasm_parser *p,
 		struct global *global)
@@ -2160,11 +2128,6 @@ static int parse_section(struct wasm_parser *p)
 	return 1;
 }
 
-static INLINE int functions_count(struct module *module)
-{
-	return module->num_funcs;
-}
-
 static struct builtin *builtin_func(int ind)
 {
 	if (unlikely(ind < 0 || ind >= NUM_BUILTINS)) {
@@ -2424,32 +2387,6 @@ static INLINE void make_i32_val(struct val *val, int v)
 	val->num.i32 = v;
 }
 
-static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sign)
-{
-	struct val lhs, rhs, c;
-	(void)sign;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, vt))) {
-		return interp_error(interp, "gt_u prep");
-	}
-
-	switch (vt) {
-	case val_i32:
-		c.num.i32 = sign? (signed int)lhs.num.i32 > (signed int)rhs.num.i32
-			   : (unsigned int)lhs.num.i32 > (unsigned int)rhs.num.i32;
-		break;
-	case val_i64:
-		c.num.i64 = sign? (int64_t)lhs.num.i64 > (int64_t)rhs.num.i64
-			   : (uint64_t)lhs.num.i64 > (uint64_t)rhs.num.i64;
-		break;
-	default:
-		return interp_error(interp, "todo: interp_gt %s",
-				valtype_name(vt));
-	}
-
-	return stack_pushval(interp, &c);
-}
-
 static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -2566,7 +2503,7 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 
 static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *builtin, int fn)
 {
-	struct callframe callframe = {0};
+	struct callframe callframe = {};
 
 	/* update current function and push it to the callframe as well */
 	callframe.fn = fn;
@@ -2739,9 +2676,10 @@ static int interp_call_indirect(struct wasm_interp *interp, struct call_indirect
 		return interp_error(interp, "no table section");
 	}
 
-	if (unlikely(call->tableidx >= interp->num_tables)) {
+	if (unlikely(call->tableidx >= interp->module_inst.num_tables)) {
 		return interp_error(interp, "invalid table index %d (max %d)",
-				call->tableidx, interp->num_tables-1);
+				call->tableidx,
+				interp->module_inst.num_tables-1);
 	}
 
 	if (unlikely(call->typeidx >=
@@ -2751,7 +2689,7 @@ static int interp_call_indirect(struct wasm_interp *interp, struct call_indirect
 			interp->module->type_section.num_functypes);
 	}
 
-	table = &interp->tables[call->tableidx];
+	table = &interp->module_inst.tables[call->tableidx];
 	type = &interp->module->type_section.functypes[call->typeidx];
 
 	if (unlikely(table->reftype != funcref)) {
@@ -2827,9 +2765,9 @@ static int parse_blocktype(struct cursor *cur, struct errors *errs, struct block
 	return 1;
 }
 
-static INLINE struct label *index_label(struct array *a, int fn, int ind)
+static INLINE struct label *index_label(struct cursor *a, int fn, int ind)
 {
-	return (struct label*)array_index(a, (MAX_LABELS * fn) + ind);
+	return index_cursor(a, ((MAX_LABELS * fn) + ind), sizeof(struct label));
 }
 
 static INLINE u32 label_instr_pos(struct label *label)
@@ -2924,7 +2862,7 @@ static int pop_label_checkpoint(struct wasm_interp *interp)
 
 static INLINE u16 *func_num_labels(struct wasm_interp *interp, int fn)
 {
-	u16 *num = (u16*)array_index(&interp->num_labels, fn);
+	u16 *num = index_cursor(&interp->num_labels, fn, sizeof(u16));
 	assert(num);
 	assert(*num <= MAX_LABELS);
 	return num;
@@ -2941,7 +2879,7 @@ static int find_label(struct wasm_interp *interp, int fn, u32 instr_pos)
 		return interp_error(interp, "index label");
 
 	for (i = 0; i < *num_labels; label++) {
-		assert((u8*)label < interp->labels.cur.end);
+		assert((u8*)label < interp->labels.end);
 		if (label_instr_pos(label) == instr_pos)
 			return i;
 		i++;
@@ -3019,7 +2957,7 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 
 	*label = NULL;
 
-	fns = functions_count(interp->module);
+	fns = interp->module->num_funcs;
 	frame = top_callframe(&interp->callframes);
 
 	if (unlikely(!frame)) {
@@ -3076,11 +3014,6 @@ static int interp_jump(struct wasm_interp *interp, int jmp)
 	}
 
 	return 1;
-}
-
-static INLINE int jump_to_label(struct wasm_interp *interp, struct label *label)
-{
-	return interp_jump(interp, label->jump);
 }
 
 static int pop_label_and_jump(struct wasm_interp *interp, struct label *label, int times)
@@ -3585,21 +3518,19 @@ static INLINE int interp_br_if(struct wasm_interp *interp, int ind)
 
 static INLINE u8 *global_init_state(struct wasm_interp *interp, int ind)
 {
-	u8 *p;
-
-	if (unlikely(!(p = index_cursor(&interp->global_init, ind, 1)))) {
+	if (ind >= interp->module_inst.num_globals) {
 		interp_error(interp, "global ind %d oob", ind);
 		return NULL;
 	}
 
-	return p;
+	return &interp->module_inst.globals_init[ind];
 }
 
 static struct val *get_global(struct wasm_interp *interp, int ind)
 {
 	struct globalsec *globsec;
 	struct global *global;
-	struct val *val;
+	struct global_inst *global_inst;
 	u8 *init;
 
 	if (unlikely(!was_section_parsed(interp->module, section_global))) {
@@ -3610,12 +3541,13 @@ static struct val *get_global(struct wasm_interp *interp, int ind)
 
 	globsec = &interp->module->global_section;
 
-	if (unlikely(!(val = index_cursor(&interp->globals, ind, sizeof(*val))))) {
-		interp_error(interp,
-				"invalid global index %d (max %d)",
-				ind, globsec->num_globals-1);
+	if (unlikely(ind >= interp->module_inst.num_globals)) {
+		interp_error(interp, "invalid global index %d (max %d)", ind,
+			     globsec->num_globals-1);
 		return NULL;
 	}
+
+	global_inst = &interp->module_inst.globals[ind];
 
 	if (unlikely(!(init = global_init_state(interp, ind)))) {
 		interp_error(interp,
@@ -3625,18 +3557,18 @@ static struct val *get_global(struct wasm_interp *interp, int ind)
 
 	/* global is already initialized, return it */
 	if (*init == 1) {
-		return val;
+		return &global_inst->val;
 	}
 
 	/* initialize global then return it */
 	global = &interp->module->global_section.globals[ind];
 
 	/* copy initialized global from module to global instance */
-	memcpy(val, &global->val, sizeof(*val));
+	memcpy(&global_inst->val, &global->val, sizeof(global_inst->val));
 
 	*init = 1;
 
-	return val;
+	return &global_inst->val;
 }
 
 static int interp_global_get(struct wasm_interp *interp, int ind)
@@ -3933,6 +3865,7 @@ static int interp_i32_shl(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+#ifdef DEBUG
 static void print_linestack(struct cursor *stack)
 {
 	struct val *val;
@@ -4183,6 +4116,7 @@ static const char *show_instr(struct instr *instr)
 	cursor_push_byte(&buf, 0);
 	return buffer;
 }
+#endif
 
 static int interp_extend(struct wasm_interp *interp, enum valtype to,
 		enum valtype from, int sign)
@@ -4405,9 +4339,8 @@ static enum interp_end interp_code_end(struct wasm_interp *interp,
 
 	// if we hit the end of a loop, continue at the start
 	if (resolver && resolver->start_tag == i_loop) {
-		if (unlikely(!(label =
-			index_label(&interp->labels, frame->fn,
-				    resolver->label)))) {
+		if (unlikely(!(label = index_label(&interp->labels, frame->fn,
+						   resolver->label)))) {
 			return interp_error(interp, "no loop label?");
 		}
 
@@ -4494,11 +4427,6 @@ static int find_start_function(struct module *module)
 	return find_function(module, "_start");
 }
 
-static INLINE int array_alloc(struct cursor *mem, struct array *a, int elems)
-{
-	return cursor_slice(mem, &a->cur, elems * a->elem_size);
-}
-
 void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t arena_size)
 {
 	u8 *mem;
@@ -4529,19 +4457,6 @@ static int count_fn_locals(struct func *func)
 	return num_locals;
 }
 
-static int calculate_locals_size(struct module *module)
-{
-	int i, locals_size = 0;
-	struct func *func;
-
-	for (i = 0; i < module->num_funcs; i++) {
-		func = &module->funcs[i];
-		locals_size += count_fn_locals(func) * sizeof(struct val);
-	}
-
-	return locals_size;
-}
-
 static int calculate_tables_size(struct module *module)
 {
 	int i, num_tables, size;
@@ -4565,15 +4480,18 @@ static int alloc_tables(struct wasm_interp *interp)
 	struct table_inst *inst;
 	int i;
 
-	interp->num_tables = interp->module->table_section.num_tables;
-	if (!(interp->tables = cursor_alloc(&interp->mem, interp->num_tables *
-					 sizeof(struct table_inst)))) {
+	interp->module_inst.num_tables =
+		interp->module->table_section.num_tables;
+
+	if (!(interp->module_inst.tables =
+		cursor_alloc(&interp->mem, interp->module_inst.num_tables *
+			     sizeof(struct table_inst)))) {
 		return interp_error(interp, "couldn't alloc table instances");
 	}
 
-	for (i = 0; i < interp->num_tables; i++) {
+	for (i = 0; i < interp->module_inst.num_tables; i++) {
 		t = &interp->module->table_section.tables[i];
-		inst = &(interp->tables[i]);
+		inst = &interp->module_inst.tables[i];
 		inst->reftype = t->reftype;
 		inst->num_refs = t->limits.min;
 		size = sizeof(struct refval) * t->limits.min;
@@ -4587,10 +4505,26 @@ static int alloc_tables(struct wasm_interp *interp)
 	return 1;
 }
 
+
+static int calculate_locals_size(struct module *module)
+{
+	int i, locals_size = 0;
+	struct func *func;
+
+	for (i = 0; i < module->num_funcs; i++) {
+		func = &module->funcs[i];
+		locals_size += count_fn_locals(func) * sizeof(struct val);
+	}
+
+	debug("locals size %d\n", locals_size);
+
+	return locals_size;
+}
+
 static int alloc_locals(struct module *module, struct cursor *mem,
 		struct errors *errs)
 {
-	int i, num_locals;
+	int i, num_locals, size;
 	struct func *func;
 
 	for (i = 0; i < module->num_funcs; i++) {
@@ -4600,7 +4534,9 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 		func->locals = (struct local*)mem->p;
 		func->num_locals = num_locals;
 
-		if (!cursor_alloc(mem, num_locals * sizeof(struct val))) {
+		size = num_locals * sizeof(struct val);
+
+		if (!cursor_alloc(mem, size)) {
 			return note_error(errs, mem,
 					"could not alloc locals for %s",
 					func->name);
@@ -4612,9 +4548,9 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 
 int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 {
-	unsigned char *mem, *heap;
+	unsigned char *mem, *heap, *start;
 
-	unsigned int ok, fns, errors_size, stack_size, locals_size, offsets_size,
+	unsigned int ok, fns, errors_size, stack_size, locals_size,
 	    callframes_size, resolver_size, labels_size, num_labels_size,
 	    labels_capacity, num_labels_elemsize, memsize, memory_pages_size,
 	    resolver_offsets_size, num_mems, globals_size, num_globals,
@@ -4624,11 +4560,13 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 
 	interp->quitting = 0;
 	interp->module = module;
-	interp->module->start_fn = -1;
+
+	interp->module_inst.start_fn = -1;
+
 	interp->prev_resolvers = 0;
 
 	//stack = calloc(1, STACK_SPACE);
-	fns = functions_count(module);
+	fns = module->num_funcs;
 	labels_capacity  = fns * MAX_LABELS;
 	num_labels_elemsize = sizeof(u16);
 
@@ -4642,41 +4580,37 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	errors_size      = 0xFFF;
 	stack_size       = sizeof(struct val) * 0xFF;
  	labels_size      = labels_capacity * sizeof(struct label);
- 	num_labels_size  = fns * num_labels_elemsize;
-	locals_size      = sizeof(struct val) * 0xFF;
-	offsets_size     = sizeof(int) * 0xFF;
-	resolver_offsets_size = offsets_size;
+ 	num_labels_size  = fns * sizeof(u16);
+	resolver_offsets_size = sizeof(int) * 0xFF;
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
-	globals_size     = sizeof(struct val) * num_globals;
+	globals_size     = sizeof(struct global_inst) * num_globals;
+	global_init_size = num_globals;
 	locals_size      = calculate_locals_size(module);
 	tables_size      = calculate_tables_size(module);
-	global_init_size = num_globals;
 
 	if (num_mems > 1) {
 		printf("more than one memory instance is not supported\n");
 		return 0;
 	}
 
-	interp->labels.elem_size = sizeof(struct label);
-	interp->num_labels.elem_size = num_labels_elemsize;
+	interp->module_inst.num_globals = num_globals;
 
 	memory_pages_size = 256 * WASM_PAGE_SIZE;
 
 	memsize =
-		errors_size +
 		stack_size +
-		labels_size +
-		num_labels_size +
-		locals_size +
-		offsets_size +
+		errors_size +
 		resolver_offsets_size +
+		resolver_size +
 		callframes_size +
 		globals_size +
 		global_init_size +
+		labels_size +
+		num_labels_size +
 		locals_size +
-		tables_size +
-		resolver_size;
+		tables_size
+		;
 
 	mem = calloc(1, memsize);
 	heap = malloc(memory_pages_size);
@@ -4687,19 +4621,50 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	// enable error reporting by default
 	interp->errors.enabled = 1;
 
-	ok =
-		cursor_slice(&interp->mem, &interp->stack, stack_size) &&
-		cursor_slice(&interp->mem, &interp->errors.cur, errors_size) &&
-		cursor_slice(&interp->mem, &interp->resolver_offsets, resolver_offsets_size) &&
-		cursor_slice(&interp->mem, &interp->callframes, callframes_size) &&
-		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
-		cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size) &&
-		cursor_slice(&interp->mem, &interp->globals, globals_size) &&
-		cursor_slice(&interp->mem, &interp->global_init, global_init_size) &&
-		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
-	        array_alloc(&interp->mem, &interp->num_labels, fns) &&
-		alloc_tables(interp) &&
-		alloc_locals(interp->module, &interp->mem, &interp->errors);
+	start = interp->mem.p;
+
+	ok = cursor_slice(&interp->mem, &interp->stack, stack_size);
+	assert(interp->mem.p - start == stack_size);
+
+	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->errors.cur, errors_size);
+	assert(interp->mem.p - start == errors_size);
+
+	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->resolver_offsets, resolver_offsets_size);
+	assert(interp->mem.p - start == resolver_offsets_size);
+
+	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->resolver_stack, resolver_size);
+	assert(interp->mem.p - start == resolver_size);
+
+	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->callframes, callframes_size);
+	assert(interp->mem.p - start == callframes_size);
+
+	start = interp->mem.p;
+	ok = ok && (interp->module_inst.globals = cursor_alloc(&interp->mem, globals_size));
+	assert(interp->mem.p - start == globals_size);
+
+	start = interp->mem.p;
+	ok = ok && (interp->module_inst.globals_init = cursor_alloc(&interp->mem, num_globals));
+	assert(interp->mem.p - start == num_globals);
+
+	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->labels, labels_size);
+	assert(interp->mem.p - start == labels_size);
+
+	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->num_labels, num_labels_size);
+	assert(interp->mem.p - start == num_labels_size);
+
+	start = interp->mem.p;
+	ok = ok && alloc_tables(interp);
+	assert(interp->mem.p - start == tables_size);
+
+	start = interp->mem.p;
+	ok = ok && alloc_locals(interp->module, &interp->mem, &interp->errors);
+	assert(interp->mem.p - start == locals_size);
 
 	/* init memory pages */
 	assert((interp->mem.end - interp->mem.start) == memsize);
@@ -4791,20 +4756,25 @@ int interp_wasm_module(struct wasm_interp *interp)
 	if (!reset_memory(interp))
 		return interp_error(interp, "reset memory");
 
-	wipe_cursor(&interp->globals);
-	wipe_cursor(&interp->global_init);
+	memset(interp->module_inst.globals, 0,
+			interp->module_inst.num_globals *
+			sizeof(*interp->module_inst.globals));
+
+	memset(interp->module_inst.globals_init, 0,
+			interp->module_inst.num_globals);
 
 	// don't reset labels for perf!
 
 	//interp->mem.p = interp->mem.start;
 
-	func = interp->module->start_fn != -1 ? interp->module->start_fn :
-		find_start_function(interp->module);
+	func = interp->module_inst.start_fn != -1 
+	     ? interp->module_inst.start_fn 
+	     : find_start_function(interp->module);
 
 	if (func == -1) {
 		return interp_error(interp, "no start function found");
 	} else {
-		interp->module->start_fn = func;
+		interp->module_inst.start_fn = func;
 	}
 
 	debug("found start function %s (%d)\n",
@@ -4829,7 +4799,6 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 {
 	struct wasm_parser p;
 	struct wasm_interp interp;
-	int ok;
 
 	wasm_parser_init(&p, wasm, len, len * 16);
 
@@ -4842,11 +4811,14 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 		print_error_backtrace(&interp.errors);
 		return 0;
 	}
+
 	if (!interp_wasm_module(&interp)) {
 		print_error_backtrace(&interp.errors);
 	}
+
 	print_stack(&interp.stack);
 	wasm_interp_free(&interp);
 	wasm_parser_free(&p);
-	return ok;
+
+	return 1;
 }
