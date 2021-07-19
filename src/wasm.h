@@ -82,6 +82,12 @@ struct table {
 	struct limits limits;
 };
 
+struct table_inst {
+	struct refval *refs;
+	enum reftype reftype;
+	int num_refs;
+};
+
 struct tablesec {
 	struct table *tables;
 	int num_tables;
@@ -177,14 +183,24 @@ struct importsec {
 	int num_imports;
 };
 
-struct val {
-	enum valtype type;
+struct refval {
+	int addr;
+};
+
+struct numval {
 	union {
 		int i32;
 		u64 i64;
 		float f32;
 		double f64;
-		int addr;
+	};
+};
+
+struct val {
+	enum valtype type;
+	union {
+		struct numval num;
+		struct refval ref;
 	};
 };
 
@@ -483,8 +499,8 @@ struct br_table {
 };
 
 struct call_indirect {
-	int typeidx;
 	int tableidx;
+	int typeidx;
 };
 
 struct instr {
@@ -583,6 +599,9 @@ struct wasm_interp {
 	struct cursor resolver_offsets; /* int */
 	struct cursor globals; /* struct val */
 	struct cursor global_init; /* u8 */
+
+	struct table_inst *tables;
+	int num_tables;
 
 	struct cursor memory; /* memory pages (65536 blocks) */
 

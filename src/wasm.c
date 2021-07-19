@@ -145,7 +145,7 @@ static INLINE int cursor_pop_i32(struct cursor *stack, int *i)
 		return 0;
 	if (unlikely(val.type != val_i32))
 		return 0;
-	*i = val.i32;
+	*i = val.num.i32;
 	return 1;
 }
 
@@ -212,10 +212,10 @@ static INLINE int stack_pop_number(struct wasm_interp *interp, struct val *val)
 static void print_val(struct val *val)
 {
 	switch (val->type) {
-	case val_i32: printf("%d", val->i32); break;
-	case val_i64: printf("%lu", val->i64); break;
-	case val_f32: printf("%f", val->f32); break;
-	case val_f64: printf("%f", val->f64); break;
+	case val_i32: printf("%d", val->num.i32); break;
+	case val_i64: printf("%lu", val->num.i64); break;
+	case val_f32: printf("%f", val->num.f32); break;
+	case val_f64: printf("%f", val->num.f64); break;
 
 	case val_ref_null:
 	case val_ref_func:
@@ -258,7 +258,7 @@ static int builtin_get_args(struct wasm_interp *interp)
 
 	print_stack(&interp->stack);
 
-	debug("get args %d %d\n", argv->i32, argv_buf->i32);
+	debug("get args %d %d\n", argv->num.i32, argv_buf->num.i32);
 
 	return 1;
 }
@@ -272,7 +272,7 @@ static INLINE int cursor_push_i32(struct cursor *stack, int i)
 {
 	struct val val;
 	val.type = val_i32;
-	val.i32 = i;
+	val.num.i32 = i;
 
 	return cursor_pushval(stack, &val);
 }
@@ -293,7 +293,7 @@ static int builtin_get_args_sizes(struct wasm_interp *interp)
 	if (!(argv_buf_size = get_local(interp, 1)))
 		return interp_error(interp, "argv_buf_size");
 
-	debug("get_args_sizes %d %d\n", argc->i32, argv_buf_size->i32);
+	debug("get_args_sizes %d %d\n", argc->num.i32, argv_buf_size->num.i32);
 
 	return stack_push_i32(interp, 0);
 }
@@ -584,60 +584,51 @@ void print_error_backtrace(struct errors *errors)
 	}
 }
 
-static int _functype_str(struct functype *ft, struct cursor *buf)
+static void _functype_str(struct functype *ft, struct cursor *buf)
 {
 	int i;
 
-	if (!cursor_push_str(buf, "("))
-		return 0;
+	cursor_push_str(buf, "(");
 
 	for (i = 0; i < ft->params.num_valtypes; i++) {
-		if (!cursor_push_str(buf, valtype_name(ft->params.valtypes[i])))
-			return 0;
+		cursor_push_str(buf, valtype_name(ft->params.valtypes[i]));
 
 		if (i != ft->params.num_valtypes-1) {
-			if (!cursor_push_str(buf, ", "))
-				return 0;
+			cursor_push_str(buf, ", ");
 		}
 	}
 
-	if (!cursor_push_str(buf, ") -> ("))
-		return 0;
+	cursor_push_str(buf, ") -> (");
 
 	for (i = 0; i < ft->result.num_valtypes; i++) {
-		if (!cursor_push_str(buf, valtype_name(ft->result.valtypes[i])))
-			return 0;
+		cursor_push_str(buf, valtype_name(ft->result.valtypes[i]));
 
 		if (i != ft->result.num_valtypes-1) {
-			if (!cursor_push_str(buf, ", "))
-				return 0;
+			cursor_push_str(buf, ", ");
 		}
 	}
 
-	return cursor_push_c_str(buf, ")");
+	cursor_push_c_str(buf, ")");
 }
 
-static const char *functype_str(struct functype *ft, struct cursor *buf)
+static const char *functype_str(struct functype *ft, char *buf, int buflen)
 {
-	if (buf->start == buf->end)
+	struct cursor cur;
+	if (buflen == 0)
 		return "";
 
-	if (!_functype_str(ft, buf)) {
-		if (buf->p == buf->start)
-			return "";
-		buf->p[-1] = 0;
-	}
+	buf[buflen-1] = 0;
+	make_cursor((u8*)buf, (u8*)buf + buflen-1, &cur);
 
-	return (const char*)buf->start;
+	_functype_str(ft, &cur);
+
+	return (const char*)buf;
 }
 
 static void print_functype(struct functype *ft)
 {
-	static unsigned char buf[0xFF];
-	struct cursor cur;
-	buf[0] = 0;
-	make_cursor(buf, buf + sizeof(buf), &cur);
-	printf("%s\n", functype_str(ft, &cur));
+	static char buf[0xFF];
+	printf("%s\n", functype_str(ft, buf, sizeof(buf)));
 }
 
 static void print_type_section(struct typesec *typesec)
@@ -1137,7 +1128,7 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
-	if (unlikely(!read_int(&p->cur, &local->val.i32))) {
+	if (unlikely(!read_int(&p->cur, &local->val.num.i32))) {
 		debug("fail parse local\n");
 		return parse_err(p, "n");
 	}
@@ -2335,7 +2326,7 @@ static int interp_i32_add(struct wasm_interp *interp)
 		return 0;
 	}
 
-	c.i32 = a.i32 + b.i32;
+	c.num.i32 = a.num.i32 + b.num.i32;
 
 	return stack_pushval(interp, &c);
 }
@@ -2349,7 +2340,7 @@ static int interp_i32_sub(struct wasm_interp *interp)
 		return 0;
 	}
 
-	c.i32 = a.i32 - b.i32;
+	c.num.i32 = a.num.i32 - b.num.i32;
 
 	return stack_pushval(interp, &c);
 }
@@ -2424,13 +2415,13 @@ static INLINE int interp_local_get(struct wasm_interp *interp, int index)
 static INLINE void make_i64_val(struct val *val, int64_t v)
 {
 	val->type = val_i64;
-	val->i64 = v;
+	val->num.i64 = v;
 }
 
 static INLINE void make_i32_val(struct val *val, int v)
 {
 	val->type = val_i32;
-	val->i32 = v;
+	val->num.i32 = v;
 }
 
 static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sign)
@@ -2444,12 +2435,12 @@ static INLINE int interp_gt(struct wasm_interp *interp, enum valtype vt, int sig
 
 	switch (vt) {
 	case val_i32:
-		c.i32 = sign? (signed int)lhs.i32 > (signed int)rhs.i32
-			   : (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
+		c.num.i32 = sign? (signed int)lhs.num.i32 > (signed int)rhs.num.i32
+			   : (unsigned int)lhs.num.i32 > (unsigned int)rhs.num.i32;
 		break;
 	case val_i64:
-		c.i64 = sign? (int64_t)lhs.i64 > (int64_t)rhs.i64
-			   : (uint64_t)lhs.i64 > (uint64_t)rhs.i64;
+		c.num.i64 = sign? (int64_t)lhs.num.i64 > (int64_t)rhs.num.i64
+			   : (uint64_t)lhs.num.i64 > (uint64_t)rhs.num.i64;
 		break;
 	default:
 		return interp_error(interp, "todo: interp_gt %s",
@@ -2465,7 +2456,7 @@ static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
 		return interp_error(interp, "binop prep");
 	}
-	c.i32 = (signed int)lhs.i32 < (signed int)rhs.i32;
+	c.num.i32 = (signed int)lhs.num.i32 < (signed int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2475,7 +2466,7 @@ static INLINE int interp_i32_lt_u(struct wasm_interp *interp)
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
 		return interp_error(interp, "binop prep");
 	}
-	c.i32 = (unsigned int)lhs.i32 < (unsigned int)rhs.i32;
+	c.num.i32 = (unsigned int)lhs.num.i32 < (unsigned int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2484,7 +2475,7 @@ static INLINE int interp_i32_le_u(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.i32 = (unsigned int)lhs.i32 <= (unsigned int)rhs.i32;
+	c.num.i32 = (unsigned int)lhs.num.i32 <= (unsigned int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2493,7 +2484,7 @@ static INLINE int interp_i32_gt_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.i32 = (signed int)lhs.i32 > (signed int)rhs.i32;
+	c.num.i32 = (signed int)lhs.num.i32 > (signed int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2502,7 +2493,7 @@ static INLINE int interp_i32_gt_u(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.i32 = (unsigned int)lhs.i32 > (unsigned int)rhs.i32;
+	c.num.i32 = (unsigned int)lhs.num.i32 > (unsigned int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2511,7 +2502,7 @@ static INLINE int interp_i32_ge_u(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.i32 = (unsigned int)lhs.i32 >= (unsigned int)rhs.i32;
+	c.num.i32 = (unsigned int)lhs.num.i32 >= (unsigned int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2520,7 +2511,7 @@ static INLINE int interp_i32_ge_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.i32 = (signed int)lhs.i32 >= (signed int)rhs.i32;
+	c.num.i32 = (signed int)lhs.num.i32 >= (signed int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2529,7 +2520,7 @@ static INLINE int interp_i32_le_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.i32 = (signed int)lhs.i32 <= (signed int)rhs.i32;
+	c.num.i32 = (signed int)lhs.num.i32 <= (signed int)rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -2629,9 +2620,8 @@ static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 
 static int prepare_call(struct wasm_interp *interp, int func_index)
 {
-	static u8 tmp[0xFF];
+	static char buf[128];
 	int i;
-	struct cursor buf;
 	struct functype *functype;
 	struct func *func;
 	struct val val;
@@ -2674,12 +2664,10 @@ static int prepare_call(struct wasm_interp *interp, int func_index)
 		paramtype = (enum valtype)functype->params.valtypes[i];
 
 		if (unlikely(!cursor_popval(&interp->stack, &val))) {
-			make_cursor(tmp, tmp + sizeof(tmp), &buf);
-
 			return interp_error(interp,
 				"not enough arguments for call to %s: [%s], needed %d args, got %d",
 				get_function_name(interp->module, func_index),
-				functype_str(functype, &buf),
+				functype_str(functype, buf, sizeof(buf)),
 				functype->params.num_valtypes,
 				i);
 		}
@@ -2737,6 +2725,81 @@ static int interp_call(struct wasm_interp *interp, int func_index)
 	return 1;
 }
 
+static int interp_call_indirect(struct wasm_interp *interp, struct call_indirect *call)
+{
+	static char buf[128];
+	static char buf2[128];
+	struct functype *type;
+	struct func *func;
+	struct table_inst *table;
+	struct refval *ref;
+	int i, ftidx;
+
+	if (unlikely(!was_section_parsed(interp->module, section_table))) {
+		return interp_error(interp, "no table section");
+	}
+
+	if (unlikely(call->tableidx >= interp->num_tables)) {
+		return interp_error(interp, "invalid table index %d (max %d)",
+				call->tableidx, interp->num_tables-1);
+	}
+
+	if (unlikely(call->typeidx >=
+		     interp->module->type_section.num_functypes)) {
+		return interp_error(interp, "invalid function type index: %d (max %d)",
+			call->typeidx,
+			interp->module->type_section.num_functypes);
+	}
+
+	table = &interp->tables[call->tableidx];
+	type = &interp->module->type_section.functypes[call->typeidx];
+
+	if (unlikely(table->reftype != funcref)) {
+		return interp_error(interp,
+				"table[%d] is not a function reference table",
+				call->tableidx
+				);
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &i))) {
+		return interp_error(interp, "pop i32");
+	}
+
+	if (unlikely(i >= table->num_refs)) {
+		return interp_error(interp, "invalid index %d in table %d (max %d)",
+				i, call->tableidx, table->num_refs-1);
+	}
+
+	ref = &table->refs[i];
+
+	if (ref->addr == 0) {
+		return interp_error(interp, "null ref in index %d of table %d",
+				i, call->tableidx);
+	}
+
+	if (ref->addr >= interp->module->num_funcs) {
+		return interp_error(interp, "invalid function ref %d (max %d)",
+				ref, interp->module->num_funcs-1);
+	}
+
+	func = &interp->module->funcs[ref->addr];
+
+	if (func->functype != type) {
+		ftidx = (func->functype -
+			 interp->module->type_section.functypes
+			) / sizeof(struct functype);
+
+		return interp_error(interp,
+				"functype mismatch, expected %d `%s`, got %d `%s`",
+				ftidx,
+				functype_str(func->functype, buf, sizeof(buf)),
+				call->typeidx,
+				functype_str(type, buf2, sizeof(buf2)),
+				ref, interp->module->num_funcs-1);
+	}
+
+	return interp_call(interp, ref->addr);
+}
 
 static int parse_blocktype(struct cursor *cur, struct errors *errs, struct blocktype *blocktype)
 {
@@ -3078,7 +3141,7 @@ static INLINE int parse_memarg(struct cursor *code, struct memarg *memarg)
 static int parse_call_indirect(struct cursor *code,
 		struct call_indirect *call_indirect)
 {
-	return read_int(code, &call_indirect->typeidx) && 
+	return read_int(code, &call_indirect->typeidx) &&
 	       read_int(code, &call_indirect->tableidx);
 }
 
@@ -3386,7 +3449,7 @@ static int interp_if(struct wasm_interp *interp)
 		return interp_error(interp, "if pop val");
 	}
 
-	if (cond.i32 == 1) {
+	if (cond.num.i32 == 1) {
 		return 1;
 	}
 
@@ -3405,7 +3468,7 @@ static int interp_i32_eqz(struct wasm_interp *interp)
 		return interp_error(interp, "if pop val");
 
 	res.type = val_i32;
-	res.i32 = a.i32 == 0;
+	res.num.i32 = a.num.i32 == 0;
 
 	return cursor_pushval(&interp->stack, &res);
 }
@@ -3658,10 +3721,10 @@ static int interp_mem_offset(struct wasm_interp *interp,
 static int wrap_val(struct val *val, int size) {
 	switch (val->type) {
 	case val_i32:
-		val->i32 &= (1 << size)-1;
+		val->num.i32 &= (1 << size)-1;
 		break;
 	case val_i64:
-		val->i64 &= (1UL << size)-1;
+		val->num.i64 &= (1UL << size)-1;
 		break;
 	default:
 		return 0;
@@ -3696,7 +3759,7 @@ static int interp_store(struct wasm_interp *interp, struct memarg *memarg,
 		}
 	}
 
-	memcpy(target.pos, &c.i32, target.size);
+	memcpy(target.pos, &c.num.i32, target.size);
 
 	return 1;
 }
@@ -3720,7 +3783,7 @@ static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 		return interp_error(interp, "memory target");
 	}
 
-	memcpy(&out.i32, target.pos, target.size);
+	memcpy(&out.num.i32, target.pos, target.size);
 
 	if (unlikely(!stack_pushval(interp, &out))) {
 		return interp_error(interp,
@@ -3803,7 +3866,7 @@ static INLINE int interp_i32_mul(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	}
 
-	c.i32 = lhs.i32 * rhs.i32;
+	c.num.i32 = lhs.num.i32 * rhs.num.i32;
 
 	return stack_pushval(interp, &c);
 }
@@ -3816,7 +3879,7 @@ static INLINE int interp_i32_or(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	}
 
-	c.i32 = lhs.i32 | rhs.i32;
+	c.num.i32 = lhs.num.i32 | rhs.num.i32;
 
 	return stack_pushval(interp, &c);
 }
@@ -3829,7 +3892,7 @@ static INLINE int interp_i32_and(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	}
 
-	c.i32 = lhs.i32 & rhs.i32;
+	c.num.i32 = lhs.num.i32 & rhs.num.i32;
 
 	return stack_pushval(interp, &c);
 }
@@ -3842,7 +3905,7 @@ static int interp_i64_or(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	}
 
-	c.i64 = lhs.i64 | rhs.i64;
+	c.num.i64 = lhs.num.i64 | rhs.num.i64;
 	return stack_pushval(interp, &c);
 }
 
@@ -3854,7 +3917,7 @@ static int interp_i64_shl(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	}
 
-	c.i64 = lhs.i64 << rhs.i64;
+	c.num.i64 = lhs.num.i64 << rhs.num.i64;
 	return stack_pushval(interp, &c);
 }
 
@@ -3866,7 +3929,7 @@ static int interp_i32_shl(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	}
 
-	c.i32 = lhs.i32 << rhs.i32;
+	c.num.i32 = lhs.num.i32 << rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3902,7 +3965,7 @@ static const char *show_instr(struct instr *instr)
 	cursor_push_str(&buf, instr_name(instr->tag));
 	len = buf.p - buf.start;
 
-	for (i = 0; i < 12-len; i++)
+	for (i = 0; i < 14-len; i++)
 		cursor_push_byte(&buf, ' ');
 
 	switch (instr->tag) {
@@ -3964,7 +4027,12 @@ static const char *show_instr(struct instr *instr)
 			break;
 
 		case i_br_table:
+			break;
+
 		case i_call_indirect:
+			sprintf(tmp, "%d %d", instr->call_indirect.typeidx,
+					instr->call_indirect.tableidx);
+			cursor_push_str(&buf, tmp);
 			break;
 
 		case i_f32_const:
@@ -4136,12 +4204,12 @@ static int interp_extend(struct wasm_interp *interp, enum valtype to,
 
 	switch (from) {
 	case val_i32:
-		i64 = val->i32;
-		val->i64 = i64;
+		i64 = val->num.i32;
+		val->num.i64 = i64;
 		break;
 	case val_i64:
-		i32 = val->i64;
-		val->i32 = i32;
+		i32 = val->num.i64;
+		val->num.i32 = i32;
 		break;
 	default:
 		return interp_error(interp, "unhandled extend from %s to %s",
@@ -4253,6 +4321,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_if: return interp_if(interp);
 	case i_end: return pop_label_checkpoint(interp);
 	case i_call: return interp_call(interp, instr->integer);
+	case i_call_indirect: return interp_call_indirect(interp, &instr->call_indirect);
 	case i_block: return interp_block(interp);
 	case i_br: return interp_br(interp, instr->integer);
 	case i_br_if: return interp_br_if(interp, instr->integer);
@@ -4453,7 +4522,7 @@ static int count_fn_locals(struct func *func)
 
 	if (func->type == func_type_wasm) {
 		for (i = 0; i < func->wasm_func->num_locals; i++) {
-			num_locals += func->wasm_func->locals->val.i32;
+			num_locals += func->wasm_func->locals->val.num.i32;
 		}
 	}
 
@@ -4471,6 +4540,51 @@ static int calculate_locals_size(struct module *module)
 	}
 
 	return locals_size;
+}
+
+static int calculate_tables_size(struct module *module)
+{
+	int i, num_tables, size;
+	struct table *tables;
+
+	tables = module->table_section.tables;
+	num_tables = module->table_section.num_tables;
+	size = num_tables * sizeof(struct table_inst);
+
+	for (i = 0; i < num_tables; i++) {
+		size += sizeof(struct refval) * tables[i].limits.min;
+	}
+
+	return size;
+}
+
+static int alloc_tables(struct wasm_interp *interp)
+{
+	int size;
+	struct table *t;
+	struct table_inst *inst;
+	int i;
+
+	interp->num_tables = interp->module->table_section.num_tables;
+	if (!(interp->tables = cursor_alloc(&interp->mem, interp->num_tables *
+					 sizeof(struct table_inst)))) {
+		return interp_error(interp, "couldn't alloc table instances");
+	}
+
+	for (i = 0; i < interp->num_tables; i++) {
+		t = &interp->module->table_section.tables[i];
+		inst = &(interp->tables[i]);
+		inst->reftype = t->reftype;
+		inst->num_refs = t->limits.min;
+		size = sizeof(struct refval) * t->limits.min;
+		if (!(inst->refs = cursor_alloc(&interp->mem, size))) {
+			return interp_error(interp,
+				"couldn't alloc table inst %d/%d",
+				i+1, interp->module->table_section.num_tables);
+		}
+	}
+
+	return 1;
 }
 
 static int alloc_locals(struct module *module, struct cursor *mem,
@@ -4504,7 +4618,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	    callframes_size, resolver_size, labels_size, num_labels_size,
 	    labels_capacity, num_labels_elemsize, memsize, memory_pages_size,
 	    resolver_offsets_size, num_mems, globals_size, num_globals,
-	    global_init_size;
+	    global_init_size, tables_size;
 
 	memset(interp, 0, sizeof(*interp));
 
@@ -4536,6 +4650,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
 	globals_size     = sizeof(struct val) * num_globals;
 	locals_size      = calculate_locals_size(module);
+	tables_size      = calculate_tables_size(module);
 	global_init_size = num_globals;
 
 	if (num_mems > 1) {
@@ -4560,6 +4675,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		globals_size +
 		global_init_size +
 		locals_size +
+		tables_size +
 		resolver_size;
 
 	mem = calloc(1, memsize);
@@ -4582,6 +4698,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		cursor_slice(&interp->mem, &interp->global_init, global_init_size) &&
 		array_alloc(&interp->mem, &interp->labels, labels_capacity) &&
 	        array_alloc(&interp->mem, &interp->num_labels, fns) &&
+		alloc_tables(interp) &&
 		alloc_locals(interp->module, &interp->mem, &interp->errors);
 
 	/* init memory pages */
@@ -4627,6 +4744,30 @@ static int reset_memory(struct wasm_interp *interp)
 	return 1;
 }
 
+/*
+static int init_tables(struct wasm_interp *interp)
+{
+	struct element *elem, *elems;
+
+	if (!(was_section_parsed(interp->module, section_element) &&
+	      was_section_parsed(interp->module, section_table))) {
+		// nothing to init
+		return 1;
+	}
+
+	elems = interp->module->element_section.elements;
+	for (i = 0; i < interp->module->element_section.num_elements; i++) {
+		elem = &elems[i];
+
+		if (elem->mode == elem_mode_passive ||
+		    elem->mode == elem_mode_declarative) {
+			continue;
+		}
+
+	}
+}
+*/
+
 int interp_wasm_module(struct wasm_interp *interp)
 {
 	int func;
@@ -4644,6 +4785,8 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->resolver_offsets);
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->callframes);
+
+	//init_tables(interp);
 
 	if (!reset_memory(interp))
 		return interp_error(interp, "reset memory");
