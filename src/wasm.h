@@ -568,7 +568,6 @@ struct resolver {
 	u16 label;
 	u8 end_tag;
 	u8 start_tag;
-	unsigned char unused;
 };
 
 struct wasm_interp {

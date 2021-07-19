@@ -10,3 +10,4 @@ todo/done.txt
 /test
 *.wasm
 /tags
+todo/todo.txt.bak
