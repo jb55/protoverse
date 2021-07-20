@@ -198,7 +198,6 @@ static inline int cursor_top_int(struct cursor *cur, int *i)
 static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
 {
 	if (unlikely(cur->p - len < cur->start)) {
-		printf("cursor_pop oob\n");
 		return 0;
 	}
 
@@ -211,7 +210,6 @@ static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
 static inline int cursor_push(struct cursor *cursor, u8 *data, int len)
 {
 	if (unlikely(cursor->p + len > cursor->end)) {
-		printf("cursor_push oob\n");
 		return 0;
 	}
 
