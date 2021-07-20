@@ -1926,7 +1926,7 @@ static int parse_elem_func_inits(struct wasm_parser *p, struct elem *elem)
 	if (!read_int(&p->cur, &elem->num_inits))
 		return parse_err(p, "func indices vec read fail");
 
-	if (!(elem->inits = cursor_alloc(&p->mem, elem->num_inits * 
+	if (!(elem->inits = cursor_alloc(&p->mem, elem->num_inits *
 					 sizeof(struct expr)))) {
 		return parse_err(p, "couldn't alloc vec(funcidx) for elem");
 	}
@@ -4041,7 +4041,8 @@ static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 		return interp_error(interp, "memory target");
 	}
 
-	memcpy(&out.num.i32, target.pos, target.size);
+	memcpy(&out.num.i64, target.pos, target.size);
+	out.num.i64 &= (1UL << target.size)-1;
 
 	if (unlikely(!stack_pushval(interp, &out))) {
 		return interp_error(interp,
@@ -4329,12 +4330,71 @@ static int interp_table_set(struct wasm_interp *interp, int tableidx)
 	return table_set(interp, table, ind, &val);
 }
 
+static int interp_memory_init(struct wasm_interp *interp, int dataidx)
+{
+	struct wdata *data;
+	int count, src, dst, num_data;
+
+	num_data = interp->module->data_section.num_datas;
+	if (unlikely(dataidx >= num_data)) {
+		return interp_error(interp, "invalid data index %d / %d",
+				dataidx, num_data-1);
+	}
+
+	data = &interp->module->data_section.datas[dataidx];
+
+	if(unlikely(!stack_pop_i32(interp, &count)))
+		return interp_error(interp, "pop count");
+
+	if(unlikely(!stack_pop_i32(interp, &src)))
+		return interp_error(interp, "pop src");
+
+	if(unlikely(!stack_pop_i32(interp, &dst)))
+		return interp_error(interp, "pop dst");
+
+	debug("memory_init src:%d dst:%d count:%d\n",
+			src, dst, count);
+
+	if (src + count > data->bytes_len) {
+		return interp_error(interp, "count %d > data len %d", count,
+				data->bytes_len);
+	}
+
+	if (interp->memory.start + dst + count >= interp->memory.p) {
+		return interp_error(interp, "memory write oob %d > %d",
+				count, interp->memory.p - interp->memory.start);
+	}
+
+	memcpy(interp->memory.start + dst + count,
+	       data->bytes + src + count,
+	       count);
+
+	return 1;
+
+	/*
+	for (; count; count--; dst++, src++) {
+		if (unlikely(src + count > data)) {
+			return interp_error(interp,
+				"src %d (max %d)",
+				src + count, num_data + 1);
+		}
+
+		if (unlikely(dst + count > active_pages(interp))) {
+			return interp_error(interp, "dst oob",
+					dst + count,
+					table->num_refs + 1);
+		}
+	}
+	*/
+	return 1;
+}
+
 static int interp_table_init(struct wasm_interp *interp,
 				  struct table_init *t)
 {
 	struct table_inst *table;
 	struct elem_inst *elem_inst;
-	int num_inits, offset, s;
+	int num_inits, dst, src;
 
 	if (unlikely(t->tableidx >= interp->module_inst.num_tables)) {
 		return interp_error(interp, "tableidx oob %d (max %d)",
@@ -4355,32 +4415,32 @@ static int interp_table_init(struct wasm_interp *interp,
 		return interp_error(interp, "pop num_inits");
 	}
 
-	if (unlikely(!stack_pop_i32(interp, &s))) {
-		return interp_error(interp, "pop s");
+	if (unlikely(!stack_pop_i32(interp, &src))) {
+		return interp_error(interp, "pop src");
 	}
 
-	if (unlikely(!stack_pop_i32(interp, &offset))) {
-		return interp_error(interp, "pop offset");
+	if (unlikely(!stack_pop_i32(interp, &dst))) {
+		return interp_error(interp, "pop dst");
 	}
 
-	for (; num_inits; num_inits--, offset++, s++) {
-		if (unlikely(s + num_inits > interp->module_inst.num_elements)) {
+	for (; num_inits; num_inits--, dst++, src++) {
+		if (unlikely(src + num_inits > interp->module_inst.num_elements)) {
 			return interp_error(interp, "index oob elem.elem s+n %d (max %d)",
-					s + num_inits,
+					src + num_inits,
 					interp->module_inst.num_elements + 1);
 		}
 
-		if (unlikely(offset + num_inits > table->num_refs)) {
+		if (unlikely(dst + num_inits > table->num_refs)) {
 			return interp_error(interp, "index oob tab.elem d+n %d (max %d)",
-					offset + num_inits,
+					dst + num_inits,
 					table->num_refs + 1);
 		}
 
-		elem_inst = &interp->module_inst.elements[s];
+		elem_inst = &interp->module_inst.elements[src];
 
-		debug("table set num_inits %d s %d offset %d\n",
-				num_inits, s, offset);
-		if (!table_set(interp, table, offset, &elem_inst->val)) {
+		debug("table set count %d src %d dst %d\n",
+				num_inits, src, dst);
+		if (!table_set(interp, table, dst, &elem_inst->val)) {
 			return interp_error(interp,
 					"table set failed for table %d ind %d");
 		}
@@ -4871,6 +4931,52 @@ static int count_element_insts(struct module *module)
 	return size;
 }
 
+static int init_memory(struct wasm_interp *interp, struct wdata *data, int dataidx)
+{
+	if (!eval_const_expr(&data->active.offset_expr, &interp->errors,
+				&interp->stack)) {
+		return interp_error(interp, "failed to eval data offset expr");
+	}
+
+	if (!stack_push_i32(interp, 0)) {
+		return interp_error(interp, "push 0 when init element");
+	}
+
+	if (!stack_push_i32(interp, data->bytes_len)) {
+		return interp_error(interp, "push num_elems in init element");
+	}
+
+	if (!interp_memory_init(interp, dataidx)) {
+		return interp_error(interp, "table init");
+	}
+
+	/*
+	if (!interp_data_drop(interp, elemidx)) {
+		return interp_error(interp, "drop elem");
+	}
+	*/
+
+	return 1;
+}
+
+static int init_memories(struct wasm_interp *interp)
+{
+	struct wdata *data;
+	int i;
+
+	for (i = 0; i < interp->module->data_section.num_datas; i++) {
+		data = &interp->module->data_section.datas[i];
+
+		if (data->mode != datamode_active)
+			continue;
+
+		if (!init_memory(interp, data, i)) {
+			return interp_error(interp, "init memory %d failed", i);
+		}
+	}
+
+	return 1;
+}
 
 static int init_tables(struct wasm_interp *interp)
 {
@@ -4886,8 +4992,6 @@ static int init_tables(struct wasm_interp *interp)
 		if (!init_table(interp, elem, i, elem->num_inits)) {
 			return interp_error(interp, "init table failed");
 		}
-
-		break;
 	}
 
 	return 1;
@@ -4964,6 +5068,10 @@ static int instantiate_module(struct wasm_interp *interp)
 		interp->module_inst.start_fn = func;
 		debug("found start function %s (%d)\n",
 				get_function_name(interp->module, func), func);
+	}
+
+	if (!init_memories(interp)) {
+		return interp_error(interp, "memory init");
 	}
 
 	if (!init_elements(interp)) {
@@ -5117,9 +5225,6 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		return interp_error(interp, "not enough memory");
 	}
 
-	if (!instantiate_module(interp))
-		return interp_error(interp, "instantiate module");
-
 	return 1;
 }
 
@@ -5175,10 +5280,12 @@ int interp_wasm_module(struct wasm_interp *interp)
 	if (!reset_memory(interp))
 		return interp_error(interp, "reset memory");
 
+	if (!instantiate_module(interp))
+		return interp_error(interp, "instantiate module");
+
 	// don't reset labels for perf!
 
 	//interp->mem.p = interp->mem.start;
-
 
 	if (!prepare_call(interp, interp->module_inst.start_fn)) {
 		return interp_error(interp, "preparing start function");
