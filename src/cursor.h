@@ -166,15 +166,22 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 	return 1;
 }
 
-
-static inline int cursor_drop(struct cursor *cur, int len)
+static inline int cursor_dropn(struct cursor *cur, int size, int n)
 {
-	if (unlikely(cur->p - len < cur->start)) {
+	if (n == 0)
+		return 1;
+
+	if (unlikely(cur->p - size*n < cur->start)) {
 		return 0;
 	}
 
-	cur->p -= len;
+	cur->p -= size*n;
 	return 1;
+}
+
+static inline int cursor_drop(struct cursor *cur, int size)
+{
+	return cursor_dropn(cur, size, 1);
 }
 
 static inline unsigned char *cursor_top(struct cursor *cur, int len)

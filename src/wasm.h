@@ -291,6 +291,7 @@ enum instr_tag {
 	/* parametric instructions */
 	i_drop          = 0x1A,
 	i_select        = 0x1B,
+	i_selects       = 0x1C,
 
 	/* variable instructions */
 	i_local_get     = 0x20,
@@ -522,6 +523,11 @@ struct table_init {
 	int elemidx;
 };
 
+struct select_instr {
+	u8 *valtypes;
+	int num_valtypes;
+};
+
 struct instr {
 	enum instr_tag tag;
 	int pos;
@@ -530,6 +536,7 @@ struct instr {
 		struct table_init table_init;
 		struct call_indirect call_indirect;
 		struct memarg memarg;
+		struct select_instr select;
 		struct block block;
 		double fp_double;
 		float fp_single;
@@ -633,7 +640,6 @@ struct wasm_interp {
 	struct cursor callframes; /* struct callframe */
 	struct cursor stack; /* struct val */
 	struct cursor mem; /* u8/mixed */
-	struct cursor resolver_offsets; /* int */
 
 	struct cursor memory; /* memory pages (65536 blocks) */
 
@@ -644,6 +650,7 @@ struct wasm_interp {
 	// instruction is encountered, the label index is pushed. When an
 	// instruction is popped, we can resolve the label
 	struct cursor resolver_stack; /* struct resolver */
+	struct cursor resolver_offsets; /* int */
 };
 
 struct builtin {
