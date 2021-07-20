@@ -66,6 +66,10 @@ static const char *valtype_name(enum valtype valtype)
 	return "?";
 }
 
+static const char *reftype_name(enum reftype reftype) {
+	return valtype_name((enum valtype)reftype);
+}
+
 static const char *valtype_literal(enum valtype valtype)
 {
 	switch (valtype) {
@@ -123,6 +127,11 @@ static struct val *get_local(struct wasm_interp *interp, int ind)
 	return get_fn_local(interp, frame->fn, ind);
 }
 
+static INLINE int stack_dropval(struct wasm_interp *interp)
+{
+	return cursor_drop(&interp->stack, sizeof(struct val));
+}
+
 static INLINE int stack_popval(struct wasm_interp *interp, struct val *val)
 {
 	return cursor_popval(&interp->stack, val);
@@ -146,6 +155,45 @@ static INLINE int cursor_pop_i32(struct cursor *stack, int *i)
 	if (unlikely(val.type != val_i32))
 		return 0;
 	*i = val.num.i32;
+	return 1;
+}
+
+static int is_reftype(enum valtype type)
+{
+	switch (type) {
+	case val_i32:
+	case val_i64:
+	case val_f32:
+	case val_f64:
+		return 0;
+	case val_ref_null:
+	case val_ref_func:
+	case val_ref_extern:
+		return 1;
+	}
+	return 0;
+}
+
+static INLINE int cursor_pop_ref(struct cursor *stack, struct val *val)
+{
+	if (!cursor_popval(stack, val)) {
+		return 0;
+	}
+	if (!is_reftype(val->type)) {
+		return 0;
+	}
+	return 1;
+}
+
+static INLINE int stack_pop_ref(struct wasm_interp *interp, struct val *val)
+{
+	if (!cursor_popval(&interp->stack, val)) {
+		return interp_error(interp, "no value on stack");
+	}
+	if (!is_reftype(val->type)) {
+		return interp_error(interp, "not a reftype, got %s",
+				valtype_name(val->type));
+	}
 	return 1;
 }
 
@@ -178,7 +226,7 @@ static void print_val(struct val *val)
 {
 	switch (val->type) {
 	case val_i32: printf("%d", val->num.i32); break;
-	case val_i64: printf("%llu", val->num.i64); break;
+	case val_i64: printf("%lu", val->num.i64); break;
 	case val_f32: printf("%f", val->num.f32); break;
 	case val_f64: printf("%f", val->num.f64); break;
 
@@ -239,6 +287,14 @@ static INLINE int cursor_push_i32(struct cursor *stack, int i)
 	val.type = val_i32;
 	val.num.i32 = i;
 
+	return cursor_pushval(stack, &val);
+}
+
+static INLINE int cursor_push_funcref(struct cursor *stack, int addr)
+{
+	struct val val;
+	val.type = val_ref_func;
+	val.ref.addr = addr;
 	return cursor_pushval(stack, &val);
 }
 
@@ -500,6 +556,9 @@ static char *instr_name(enum instr_tag tag)
 		case i_i64_extend8_s: return "i64_extend8_s";
 		case i_i64_extend16_s: return "i64_extend16_s";
 		case i_i64_extend32_s: return "i64_extend32_s";
+		case i_ref_null: return "ref_null";
+		case i_ref_func: return "ref_func";
+		case i_ref_is_null: return "ref_is_null";
 	}
 
 	snprintf(unk, sizeof(unk), "0x%02x", tag);
@@ -524,6 +583,11 @@ static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *fr
 static INLINE int cursor_drop_callframe(struct cursor *cur)
 {
 	return cursor_drop(cur, sizeof(struct callframe));
+}
+
+static INLINE int cursor_dropval(struct cursor *stack)
+{
+	return cursor_drop(stack, sizeof(struct val));
 }
 
 static INLINE int cursor_popint(struct cursor *cur, int *i)
@@ -657,15 +721,6 @@ static void print_limits(struct limits *limits)
 		printf("%d-%d", limits->min, limits->max);
 		break;
 	}
-}
-
-static const char *reftype_name(enum reftype reftype)
-{
-	switch (reftype) {
-	case funcref: return "funcref";
-	case externref: return "externref";
-	}
-	return "unknown_reftype";
 }
 
 static void print_memory_section(struct memsec *memory)
@@ -866,25 +921,22 @@ static void print_module(struct module *module)
 }
 
 
-/* I DONT NEED THIS (yet?) */
-/*
-static int leb128_write(struct cursor *write, unsigned int val)
+static int leb128_write(struct cursor *write, unsigned int value)
 {
 	unsigned char byte;
 	while (1) {
 		byte = value & 0x7F;
 		value >>= 7;
 		if (value == 0) {
-			if (!push_byte(write, byte))
+			if (!cursor_push_byte(write, byte))
 				return 0;
 			return 1;
 		} else {
-			if (!push_byte(write, byte | 0x80))
+			if (!cursor_push_byte(write, byte | 0x80))
 				return 0;
 		}
 	}
 }
-*/
 
 #define BYTE_AT(type, i, shift) (((type)(p[i]) & 0x7f) << (shift))
 #define LEB128_1(type) (BYTE_AT(type, 0, 0))
@@ -1383,9 +1435,251 @@ static int cursor_push_nullval(struct cursor *stack)
 	return cursor_pushval(stack, &val);
 }
 
+static const char *show_instr(struct instr *instr)
+{
+	struct cursor buf;
+	static char buffer[64];
+	static char tmp[32];
+	int len, i;
+
+	buffer[sizeof(buffer)-1] = 0;
+	make_cursor((u8*)buffer, (u8*)buffer + sizeof(buffer) - 1, &buf);
+
+	cursor_push_str(&buf, instr_name(instr->tag));
+	len = buf.p - buf.start;
+
+	for (i = 0; i < 14-len; i++)
+		cursor_push_byte(&buf, ' ');
+
+	switch (instr->tag) {
+		// two-byte instrs
+		case i_memory_size:
+		case i_memory_grow:
+			sprintf(tmp, "0x%02x", instr->memidx);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_block:
+		case i_loop:
+		case i_if:
+			break;
+
+		case i_else:
+		case i_end:
+			break;
+
+		case i_call:
+		case i_local_get:
+		case i_local_set:
+		case i_local_tee:
+		case i_global_get:
+		case i_global_set:
+		case i_br:
+		case i_br_if:
+		case i_i32_const:
+		case i_i64_const:
+		case i_ref_func:
+			sprintf(tmp, "%d", instr->integer);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_ref_null:
+			sprintf(tmp, "%s", reftype_name(instr->reftype));
+			cursor_push_str(&buf, tmp);
+			break;
+
+
+		case i_i32_load:
+		case i_i64_load:
+		case i_f32_load:
+		case i_f64_load:
+		case i_i32_load8_s:
+		case i_i32_load8_u:
+		case i_i32_load16_s:
+		case i_i32_load16_u:
+		case i_i64_load8_s:
+		case i_i64_load8_u:
+		case i_i64_load16_s:
+		case i_i64_load16_u:
+		case i_i64_load32_s:
+		case i_i64_load32_u:
+		case i_i32_store:
+		case i_i64_store:
+		case i_f32_store:
+		case i_f64_store:
+		case i_i32_store8:
+		case i_i32_store16:
+		case i_i64_store8:
+		case i_i64_store16:
+		case i_i64_store32:
+			sprintf(tmp, "%d %d", instr->memarg.offset, instr->memarg.align);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_br_table:
+			break;
+
+		case i_call_indirect:
+			sprintf(tmp, "%d %d", instr->call_indirect.typeidx,
+					instr->call_indirect.tableidx);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_f32_const:
+			sprintf(tmp, "%f", instr->fp_single);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_f64_const:
+			sprintf(tmp, "%f", instr->fp_double);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		// single-tag ops
+		case i_unreachable:
+		case i_nop:
+		case i_return:
+		case i_drop:
+		case i_select:
+		case i_i32_eqz:
+		case i_i32_eq:
+		case i_i32_ne:
+		case i_i32_lt_s:
+		case i_i32_lt_u:
+		case i_i32_gt_s:
+		case i_i32_gt_u:
+		case i_i32_le_s:
+		case i_i32_le_u:
+		case i_i32_ge_s:
+		case i_i32_ge_u:
+		case i_i64_eqz:
+		case i_i64_eq:
+		case i_i64_ne:
+		case i_i64_lt_s:
+		case i_i64_lt_u:
+		case i_i64_gt_s:
+		case i_i64_gt_u:
+		case i_i64_le_s:
+		case i_i64_le_u:
+		case i_i64_ge_s:
+		case i_i64_ge_u:
+		case i_f32_eq:
+		case i_f32_ne:
+		case i_f32_lt:
+		case i_f32_gt:
+		case i_f32_le:
+		case i_f32_ge:
+		case i_f64_eq:
+		case i_f64_ne:
+		case i_f64_lt:
+		case i_f64_gt:
+		case i_f64_le:
+		case i_f64_ge:
+		case i_i32_clz:
+		case i_i32_add:
+		case i_i32_sub:
+		case i_i32_mul:
+		case i_i32_div_s:
+		case i_i32_div_u:
+		case i_i32_rem_s:
+		case i_i32_rem_u:
+		case i_i32_and:
+		case i_i32_or:
+		case i_i32_xor:
+		case i_i32_shl:
+		case i_i32_shr_s:
+		case i_i32_shr_u:
+		case i_i32_rotl:
+		case i_i32_rotr:
+		case i_i64_clz:
+		case i_i64_ctz:
+		case i_i64_popcnt:
+		case i_i64_add:
+		case i_i64_sub:
+		case i_i64_mul:
+		case i_i64_div_s:
+		case i_i64_div_u:
+		case i_i64_rem_s:
+		case i_i64_rem_u:
+		case i_i64_and:
+		case i_i64_or:
+		case i_i64_xor:
+		case i_i64_shl:
+		case i_i64_shr_s:
+		case i_i64_shr_u:
+		case i_i64_rotl:
+		case i_i64_rotr:
+		case i_f32_abs:
+		case i_f32_neg:
+		case i_f32_ceil:
+		case i_f32_floor:
+		case i_f32_trunc:
+		case i_f32_nearest:
+		case i_f32_sqrt:
+		case i_f32_add:
+		case i_f32_sub:
+		case i_f32_mul:
+		case i_f32_div:
+		case i_f32_min:
+		case i_f32_max:
+		case i_f32_copysign:
+		case i_f64_abs:
+		case i_f64_neg:
+		case i_f64_ceil:
+		case i_f64_floor:
+		case i_f64_trunc:
+		case i_f64_nearest:
+		case i_f64_sqrt:
+		case i_f64_add:
+		case i_f64_sub:
+		case i_f64_mul:
+		case i_f64_div:
+		case i_f64_min:
+		case i_f64_max:
+		case i_f64_copysign:
+		case i_i32_wrap_i64:
+		case i_i32_trunc_f32_s:
+		case i_i32_trunc_f32_u:
+		case i_i32_trunc_f64_s:
+		case i_i32_trunc_f64_u:
+		case i_i64_extend_i32_s:
+		case i_i64_extend_i32_u:
+		case i_i64_trunc_f32_s:
+		case i_i64_trunc_f32_u:
+		case i_i64_trunc_f64_s:
+		case i_i64_trunc_f64_u:
+		case i_f32_convert_i32_s:
+		case i_f32_convert_i32_u:
+		case i_f32_convert_i64_s:
+		case i_f32_convert_i64_u:
+		case i_f32_demote_f64:
+		case i_f64_convert_i32_s:
+		case i_f64_convert_i32_u:
+		case i_f64_convert_i64_s:
+		case i_f64_convert_i64_u:
+		case i_f64_promote_f32:
+		case i_i32_reinterpret_f32:
+		case i_i64_reinterpret_f64:
+		case i_f32_reinterpret_i32:
+		case i_f64_reinterpret_i64:
+		case i_i32_extend8_s:
+		case i_i32_extend16_s:
+		case i_i64_extend8_s:
+		case i_i64_extend16_s:
+		case i_i64_extend32_s:
+		case i_ref_is_null:
+			break;
+	}
+
+	cursor_push_byte(&buf, 0);
+	return buffer;
+}
+
 static int eval_const_instr(struct instr *instr, struct errors *errs,
 		struct cursor *stack)
 {
+	debug("eval_const_instr %s\n", show_instr(instr));
+
 	switch ((enum const_instr)instr->tag) {
 	case ci_global_get:
 		return note_error(errs, stack, "todo: global_get inside global");
@@ -1395,7 +1689,10 @@ static int eval_const_instr(struct instr *instr, struct errors *errs,
 		}
 		return 1;
 	case ci_ref_func:
-		return note_error(errs, stack, "todo: global func ref");
+		if (unlikely(!cursor_push_funcref(stack, instr->integer))) {
+			return note_error(errs, stack, "couldn't push funcref");
+		}
+		return 1;
 	case ci_const_i32:
 		if (unlikely(!cursor_push_i32(stack, instr->integer))) {
 			return note_error(errs, stack,
@@ -1473,7 +1770,6 @@ static INLINE void make_const_expr_parser(struct wasm_parser *p,
 	parser->errs = &p->errs;
 }
 
-/*
 static INLINE int eval_const_expr(struct expr *expr, struct errors *errs,
 		struct cursor *stack)
 {
@@ -1486,7 +1782,24 @@ static INLINE int eval_const_expr(struct expr *expr, struct errors *errs,
 
 	return parse_const_expr(&parser, &expr_out);
 }
-*/
+
+static INLINE int eval_const_val(struct expr *expr, struct errors *errs,
+		struct cursor *stack, struct val *val)
+{
+	if (!eval_const_expr(expr, errs, stack)) {
+		return note_error(errs, stack, "eval const expr");
+	}
+
+	if (!cursor_popval(stack, val)) {
+		return note_error(errs, stack, "no val to pop?");
+	}
+
+	if (cursor_dropval(stack))  {
+		return note_error(errs, stack, "stack not empty");
+	}
+
+	return 1;
+}
 
 
 static int parse_global(struct wasm_parser *p,
@@ -1593,10 +1906,42 @@ static int parse_expr(struct wasm_parser *p, struct expr *expr)
 	return 1;
 }
 
+static int parse_elem_func_inits(struct wasm_parser *p, struct elem *elem)
+{
+	int index, i;
+	struct expr *expr;
+
+	if (!read_int(&p->cur, &elem->num_inits))
+		return parse_err(p, "func indices vec read fail");
+
+	if (!(elem->inits = cursor_alloc(&p->mem, elem->num_inits * 
+					 sizeof(struct expr)))) {
+		return parse_err(p, "couldn't alloc vec(funcidx) for elem");
+	}
+
+	for (i = 0; i < elem->num_inits; i++) {
+		expr = &elem->inits[i];
+		expr->code = p->mem.p;
+
+		if (!read_int(&p->cur, &index))
+			return parse_err(p, "func index %d read fail", i);
+		if (!cursor_push_byte(&p->mem, i_ref_func))
+			return parse_err(p, "push ref_func instr oob for %d", i);
+		if (!leb128_write(&p->mem, index))
+			return parse_err(p, "push ref_func int index oob for %d", i);
+		if (!cursor_push_byte(&p->mem, i_end))
+			return parse_err(p, "push i_end for init %d", i);
+
+		expr->code_len = p->mem.p - expr->code;
+	}
+
+	return 1;
+}
+
+
 static int parse_element(struct wasm_parser *p, struct elem *elem)
 {
 	u8 tag = 0;
-	unsigned int i;
 	(void)elem;
 
 	if (!pull_byte(&p->cur, &tag))
@@ -1610,17 +1955,9 @@ static int parse_element(struct wasm_parser *p, struct elem *elem)
 		if (!parse_expr(p, &elem->offset))
 			return parse_err(p, "elem 0x00 offset expr");
 
-		if (!parse_vector(p,
-				  sizeof(*elem->func_indices),
-				  &elem->num_func_indices,
-				  (void**)&elem->func_indices)) {
-			return parse_err(p, "elem 0x00 func indices");
-		}
-
-		for (i = 0; i < elem->num_func_indices; i++) {
-			if (!leb128_read(&p->cur, &elem->func_indices[i]))
-				return parse_err(p, "func index %d read fail", i);
-		}
+		// func inits
+		if (!parse_elem_func_inits(p, elem))
+			return parse_err(p, "generate func index exprs");
 
 		elem->mode = elem_mode_active;
 		elem->tableidx = 0;
@@ -3135,6 +3472,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_br_if:
 		case i_i32_const:
 		case i_i64_const:
+		case i_ref_func:
 			return leb128_read(p->code, (unsigned int*)&op->integer);
 
 		case i_i32_load:
@@ -3516,22 +3854,11 @@ static INLINE int interp_br_if(struct wasm_interp *interp, int ind)
 	return 1;
 }
 
-static INLINE u8 *global_init_state(struct wasm_interp *interp, int ind)
-{
-	if (ind >= interp->module_inst.num_globals) {
-		interp_error(interp, "global ind %d oob", ind);
-		return NULL;
-	}
-
-	return &interp->module_inst.globals_init[ind];
-}
-
 static struct val *get_global(struct wasm_interp *interp, int ind)
 {
 	struct globalsec *globsec;
 	struct global *global;
 	struct global_inst *global_inst;
-	u8 *init;
 
 	if (unlikely(!was_section_parsed(interp->module, section_global))) {
 		interp_error(interp,
@@ -3547,26 +3874,11 @@ static struct val *get_global(struct wasm_interp *interp, int ind)
 		return NULL;
 	}
 
-	global_inst = &interp->module_inst.globals[ind];
-
-	if (unlikely(!(init = global_init_state(interp, ind)))) {
-		interp_error(interp,
-			"couldn't get global init state for global %d", ind);
-		return NULL;
-	}
-
-	/* global is already initialized, return it */
-	if (*init == 1) {
-		return &global_inst->val;
-	}
-
-	/* initialize global then return it */
 	global = &interp->module->global_section.globals[ind];
+	global_inst = &interp->module_inst.globals[ind];
 
 	/* copy initialized global from module to global instance */
 	memcpy(&global_inst->val, &global->val, sizeof(global_inst->val));
-
-	*init = 1;
 
 	return &global_inst->val;
 }
@@ -3885,237 +4197,6 @@ static void print_linestack(struct cursor *stack)
 	printf("\n");
 }
 
-static const char *show_instr(struct instr *instr)
-{
-	struct cursor buf;
-	static char buffer[64];
-	static char tmp[32];
-	int len, i;
-
-	buffer[sizeof(buffer)-1] = 0;
-	make_cursor((u8*)buffer, (u8*)buffer + sizeof(buffer) - 1, &buf);
-
-	cursor_push_str(&buf, instr_name(instr->tag));
-	len = buf.p - buf.start;
-
-	for (i = 0; i < 14-len; i++)
-		cursor_push_byte(&buf, ' ');
-
-	switch (instr->tag) {
-		// two-byte instrs
-		case i_memory_size:
-		case i_memory_grow:
-			sprintf(tmp, "0x%02x", instr->memidx);
-			cursor_push_str(&buf, tmp);
-			break;
-
-		case i_block:
-		case i_loop:
-		case i_if:
-			break;
-
-		case i_else:
-		case i_end:
-			break;
-
-		case i_call:
-		case i_local_get:
-		case i_local_set:
-		case i_local_tee:
-		case i_global_get:
-		case i_global_set:
-		case i_br:
-		case i_br_if:
-		case i_i32_const:
-		case i_i64_const:
-			sprintf(tmp, "%d", instr->integer);
-			cursor_push_str(&buf, tmp);
-			break;
-
-		case i_i32_load:
-		case i_i64_load:
-		case i_f32_load:
-		case i_f64_load:
-		case i_i32_load8_s:
-		case i_i32_load8_u:
-		case i_i32_load16_s:
-		case i_i32_load16_u:
-		case i_i64_load8_s:
-		case i_i64_load8_u:
-		case i_i64_load16_s:
-		case i_i64_load16_u:
-		case i_i64_load32_s:
-		case i_i64_load32_u:
-		case i_i32_store:
-		case i_i64_store:
-		case i_f32_store:
-		case i_f64_store:
-		case i_i32_store8:
-		case i_i32_store16:
-		case i_i64_store8:
-		case i_i64_store16:
-		case i_i64_store32:
-			sprintf(tmp, "%d %d", instr->memarg.offset, instr->memarg.align);
-			cursor_push_str(&buf, tmp);
-			break;
-
-		case i_br_table:
-			break;
-
-		case i_call_indirect:
-			sprintf(tmp, "%d %d", instr->call_indirect.typeidx,
-					instr->call_indirect.tableidx);
-			cursor_push_str(&buf, tmp);
-			break;
-
-		case i_f32_const:
-			sprintf(tmp, "%f", instr->fp_single);
-			cursor_push_str(&buf, tmp);
-			break;
-
-		case i_f64_const:
-			sprintf(tmp, "%f", instr->fp_double);
-			cursor_push_str(&buf, tmp);
-			break;
-
-		// single-tag ops
-		case i_unreachable:
-		case i_nop:
-		case i_return:
-		case i_drop:
-		case i_select:
-		case i_i32_eqz:
-		case i_i32_eq:
-		case i_i32_ne:
-		case i_i32_lt_s:
-		case i_i32_lt_u:
-		case i_i32_gt_s:
-		case i_i32_gt_u:
-		case i_i32_le_s:
-		case i_i32_le_u:
-		case i_i32_ge_s:
-		case i_i32_ge_u:
-		case i_i64_eqz:
-		case i_i64_eq:
-		case i_i64_ne:
-		case i_i64_lt_s:
-		case i_i64_lt_u:
-		case i_i64_gt_s:
-		case i_i64_gt_u:
-		case i_i64_le_s:
-		case i_i64_le_u:
-		case i_i64_ge_s:
-		case i_i64_ge_u:
-		case i_f32_eq:
-		case i_f32_ne:
-		case i_f32_lt:
-		case i_f32_gt:
-		case i_f32_le:
-		case i_f32_ge:
-		case i_f64_eq:
-		case i_f64_ne:
-		case i_f64_lt:
-		case i_f64_gt:
-		case i_f64_le:
-		case i_f64_ge:
-		case i_i32_clz:
-		case i_i32_add:
-		case i_i32_sub:
-		case i_i32_mul:
-		case i_i32_div_s:
-		case i_i32_div_u:
-		case i_i32_rem_s:
-		case i_i32_rem_u:
-		case i_i32_and:
-		case i_i32_or:
-		case i_i32_xor:
-		case i_i32_shl:
-		case i_i32_shr_s:
-		case i_i32_shr_u:
-		case i_i32_rotl:
-		case i_i32_rotr:
-		case i_i64_clz:
-		case i_i64_ctz:
-		case i_i64_popcnt:
-		case i_i64_add:
-		case i_i64_sub:
-		case i_i64_mul:
-		case i_i64_div_s:
-		case i_i64_div_u:
-		case i_i64_rem_s:
-		case i_i64_rem_u:
-		case i_i64_and:
-		case i_i64_or:
-		case i_i64_xor:
-		case i_i64_shl:
-		case i_i64_shr_s:
-		case i_i64_shr_u:
-		case i_i64_rotl:
-		case i_i64_rotr:
-		case i_f32_abs:
-		case i_f32_neg:
-		case i_f32_ceil:
-		case i_f32_floor:
-		case i_f32_trunc:
-		case i_f32_nearest:
-		case i_f32_sqrt:
-		case i_f32_add:
-		case i_f32_sub:
-		case i_f32_mul:
-		case i_f32_div:
-		case i_f32_min:
-		case i_f32_max:
-		case i_f32_copysign:
-		case i_f64_abs:
-		case i_f64_neg:
-		case i_f64_ceil:
-		case i_f64_floor:
-		case i_f64_trunc:
-		case i_f64_nearest:
-		case i_f64_sqrt:
-		case i_f64_add:
-		case i_f64_sub:
-		case i_f64_mul:
-		case i_f64_div:
-		case i_f64_min:
-		case i_f64_max:
-		case i_f64_copysign:
-		case i_i32_wrap_i64:
-		case i_i32_trunc_f32_s:
-		case i_i32_trunc_f32_u:
-		case i_i32_trunc_f64_s:
-		case i_i32_trunc_f64_u:
-		case i_i64_extend_i32_s:
-		case i_i64_extend_i32_u:
-		case i_i64_trunc_f32_s:
-		case i_i64_trunc_f32_u:
-		case i_i64_trunc_f64_s:
-		case i_i64_trunc_f64_u:
-		case i_f32_convert_i32_s:
-		case i_f32_convert_i32_u:
-		case i_f32_convert_i64_s:
-		case i_f32_convert_i64_u:
-		case i_f32_demote_f64:
-		case i_f64_convert_i32_s:
-		case i_f64_convert_i32_u:
-		case i_f64_convert_i64_s:
-		case i_f64_convert_i64_u:
-		case i_f64_promote_f32:
-		case i_i32_reinterpret_f32:
-		case i_i64_reinterpret_f64:
-		case i_f32_reinterpret_i32:
-		case i_f64_reinterpret_i64:
-		case i_i32_extend8_s:
-		case i_i32_extend16_s:
-		case i_i64_extend8_s:
-		case i_i64_extend16_s:
-		case i_i64_extend32_s:
-			break;
-	}
-
-	cursor_push_byte(&buf, 0);
-	return buffer;
-}
 #endif
 
 static int interp_extend(struct wasm_interp *interp, enum valtype to,
@@ -4356,6 +4437,131 @@ static enum interp_end interp_code_end(struct wasm_interp *interp,
 	return interp_end_next;
 }
 
+static int interp_table_set(struct wasm_interp *interp, int tableidx)
+{
+	struct table_inst *table;
+	struct val val;
+	int ind;
+
+	if (unlikely(tableidx >= interp->module_inst.num_tables)) {
+		return interp_error(interp, "tableidx oob %d (max %d)",
+				tableidx,
+				interp->module_inst.num_tables + 1);
+	}
+
+	table = &interp->module_inst.tables[tableidx];
+
+	if (unlikely(!stack_pop_ref(interp, &val))) {
+		return interp_error(interp, "pop ref");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &ind))) {
+		return interp_error(interp, "pop elem index");
+	}
+
+	if (ind >= table->num_refs) {
+		return interp_error(interp, "invalid index %d for table %d (max %d)",
+				ind, tableidx,
+				interp->module_inst.num_tables);
+	}
+
+	if (table->reftype != (enum reftype)val.type) {
+		return interp_error(interp, "can't store %s ref in %s table",
+				valtype_name(val.type),
+				valtype_name((enum valtype)table->reftype));
+	}
+	
+	memcpy(&table->refs[ind], &val.ref, sizeof(struct refval));
+
+	return 1;
+}
+
+static int interp_table_init(struct wasm_interp *interp, struct table_init *t)
+{
+	struct elem_inst *elem_inst;
+	struct table_inst *table;
+	int n, s, d;
+
+	if (unlikely(t->tableidx >= interp->module_inst.num_tables)) {
+		return interp_error(interp, "tableidx oob %d (max %d)",
+				t->tableidx,
+				interp->module_inst.num_tables + 1);
+	}
+
+	table = &interp->module_inst.tables[t->tableidx];
+
+	// TODO: elem addr ?
+	if (unlikely(t->elemidx >= interp->module_inst.num_elements)) {
+		return interp_error(interp, "elemidx oob %d (max %d)",
+				t->elemidx,
+				interp->module_inst.num_elements + 1);
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &n))) {
+		return interp_error(interp, "pop n");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &s))) {
+		return interp_error(interp, "pop s");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &d))) {
+		return interp_error(interp, "pop d");
+	}
+
+	if (unlikely(s + n > interp->module_inst.num_elements)) {
+		return interp_error(interp, "index oob elem.elem s+n %d (max %d)",
+				s + n,
+				interp->module_inst.num_elements + 1);
+	}
+
+        if (unlikely(d + n > table->num_refs)) {
+		return interp_error(interp, "index oob tab.elem d+n %d (max %d)",
+				d + n,
+				table->num_refs);
+	}
+
+	if (n == 0) {
+		return 1;
+	}
+
+	elem_inst = &interp->module_inst.elements[s];
+
+	if (unlikely(!stack_push_i32(interp, d))) {
+		return interp_error(interp, "push d");
+	}
+
+	if (unlikely(!stack_pushval(interp, &elem_inst->ref))) {
+		return interp_error(interp, "push ref");
+	}
+
+	if (unlikely(!interp_table_set(interp, t->tableidx))) {
+		return interp_error(interp, "table set");
+	}
+
+	if (unlikely(!stack_push_i32(interp, d+1))) {
+		return interp_error(interp, "push d+1");
+	}
+
+	if (unlikely(!stack_push_i32(interp, s+1))) {
+		return interp_error(interp, "push s+1");
+	}
+
+	if (unlikely(!stack_push_i32(interp, n-1))) {
+		return interp_error(interp, "push n-1");
+	}
+
+	return interp_table_init(interp, t);
+}
+
+static int interp_elem_drop(struct wasm_interp *interp, int elemidx)
+{
+	(void)interp;
+	(void)elemidx;
+	// we don't really need to do anything here...
+	return 1;
+}
+
 static int interp_code(struct wasm_interp *interp)
 {
 	struct instr instr;
@@ -4495,6 +4701,7 @@ static int alloc_tables(struct wasm_interp *interp)
 		inst->reftype = t->reftype;
 		inst->num_refs = t->limits.min;
 		size = sizeof(struct refval) * t->limits.min;
+
 		if (!(inst->refs = cursor_alloc(&interp->mem, size))) {
 			return interp_error(interp,
 				"couldn't alloc table inst %d/%d",
@@ -4524,7 +4731,7 @@ static int calculate_locals_size(struct module *module)
 static int alloc_locals(struct module *module, struct cursor *mem,
 		struct errors *errs)
 {
-	int i, num_locals, size;
+	int i, num_locals, size, sizes = 0;
 	struct func *func;
 
 	for (i = 0; i < module->num_funcs; i++) {
@@ -4535,12 +4742,225 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 		func->num_locals = num_locals;
 
 		size = num_locals * sizeof(struct val);
+		sizes += size;
 
 		if (!cursor_alloc(mem, size)) {
+			debug("alloc_locals err sizes %d\n", sizes);
 			return note_error(errs, mem,
 					"could not alloc locals for %s",
 					func->name);
 		}
+	}
+
+	debug("alloc_locals sizes %d\n", sizes);
+
+	return 1;
+}
+
+static int init_element(struct wasm_interp *interp, struct expr *init,
+		struct elem_inst *elem_inst)
+{
+	if (!eval_const_val(init, &interp->errors, &interp->stack, &elem_inst->ref)) {
+		return interp_error(interp, "failed to eval element init expr");
+	}
+	return 1;
+}
+
+static int init_table(struct wasm_interp *interp, struct elem *elem,
+		int elemidx, int num_elems)
+{
+	struct table_init t;
+
+	if (elem->tableidx != 0) {
+		return interp_error(interp,
+			"tableidx should be 0 for elem %d", elemidx);
+	}
+
+	if (!eval_const_expr(&elem->offset, &interp->errors, &interp->stack)) {
+		return interp_error(interp, "failed to eval elem offset expr");
+	}
+
+	if (!stack_push_i32(interp, 0)) {
+		return interp_error(interp, "push 0 when init element");
+	}
+
+	if (!stack_push_i32(interp, num_elems)) {
+		return interp_error(interp, "push num_elems in init element");
+	}
+
+	t.tableidx = elem->tableidx;
+	t.elemidx  = elemidx;
+
+	if (!interp_table_init(interp, &t)) {
+		return interp_error(interp, "table init");
+	}
+
+	if (!interp_elem_drop(interp, elemidx)) {
+		return interp_error(interp, "drop elem");
+	}
+
+	return 1;
+}
+
+static int init_global(struct wasm_interp *interp, struct global *global,
+		struct global_inst *global_inst)
+{
+	if (!eval_const_val(&global->init, &interp->errors, &interp->stack,
+			    &global_inst->val)) {
+		return interp_error(interp, "eval const expr");
+	}
+
+	if (cursor_top(&interp->stack, sizeof(struct val))) {
+		return interp_error(interp, "stack not empty");
+	}
+
+	return 1;
+}
+
+static int init_globals(struct wasm_interp *interp)
+{
+	struct global *globals, *global;
+	struct global_inst *global_insts, *global_inst;
+	int i;
+
+	if (!was_section_parsed(interp->module, section_global)) {
+		// nothing to init
+		return 1;
+	}
+
+	globals = interp->module->global_section.globals;
+	global_insts = interp->module_inst.globals;
+
+	for (i = 0; i < interp->module->global_section.num_globals; i++) {
+		global = &globals[i];
+		global_inst = &global_insts[i];
+
+		if (!init_global(interp, global, global_inst)) {
+			return interp_error(interp, "global init");
+		}
+	}
+
+	return 1;
+}
+
+static int count_element_insts(struct module *module)
+{
+	struct elem *elems, *elem;
+	int i, size = 0;
+
+	if (!was_section_parsed(module, section_element))
+		return 0;
+
+	elems = module->element_section.elements;
+
+	for (i = 0; i < module->element_section.num_elements; i++) {
+		elem = &elems[i];
+
+		if (elem->mode != elem_mode_active)
+			continue;
+
+		size += elem->num_inits;
+	}
+
+	return size;
+}
+
+
+static int init_tables(struct wasm_interp *interp)
+{
+	struct elem *elem;
+	struct elem_inst *inst;
+	int i;
+
+	for (i = 0; i < interp->module_inst.num_elements; i++) {
+		inst = &interp->module_inst.elements[i];
+		elem = &interp->module->element_section.elements[inst->elem];
+
+		if (!init_table(interp, elem, i,
+				interp->module_inst.num_elements)) {
+			return interp_error(interp, "init table failed");
+		}
+	}
+
+	return 1;
+}
+
+static int init_elements(struct wasm_interp *interp)
+{
+	struct elem *elems, *elem;
+	struct elem_inst *inst;
+	struct expr *init;
+	int count = 0;
+	int i, j;
+
+	if (!was_section_parsed(interp->module, section_element))
+		return 0;
+
+	elems = interp->module->element_section.elements;
+
+	for (i = 0; i < interp->module->element_section.num_elements; i++) {
+		elem = &elems[i];
+
+		if (elem->mode != elem_mode_active)
+			continue;
+
+		for (j = 0; j < elem->num_inits; j++, count++) {
+			init = &elem->inits[j];
+
+			assert(count < interp->module_inst.num_elements);
+			inst = &interp->module_inst.elements[count];
+			inst->elem = i;
+			inst->init = j;
+
+			if (!init_element(interp, init, inst)) {
+				return interp_error(interp, "init element %d", j);
+			}
+		}
+
+	}
+
+	return 1;
+}
+
+// https://webassembly.github.io/spec/core/exec/modules.html#instantiation
+static int instantiate_module(struct wasm_interp *interp, int func)
+{
+	//TODO:Assert module is valid with external types classifying its imports
+
+	// TODO: If the number # of imports is not equal to the number of provided external values then fail
+
+	/*
+	if (!push_aux_callframe(interp)) {
+		return interp_error(interp,
+			"failed to pushed aux callframe?? "
+			"ok if this happens seriously wtf why am I even"
+			" writing this error message..)";
+	}
+	*/
+
+	memset(interp->module_inst.globals, 0,
+			interp->module_inst.num_globals *
+			sizeof(*interp->module_inst.globals));
+
+	memset(interp->module_inst.globals_init, 0,
+			interp->module_inst.num_globals);
+
+	if (func == -1) {
+		return interp_error(interp, "no start function found");
+	} else {
+		interp->module_inst.start_fn = func;
+	}
+
+	if (!init_elements(interp)) {
+		return interp_error(interp, "elements init");
+	}
+
+	if (!init_tables(interp)) {
+		return interp_error(interp, "table init");
+	}
+
+	if (!init_globals(interp)) {
+		return interp_error(interp, "globals init");
 	}
 
 	return 1;
@@ -4552,9 +4972,9 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 
 	unsigned int ok, fns, errors_size, stack_size, locals_size,
 	    callframes_size, resolver_size, labels_size, num_labels_size,
-	    labels_capacity, num_labels_elemsize, memsize, memory_pages_size,
+	    labels_capacity, memsize, memory_pages_size,
 	    resolver_offsets_size, num_mems, globals_size, num_globals,
-	    global_init_size, tables_size;
+	    tables_size, elems_size, num_elements;
 
 	memset(interp, 0, sizeof(*interp));
 
@@ -4568,7 +4988,6 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	//stack = calloc(1, STACK_SPACE);
 	fns = module->num_funcs;
 	labels_capacity  = fns * MAX_LABELS;
-	num_labels_elemsize = sizeof(u16);
 
 	num_mems = was_section_parsed(module, section_memory)?
 		module->memory_section.num_mems : 0;
@@ -4585,7 +5004,9 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	callframes_size  = sizeof(struct callframe) * 0xFF;
 	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
 	globals_size     = sizeof(struct global_inst) * num_globals;
-	global_init_size = num_globals;
+
+	num_elements     = count_element_insts(module);
+	elems_size       = num_elements * sizeof(struct elem_inst);
 	locals_size      = calculate_locals_size(module);
 	tables_size      = calculate_tables_size(module);
 
@@ -4593,8 +5014,6 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		printf("more than one memory instance is not supported\n");
 		return 0;
 	}
-
-	interp->module_inst.num_globals = num_globals;
 
 	memory_pages_size = 256 * WASM_PAGE_SIZE;
 
@@ -4605,11 +5024,12 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		resolver_size +
 		callframes_size +
 		globals_size +
-		global_init_size +
+		num_globals +
 		labels_size +
 		num_labels_size +
 		locals_size +
-		tables_size
+		tables_size +
+		elems_size
 		;
 
 	mem = calloc(1, memsize);
@@ -4642,6 +5062,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	ok = ok && cursor_slice(&interp->mem, &interp->callframes, callframes_size);
 	assert(interp->mem.p - start == callframes_size);
 
+	interp->module_inst.num_globals = num_globals;
+
 	start = interp->mem.p;
 	ok = ok && (interp->module_inst.globals = cursor_alloc(&interp->mem, globals_size));
 	assert(interp->mem.p - start == globals_size);
@@ -4655,16 +5077,23 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	assert(interp->mem.p - start == labels_size);
 
 	start = interp->mem.p;
-	ok = ok && cursor_slice(&interp->mem, &interp->num_labels, num_labels_size);
-	assert(interp->mem.p - start == num_labels_size);
-
-	start = interp->mem.p;
 	ok = ok && alloc_tables(interp);
 	assert(interp->mem.p - start == tables_size);
 
 	start = interp->mem.p;
+	ok = ok && cursor_slice(&interp->mem, &interp->num_labels, num_labels_size);
+	assert(interp->mem.p - start == num_labels_size);
+
+	start = interp->mem.p;
 	ok = ok && alloc_locals(interp->module, &interp->mem, &interp->errors);
 	assert(interp->mem.p - start == locals_size);
+
+	interp->module_inst.num_elements = num_elements;
+
+	start = interp->mem.p;
+	ok = ok && (interp->module_inst.elements =
+			cursor_alloc(&interp->mem, elems_size));
+	assert(interp->mem.p - start == elems_size);
 
 	/* init memory pages */
 	assert((interp->mem.end - interp->mem.start) == memsize);
@@ -4709,30 +5138,6 @@ static int reset_memory(struct wasm_interp *interp)
 	return 1;
 }
 
-/*
-static int init_tables(struct wasm_interp *interp)
-{
-	struct element *elem, *elems;
-
-	if (!(was_section_parsed(interp->module, section_element) &&
-	      was_section_parsed(interp->module, section_table))) {
-		// nothing to init
-		return 1;
-	}
-
-	elems = interp->module->element_section.elements;
-	for (i = 0; i < interp->module->element_section.num_elements; i++) {
-		elem = &elems[i];
-
-		if (elem->mode == elem_mode_passive ||
-		    elem->mode == elem_mode_declarative) {
-			continue;
-		}
-
-	}
-}
-*/
-
 int interp_wasm_module(struct wasm_interp *interp)
 {
 	int func;
@@ -4751,36 +5156,24 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->errors.cur);
 	reset_cursor(&interp->callframes);
 
-	//init_tables(interp);
-
 	if (!reset_memory(interp))
 		return interp_error(interp, "reset memory");
-
-	memset(interp->module_inst.globals, 0,
-			interp->module_inst.num_globals *
-			sizeof(*interp->module_inst.globals));
-
-	memset(interp->module_inst.globals_init, 0,
-			interp->module_inst.num_globals);
 
 	// don't reset labels for perf!
 
 	//interp->mem.p = interp->mem.start;
 
-	func = interp->module_inst.start_fn != -1 
-	     ? interp->module_inst.start_fn 
+	func = interp->module_inst.start_fn != -1
+	     ? interp->module_inst.start_fn
 	     : find_start_function(interp->module);
 
-	if (func == -1) {
-		return interp_error(interp, "no start function found");
-	} else {
-		interp->module_inst.start_fn = func;
-	}
+	if (!instantiate_module(interp, func))
+		return interp_error(interp, "instantiate module");
 
 	debug("found start function %s (%d)\n",
 			get_function_name(interp->module, func), func);
 
-	if (!prepare_call(interp, func)) {
+	if (!prepare_call(interp, interp->module_inst.start_fn)) {
 		return interp_error(interp, "preparing start function");
 	}
 

@@ -82,12 +82,6 @@ struct table {
 	struct limits limits;
 };
 
-struct table_inst {
-	struct refval *refs;
-	enum reftype reftype;
-	int num_refs;
-};
-
 struct tablesec {
 	struct table *tables;
 	int num_tables;
@@ -104,13 +98,47 @@ struct expr {
 	int code_len;
 };
 
+struct refval {
+	int addr;
+};
+
+struct table_inst {
+	struct refval *refs;
+	enum reftype reftype;
+	int num_refs;
+};
+
+struct numval {
+	union {
+		int i32;
+		u64 i64;
+		float f32;
+		double f64;
+	};
+};
+
+struct val {
+	enum valtype type;
+	union {
+		struct numval num;
+		struct refval ref;
+	};
+};
+
+struct elem_inst {
+	struct val ref;
+	u16 elem;
+	u16 init;
+};
+
 struct elem {
 	struct expr offset;
 	int tableidx;
-	unsigned int *func_indices;
-	unsigned int num_func_indices;
+	struct expr *inits;
+	int num_inits;
 	enum elem_mode mode;
 	enum reftype reftype;
+	struct val val;
 };
 
 struct customsec {
@@ -181,27 +209,6 @@ struct import {
 struct importsec {
 	struct import *imports;
 	int num_imports;
-};
-
-struct refval {
-	int addr;
-};
-
-struct numval {
-	union {
-		int i32;
-		u64 i64;
-		float f32;
-		double f64;
-	};
-};
-
-struct val {
-	enum valtype type;
-	union {
-		struct numval num;
-		struct refval ref;
-	};
 };
 
 struct global {
@@ -463,6 +470,10 @@ enum instr_tag {
 	i_i64_extend16_s = 0xc3,
 	i_i64_extend32_s = 0xc4,
 
+	i_ref_null    = 0xD0,
+	i_ref_is_null = 0xD1,
+	i_ref_func    = 0xD2,
+
 	/* TODO: more instrs */
 
 };
@@ -501,6 +512,11 @@ struct br_table {
 struct call_indirect {
 	int tableidx;
 	int typeidx;
+};
+
+struct table_init {
+	int tableidx;
+	int elemidx;
 };
 
 struct instr {
@@ -590,14 +606,15 @@ struct global_inst {
 
 struct module_inst {
 	struct table_inst *tables;
-	int num_tables;
-
 	struct global_inst *globals;
-	unsigned char *globals_init;
-	int num_globals;
+	struct elem_inst *elements;
 
+	int num_tables;
+	int num_globals;
+	int num_elements;
 
 	int start_fn;
+	unsigned char *globals_init;
 };
 
 struct wasm_interp {

@@ -170,7 +170,6 @@ static inline int pull_data_into_cursor(struct cursor *cursor,
 static inline int cursor_drop(struct cursor *cur, int len)
 {
 	if (unlikely(cur->p - len < cur->start)) {
-		printf("cursor drop oob\n");
 		return 0;
 	}
 
