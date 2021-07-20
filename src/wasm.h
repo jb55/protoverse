@@ -126,7 +126,7 @@ struct val {
 };
 
 struct elem_inst {
-	struct val ref;
+	struct val val;
 	u16 elem;
 	u16 init;
 };
@@ -298,6 +298,8 @@ enum instr_tag {
 	i_local_tee     = 0x22,
 	i_global_get    = 0x23,
 	i_global_set    = 0x24,
+	i_table_get     = 0x25,
+	i_table_set     = 0x26,
 
 	/* memory instructions */
 	i_i32_load      = 0x28,
@@ -474,6 +476,7 @@ enum instr_tag {
 	i_ref_is_null = 0xD1,
 	i_ref_func    = 0xD2,
 
+	i_table_op     = 0xFC,
 	/* TODO: more instrs */
 
 };
@@ -524,6 +527,7 @@ struct instr {
 	int pos;
 	union {
 		struct br_table br_table;
+		struct table_init table_init;
 		struct call_indirect call_indirect;
 		struct memarg memarg;
 		struct block block;

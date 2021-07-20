@@ -127,11 +127,6 @@ static struct val *get_local(struct wasm_interp *interp, int ind)
 	return get_fn_local(interp, frame->fn, ind);
 }
 
-static INLINE int stack_dropval(struct wasm_interp *interp)
-{
-	return cursor_drop(&interp->stack, sizeof(struct val));
-}
-
 static INLINE int stack_popval(struct wasm_interp *interp, struct val *val)
 {
 	return cursor_popval(&interp->stack, val);
@@ -174,6 +169,7 @@ static int is_reftype(enum valtype type)
 	return 0;
 }
 
+/*
 static INLINE int cursor_pop_ref(struct cursor *stack, struct val *val)
 {
 	if (!cursor_popval(stack, val)) {
@@ -184,6 +180,7 @@ static INLINE int cursor_pop_ref(struct cursor *stack, struct val *val)
 	}
 	return 1;
 }
+*/
 
 static INLINE int stack_pop_ref(struct wasm_interp *interp, struct val *val)
 {
@@ -238,6 +235,14 @@ static void print_val(struct val *val)
 	printf("%s", valtype_literal(val->type));
 }
 
+static void print_refval(struct refval *ref, enum reftype reftype)
+{
+	struct val val;
+	val.type = (enum valtype)reftype;
+	val.ref = *ref;
+	print_val(&val);
+}
+
 static void print_stack(struct cursor *stack)
 {
 	struct val val;
@@ -245,7 +250,6 @@ static void print_stack(struct cursor *stack)
 	u8 *p = stack->p;
 
 	if (stack->p == stack->start) {
-		printf("empty stack\n");
 		return;
 	}
 
@@ -559,6 +563,9 @@ static char *instr_name(enum instr_tag tag)
 		case i_ref_null: return "ref_null";
 		case i_ref_func: return "ref_func";
 		case i_ref_is_null: return "ref_is_null";
+		case i_table_op: return "table_op";
+		case i_table_get: return "table_get";
+		case i_table_set: return "table_set";
 	}
 
 	snprintf(unk, sizeof(unk), "0x%02x", tag);
@@ -1435,6 +1442,7 @@ static int cursor_push_nullval(struct cursor *stack)
 	return cursor_pushval(stack, &val);
 }
 
+#ifdef DEBUG
 static const char *show_instr(struct instr *instr)
 {
 	struct cursor buf;
@@ -1479,6 +1487,8 @@ static const char *show_instr(struct instr *instr)
 		case i_i32_const:
 		case i_i64_const:
 		case i_ref_func:
+		case i_table_set:
+		case i_table_get:
 			sprintf(tmp, "%d", instr->integer);
 			cursor_push_str(&buf, tmp);
 			break;
@@ -1668,12 +1678,14 @@ static const char *show_instr(struct instr *instr)
 		case i_i64_extend16_s:
 		case i_i64_extend32_s:
 		case i_ref_is_null:
+		case i_table_op:
 			break;
 	}
 
 	cursor_push_byte(&buf, 0);
 	return buffer;
 }
+#endif
 
 static int eval_const_instr(struct instr *instr, struct errors *errs,
 		struct cursor *stack)
@@ -3473,6 +3485,8 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_i32_const:
 		case i_i64_const:
 		case i_ref_func:
+		case i_table_set:
+		case i_table_get:
 			return leb128_read(p->code, (unsigned int*)&op->integer);
 
 		case i_i32_load:
@@ -4261,6 +4275,119 @@ static int interp_loop(struct wasm_interp *interp)
 	return 1;
 }
 
+static INLINE int table_set(struct wasm_interp *interp,
+		struct table_inst *table, int ind, struct val *val)
+{
+
+	if (unlikely(ind >= table->num_refs)) {
+		return interp_error(interp, "invalid index %d (max %d)",
+				ind,
+				interp->module_inst.num_tables);
+	}
+
+	if (unlikely(table->reftype != (enum reftype)val->type)) {
+		return interp_error(interp, "can't store %s ref in %s table",
+				valtype_name(val->type),
+				valtype_name((enum valtype)table->reftype));
+	}
+
+	debug("setting table[%ld] ref %d to ",
+	      (table - interp->module_inst.tables) / sizeof (struct table_inst),
+	      ind);
+#ifdef DEBUG
+	print_refval(&val->ref, table->reftype);
+	printf("\n");
+#endif
+
+	memcpy(&table->refs[ind], &val->ref, sizeof(struct refval));
+
+	return 1;
+}
+
+static int interp_table_set(struct wasm_interp *interp, int tableidx)
+{
+	struct table_inst *table;
+	struct val val;
+	int ind;
+
+	if (unlikely(tableidx >= interp->module_inst.num_tables)) {
+		return interp_error(interp, "tableidx oob %d (max %d)",
+				tableidx,
+				interp->module_inst.num_tables + 1);
+	}
+
+	table = &interp->module_inst.tables[tableidx];
+
+	if (unlikely(!stack_pop_ref(interp, &val))) {
+		return interp_error(interp, "pop ref");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &ind))) {
+		return interp_error(interp, "pop elem index");
+	}
+
+	return table_set(interp, table, ind, &val);
+}
+
+static int interp_table_init(struct wasm_interp *interp,
+				  struct table_init *t)
+{
+	struct table_inst *table;
+	struct elem_inst *elem_inst;
+	int num_inits, offset, s;
+
+	if (unlikely(t->tableidx >= interp->module_inst.num_tables)) {
+		return interp_error(interp, "tableidx oob %d (max %d)",
+				t->tableidx,
+				interp->module_inst.num_tables + 1);
+	}
+
+	table = &interp->module_inst.tables[t->tableidx];
+
+	// TODO: elem addr ?
+	if (unlikely(t->elemidx >= interp->module->element_section.num_elements)) {
+		return interp_error(interp, "elemidx oob %d (max %d)",
+				t->elemidx,
+				interp->module->element_section.num_elements + 1);
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &num_inits))) {
+		return interp_error(interp, "pop num_inits");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &s))) {
+		return interp_error(interp, "pop s");
+	}
+
+	if (unlikely(!stack_pop_i32(interp, &offset))) {
+		return interp_error(interp, "pop offset");
+	}
+
+	for (; num_inits; num_inits--, offset++, s++) {
+		if (unlikely(s + num_inits > interp->module_inst.num_elements)) {
+			return interp_error(interp, "index oob elem.elem s+n %d (max %d)",
+					s + num_inits,
+					interp->module_inst.num_elements + 1);
+		}
+
+		if (unlikely(offset + num_inits > table->num_refs)) {
+			return interp_error(interp, "index oob tab.elem d+n %d (max %d)",
+					offset + num_inits,
+					table->num_refs + 1);
+		}
+
+		elem_inst = &interp->module_inst.elements[s];
+
+		debug("table set num_inits %d s %d offset %d\n",
+				num_inits, s, offset);
+		if (!table_set(interp, table, offset, &elem_inst->val)) {
+			return interp_error(interp,
+					"table set failed for table %d ind %d");
+		}
+	}
+
+	return 1;
+}
 
 static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 {
@@ -4342,6 +4469,8 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_br_if: return interp_br_if(interp, instr->integer);
 	case i_memory_size: return interp_memory_size(interp, instr->memidx);
 	case i_memory_grow: return interp_memory_grow(interp, instr->memidx);
+	case i_table_op: return interp_error(interp, "todo: interp table_op");
+	case i_table_set: return interp_table_set(interp, instr->integer);
 	case i_return: return 1;
 	default:
 		    interp_error(interp, "unhandled instruction %s 0x%x",
@@ -4435,123 +4564,6 @@ static enum interp_end interp_code_end(struct wasm_interp *interp,
 	}
 
 	return interp_end_next;
-}
-
-static int interp_table_set(struct wasm_interp *interp, int tableidx)
-{
-	struct table_inst *table;
-	struct val val;
-	int ind;
-
-	if (unlikely(tableidx >= interp->module_inst.num_tables)) {
-		return interp_error(interp, "tableidx oob %d (max %d)",
-				tableidx,
-				interp->module_inst.num_tables + 1);
-	}
-
-	table = &interp->module_inst.tables[tableidx];
-
-	if (unlikely(!stack_pop_ref(interp, &val))) {
-		return interp_error(interp, "pop ref");
-	}
-
-	if (unlikely(!stack_pop_i32(interp, &ind))) {
-		return interp_error(interp, "pop elem index");
-	}
-
-	if (ind >= table->num_refs) {
-		return interp_error(interp, "invalid index %d for table %d (max %d)",
-				ind, tableidx,
-				interp->module_inst.num_tables);
-	}
-
-	if (table->reftype != (enum reftype)val.type) {
-		return interp_error(interp, "can't store %s ref in %s table",
-				valtype_name(val.type),
-				valtype_name((enum valtype)table->reftype));
-	}
-	
-	memcpy(&table->refs[ind], &val.ref, sizeof(struct refval));
-
-	return 1;
-}
-
-static int interp_table_init(struct wasm_interp *interp, struct table_init *t)
-{
-	struct elem_inst *elem_inst;
-	struct table_inst *table;
-	int n, s, d;
-
-	if (unlikely(t->tableidx >= interp->module_inst.num_tables)) {
-		return interp_error(interp, "tableidx oob %d (max %d)",
-				t->tableidx,
-				interp->module_inst.num_tables + 1);
-	}
-
-	table = &interp->module_inst.tables[t->tableidx];
-
-	// TODO: elem addr ?
-	if (unlikely(t->elemidx >= interp->module_inst.num_elements)) {
-		return interp_error(interp, "elemidx oob %d (max %d)",
-				t->elemidx,
-				interp->module_inst.num_elements + 1);
-	}
-
-	if (unlikely(!stack_pop_i32(interp, &n))) {
-		return interp_error(interp, "pop n");
-	}
-
-	if (unlikely(!stack_pop_i32(interp, &s))) {
-		return interp_error(interp, "pop s");
-	}
-
-	if (unlikely(!stack_pop_i32(interp, &d))) {
-		return interp_error(interp, "pop d");
-	}
-
-	if (unlikely(s + n > interp->module_inst.num_elements)) {
-		return interp_error(interp, "index oob elem.elem s+n %d (max %d)",
-				s + n,
-				interp->module_inst.num_elements + 1);
-	}
-
-        if (unlikely(d + n > table->num_refs)) {
-		return interp_error(interp, "index oob tab.elem d+n %d (max %d)",
-				d + n,
-				table->num_refs);
-	}
-
-	if (n == 0) {
-		return 1;
-	}
-
-	elem_inst = &interp->module_inst.elements[s];
-
-	if (unlikely(!stack_push_i32(interp, d))) {
-		return interp_error(interp, "push d");
-	}
-
-	if (unlikely(!stack_pushval(interp, &elem_inst->ref))) {
-		return interp_error(interp, "push ref");
-	}
-
-	if (unlikely(!interp_table_set(interp, t->tableidx))) {
-		return interp_error(interp, "table set");
-	}
-
-	if (unlikely(!stack_push_i32(interp, d+1))) {
-		return interp_error(interp, "push d+1");
-	}
-
-	if (unlikely(!stack_push_i32(interp, s+1))) {
-		return interp_error(interp, "push s+1");
-	}
-
-	if (unlikely(!stack_push_i32(interp, n-1))) {
-		return interp_error(interp, "push n-1");
-	}
-
-	return interp_table_init(interp, t);
 }
 
 static int interp_elem_drop(struct wasm_interp *interp, int elemidx)
@@ -4760,7 +4772,7 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 static int init_element(struct wasm_interp *interp, struct expr *init,
 		struct elem_inst *elem_inst)
 {
-	if (!eval_const_val(init, &interp->errors, &interp->stack, &elem_inst->ref)) {
+	if (!eval_const_val(init, &interp->errors, &interp->stack, &elem_inst->val)) {
 		return interp_error(interp, "failed to eval element init expr");
 	}
 	return 1;
@@ -4845,20 +4857,14 @@ static int init_globals(struct wasm_interp *interp)
 
 static int count_element_insts(struct module *module)
 {
-	struct elem *elems, *elem;
+	struct elem *elem;
 	int i, size = 0;
 
 	if (!was_section_parsed(module, section_element))
 		return 0;
 
-	elems = module->element_section.elements;
-
 	for (i = 0; i < module->element_section.num_elements; i++) {
-		elem = &elems[i];
-
-		if (elem->mode != elem_mode_active)
-			continue;
-
+		elem = &module->element_section.elements[i];
 		size += elem->num_inits;
 	}
 
@@ -4869,17 +4875,19 @@ static int count_element_insts(struct module *module)
 static int init_tables(struct wasm_interp *interp)
 {
 	struct elem *elem;
-	struct elem_inst *inst;
 	int i;
 
-	for (i = 0; i < interp->module_inst.num_elements; i++) {
-		inst = &interp->module_inst.elements[i];
-		elem = &interp->module->element_section.elements[inst->elem];
+	for (i = 0; i < interp->module->element_section.num_elements; i++) {
+		elem = &interp->module->element_section.elements[i];
 
-		if (!init_table(interp, elem, i,
-				interp->module_inst.num_elements)) {
+		if (elem->mode != elem_mode_active)
+			continue;
+
+		if (!init_table(interp, elem, i, elem->num_inits)) {
 			return interp_error(interp, "init table failed");
 		}
+
+		break;
 	}
 
 	return 1;
@@ -4923,8 +4931,9 @@ static int init_elements(struct wasm_interp *interp)
 }
 
 // https://webassembly.github.io/spec/core/exec/modules.html#instantiation
-static int instantiate_module(struct wasm_interp *interp, int func)
+static int instantiate_module(struct wasm_interp *interp)
 {
+	int func;
 	//TODO:Assert module is valid with external types classifying its imports
 
 	// TODO: If the number # of imports is not equal to the number of provided external values then fail
@@ -4938,6 +4947,10 @@ static int instantiate_module(struct wasm_interp *interp, int func)
 	}
 	*/
 
+	func = interp->module_inst.start_fn != -1
+	     ? interp->module_inst.start_fn
+	     : find_start_function(interp->module);
+
 	memset(interp->module_inst.globals, 0,
 			interp->module_inst.num_globals *
 			sizeof(*interp->module_inst.globals));
@@ -4949,6 +4962,8 @@ static int instantiate_module(struct wasm_interp *interp, int func)
 		return interp_error(interp, "no start function found");
 	} else {
 		interp->module_inst.start_fn = func;
+		debug("found start function %s (%d)\n",
+				get_function_name(interp->module, func), func);
 	}
 
 	if (!init_elements(interp)) {
@@ -5102,6 +5117,9 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		return interp_error(interp, "not enough memory");
 	}
 
+	if (!instantiate_module(interp))
+		return interp_error(interp, "instantiate module");
+
 	return 1;
 }
 
@@ -5140,8 +5158,6 @@ static int reset_memory(struct wasm_interp *interp)
 
 int interp_wasm_module(struct wasm_interp *interp)
 {
-	int func;
-
 	interp->ops = 0;
 
 	if (interp->module->code_section.num_funcs == 0) {
@@ -5163,15 +5179,6 @@ int interp_wasm_module(struct wasm_interp *interp)
 
 	//interp->mem.p = interp->mem.start;
 
-	func = interp->module_inst.start_fn != -1
-	     ? interp->module_inst.start_fn
-	     : find_start_function(interp->module);
-
-	if (!instantiate_module(interp, func))
-		return interp_error(interp, "instantiate module");
-
-	debug("found start function %s (%d)\n",
-			get_function_name(interp->module, func), func);
 
 	if (!prepare_call(interp, interp->module_inst.start_fn)) {
 		return interp_error(interp, "preparing start function");

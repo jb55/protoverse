@@ -3,3 +3,4 @@ do we need to reset function locals on return? @wasm
 check blocktypes when popping labels @wasm
 make chess demo @examples
 getting started @docs
+optimize table initialization @wasm
