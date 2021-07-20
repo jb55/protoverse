@@ -29,7 +29,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times)
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
 	for (i = 0; i < times; i++) {
 		if (!interp_wasm_module(&interp)) {
-			//print_error_backtrace(&interp.errors);
+			print_error_backtrace(&interp.errors);
 		}
 		ops += interp.ops;
 	}

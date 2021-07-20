@@ -309,20 +309,10 @@ static INLINE int stack_push_i32(struct wasm_interp *interp, int i)
 	return cursor_push_i32(&interp->stack, i);
 }
 
-
-static int builtin_get_args_sizes(struct wasm_interp *interp)
+static INLINE void make_i32_val(struct val *val, int v)
 {
-	struct val *argc, *argv_buf_size;
-
-	if (!(argc = get_local(interp, 0)))
-		return interp_error(interp, "argc");
-
-	if (!(argv_buf_size = get_local(interp, 1)))
-		return interp_error(interp, "argv_buf_size");
-
-	debug("get_args_sizes %d %d\n", argc->num.i32, argv_buf_size->num.i32);
-
-	return stack_push_i32(interp, 0);
+	val->type = val_i32;
+	val->num.i32 = v;
 }
 
 static INLINE int stack_pushval(struct wasm_interp *interp, struct val *val)
@@ -340,6 +330,8 @@ static int builtin_proc_exit(struct wasm_interp *interp)
 {
 	return interp_exit(interp);
 }
+
+static int builtin_get_args_sizes(struct wasm_interp *interp);
 
 static struct builtin BUILTINS[] = {
 	{ .name = "args_get",       .fn = builtin_get_args },
@@ -2735,12 +2727,6 @@ static INLINE void make_i64_val(struct val *val, int64_t v)
 	val->num.i64 = v;
 }
 
-static INLINE void make_i32_val(struct val *val, int v)
-{
-	val->type = val_i32;
-	val->num.i32 = v;
-}
-
 static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -4014,7 +4000,7 @@ struct memtarget {
 };
 
 static int interp_mem_offset(struct wasm_interp *interp,
-		int N, int i, enum valtype c, struct memarg *memarg,
+		int *N, int i, enum valtype c, struct memarg *memarg,
 		struct memtarget *t)
 {
 	int offset, bw;
@@ -4026,11 +4012,11 @@ static int interp_mem_offset(struct wasm_interp *interp,
 	offset = i + memarg->offset;
 	bw = bitwidth(c);
 
-	if (N == 0) {
-		N = bw;
+	if (*N == 0) {
+		*N = bw;
 	}
 
-	t->size = N/8;
+	t->size = *N/8;
 	t->pos = interp->memory.start + offset;
 
 	if (t->pos + t->size > interp->memory.p) {
@@ -4042,10 +4028,12 @@ static int interp_mem_offset(struct wasm_interp *interp,
 	return 1;
 }
 
-static int wrap_val(struct val *val, int size) {
+static int wrap_val(struct val *val, unsigned int size) {
 	switch (val->type) {
 	case val_i32:
-		val->num.i32 &= (1 << size)-1;
+		//debug("before %d size %d (mask %lx)\n", val->num.i32, size, (1UL << size)-1);
+		val->num.i32 &= (1UL << size)-1;
+		//debug("after %d size %d (mask %lx)\n", val->num.i32, size, (1UL << size)-1);
 		break;
 	case val_i64:
 		val->num.i64 &= (1UL << size)-1;
@@ -4056,11 +4044,64 @@ static int wrap_val(struct val *val, int size) {
 	return 1;
 }
 
+static int store_val(struct wasm_interp *interp, int i,
+		struct memarg *memarg, enum valtype type, struct val *val, int N)
+{
+	struct memtarget target;
+
+	if (unlikely(!interp_mem_offset(interp, &N, i, type, memarg, &target))) {
+		return interp_error(interp, "memory target");
+	}
+
+	if (N != 0) {
+		if (!wrap_val(val, N)) {
+			return interp_error(interp,
+				"implement wrap val (truncate?) for %s",
+				valtype_name(val->type));
+		}
+	}
+
+	debug("storing %d at %ld, N:%d\n", val->num.i32,
+			target.pos - interp->memory.start, N);
+
+	memcpy(target.pos, &val->num.i32, target.size);
+
+	return 1;
+}
+
+static int store_simple(struct wasm_interp *interp, int offset, struct val *val)
+{
+	struct memarg memarg = {};
+	return store_val(interp, offset, &memarg, val->type, val, 0);
+}
+
+static int builtin_get_args_sizes(struct wasm_interp *interp)
+{
+	struct val *argc_addr, *argv_buf_size;
+	struct val argc;
+
+	make_i32_val(&argc, 1);
+
+	if (!(argc_addr = get_local(interp, 0)))
+		return interp_error(interp, "argc");
+
+	if (!(argv_buf_size = get_local(interp, 1)))
+		return interp_error(interp, "argv_buf_size");
+
+	if (!store_simple(interp, argc_addr->num.i32, &argc)) {
+		return interp_error(interp, "store argc");
+	}
+
+	debug("get_args_sizes %d %d\n", argc_addr->num.i32, argv_buf_size->num.i32);
+
+	return stack_push_i32(interp, 0);
+}
+
+
 static int interp_store(struct wasm_interp *interp, struct memarg *memarg,
 		enum valtype type, int N)
 {
 	struct val c;
-	struct memtarget target;
 	int i;
 
 	if (unlikely(!stack_pop_valtype(interp, type, &c)))  {
@@ -4071,21 +4112,7 @@ static int interp_store(struct wasm_interp *interp, struct memarg *memarg,
 		return interp_error(interp, "pop stack");
 	}
 
-	if (unlikely(!interp_mem_offset(interp, N, i, type, memarg, &target))) {
-		return interp_error(interp, "memory target");
-	}
-
-	if (N != 0) {
-		if (!wrap_val(&c, N)) {
-			return interp_error(interp,
-				"implement wrap val (truncate?) for %s",
-				valtype_name(c.type));
-		}
-	}
-
-	memcpy(target.pos, &c.num.i32, target.size);
-
-	return 1;
+	return store_val(interp, i, memarg, type, &c, N);
 }
 
 static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
@@ -4103,12 +4130,14 @@ static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 		return interp_error(interp, "pop stack");
 	}
 
-	if (unlikely(!interp_mem_offset(interp, N, i, type, memarg, &target))) {
+	if (unlikely(!interp_mem_offset(interp, &N, i, type, memarg, &target))) {
 		return interp_error(interp, "memory target");
 	}
 
-	memcpy(&out.num.i64, target.pos, target.size);
-	out.num.i64 &= (1UL << target.size)-1;
+	memcpy(&out.num.i32, target.pos, target.size);
+	wrap_val(&out, target.size * 8);
+	debug("loading %d from %ld (copying %d bytes)\n", out.num.i32,
+			target.pos - interp->memory.start, target.size);
 
 	if (unlikely(!stack_pushval(interp, &out))) {
 		return interp_error(interp,
@@ -5004,6 +5033,9 @@ static int init_global(struct wasm_interp *interp, struct global *global,
 		return interp_error(interp, "eval const expr");
 	}
 
+	debug("init global to %s %d\n", valtype_name(global_inst->val.type),
+			global_inst->val.num.i32);
+
 	if (cursor_top(&interp->stack, sizeof(struct val))) {
 		return interp_error(interp, "stack not empty");
 	}
@@ -5241,6 +5273,7 @@ static int reset_memory(struct wasm_interp *interp)
 					pages);
 		}
 		assert(interp->memory.p > interp->memory.start);
+		memset(interp->memory.start, 0, pages * WASM_PAGE_SIZE);
 	}
 
 	return 1;
@@ -5382,12 +5415,6 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		return interp_error(interp, "not enough memory");
 	}
 
-	if (!reset_memory(interp))
-		return interp_error(interp, "reset memory");
-
-	if (!instantiate_module(interp))
-		return interp_error(interp, "instantiate module");
-
 	return 1;
 }
 
@@ -5419,6 +5446,12 @@ int interp_wasm_module(struct wasm_interp *interp)
 	reset_cursor(&interp->callframes);
 
 	// don't reset labels for perf!
+
+	if (!reset_memory(interp))
+		return interp_error(interp, "reset memory");
+
+	if (!instantiate_module(interp))
+		return interp_error(interp, "instantiate module");
 
 	//interp->mem.p = interp->mem.start;
 
