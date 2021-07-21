@@ -492,7 +492,7 @@ struct blocktype {
 	enum blocktype_tag tag;
 	union {
 		enum valtype valtype;
-		unsigned int type_index;
+		int type_index;
 	};
 };
 
@@ -503,8 +503,8 @@ struct block {
 };
 
 struct memarg {
-	unsigned int offset;
-	unsigned int align;
+	int offset;
+	int align;
 };
 
 struct br_table {

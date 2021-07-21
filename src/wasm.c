@@ -230,8 +230,10 @@ static void print_val(struct val *val)
 	case val_f64: printf("%f", val->num.f64); break;
 
 	case val_ref_null:
+		      break;
 	case val_ref_func:
 	case val_ref_extern:
+		      printf("%d", val->ref.addr);
 		      break;
 	}
 	printf("%s", valtype_literal(val->type));
@@ -263,23 +265,6 @@ static void print_stack(struct cursor *stack)
 	}
 
 	stack->p = p;
-}
-
-static int builtin_get_args(struct wasm_interp *interp)
-{
-	struct val *argv, *argv_buf;
-
-	if (!(argv = get_local(interp, 0)))
-		return interp_error(interp, "argv");
-
-	if (!(argv_buf = get_local(interp, 1)))
-		return interp_error(interp, "argv_buf");
-
-	print_stack(&interp->stack);
-
-	debug("get args %d %d\n", argv->num.i32, argv_buf->num.i32);
-
-	return 1;
 }
 
 static INLINE int cursor_pushval(struct cursor *cur, struct val *val)
@@ -332,6 +317,7 @@ static int builtin_proc_exit(struct wasm_interp *interp)
 }
 
 static int builtin_get_args_sizes(struct wasm_interp *interp);
+static int builtin_get_args(struct wasm_interp *interp);
 
 static struct builtin BUILTINS[] = {
 	{ .name = "args_get",       .fn = builtin_get_args },
@@ -948,14 +934,53 @@ static int leb128_write(struct cursor *write, unsigned int value)
 #define LEB128_4(type) (BYTE_AT(type, 3, 21) | LEB128_3(type))
 #define LEB128_5(type) (BYTE_AT(type, 4, 28) | LEB128_4(type))
 
-static int leb128_read(struct cursor *read, unsigned int *val)
+static INLINE int leb128_read(struct cursor *read, unsigned int *val_)
 {
-	unsigned char p[5];
-	unsigned char *start;
+	int *val = (signed int*)val_;
+	int shift;
+	u8 byte;
 
-	start = read->p;
 	*val = 0;
+	shift = 0;
 
+	do {
+		if (!pull_byte(read, &byte))
+			return 0;
+		*val |= ((byte & 0x7F) << shift);
+		shift += 7;
+	} while ((byte & 0x80) != 0);
+
+	/* sign bit of byte is second high-order bit (0x40) */
+	if ((shift < (signed int)sizeof(*val)) && (byte & 0x40))
+		*val |= (~0 << shift);
+
+	return 1;
+}
+
+static INLINE int uleb128_read(struct cursor *read, unsigned int *val)
+{
+	//unsigned char *start;
+	int shift;
+	u8 byte;
+
+	//start = read->p;
+	*val = 0;
+	shift = 0;
+
+	for (;;) {
+		if (!pull_byte(read, &byte)) {
+			return 0;
+		}
+		*val |= (byte & 0x7F) << shift;
+		if ((byte & 0x80) == 0)
+			break;
+		shift += 7;
+	}
+
+	return 1;
+}
+
+/*
 	if (pull_byte(read, &p[0]) && (p[0] & 0x80) == 0) {
 		*val = LEB128_1(unsigned int);
 		return 1;
@@ -973,12 +998,12 @@ static int leb128_read(struct cursor *read, unsigned int *val)
 			*val = LEB128_5(unsigned int);
 			return 5;
 		}
+		//printf("%02X & 0xF0\n", p[4] & 0xF0);
 	}
+	*/
 
 	/* reset if we're missing */
-	read->p = start;
-	return 0;
-}
+	//read->p = start;
 
 static INLINE int read_int(struct cursor *read, int *val)
 {
@@ -1687,7 +1712,7 @@ static const char *show_instr(struct instr *instr)
 static int eval_const_instr(struct instr *instr, struct errors *errs,
 		struct cursor *stack)
 {
-	debug("eval_const_instr %s\n", show_instr(instr));
+	//debug("eval_const_instr %s\n", show_instr(instr));
 
 	switch ((enum const_instr)instr->tag) {
 	case ci_global_get:
@@ -1886,7 +1911,7 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
                if (!pull_byte(p->code, &tag))
                        return note_error(p->errs, p->code, "oob");
 
-	       if (tag == stop_instr ||
+	       if ((tag != i_if && tag == stop_instr) ||
 		   (stop_instr == i_if && (tag == i_else || tag == i_end))) {
 		       //debug("parse_instrs_until ending\n");
 		       *instr_len = p->code->p - *parsed_instrs;
@@ -2605,7 +2630,7 @@ fail:
 	return 0;
 }
 
-static int interp_prep_binop(struct wasm_interp *interp, struct val *lhs,
+static INLINE int interp_prep_binop(struct wasm_interp *interp, struct val *lhs,
 		struct val *rhs, struct val *c, enum valtype typ)
 {
 	c->type = typ;
@@ -2816,17 +2841,6 @@ static INLINE int interp_i32_const(struct wasm_interp *interp, int c)
 	return cursor_pushval(&interp->stack, &val);
 }
 
-static struct functype *get_function_type(struct wasm_interp *interp, int ind)
-{
-	if (unlikely(!is_valid_fn_index(interp->module, ind))) {
-		interp_error(interp, "ind %d >= num_indices %d",
-				ind,interp->module->func_section.num_indices);
-		return NULL;
-	}
-
-	return interp->module->funcs[ind].functype;
-}
-
 static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 {
 	int offset;
@@ -2927,14 +2941,83 @@ static INLINE int count_resolvers(struct wasm_interp *interp)
 	return cursor_count(&interp->resolver_stack, sizeof(struct resolver));
 }
 
-static int call_function(struct wasm_interp *interp, int func_index)
+static void make_default_val(struct val *val)
+{
+	switch (val->type) {
+	case val_i32:
+		val->num.i32 = 0;
+		break;
+	case val_i64:
+		val->num.i64 = 0;
+		break;
+	case val_f32:
+		val->num.f32 = 0.0;
+		break;
+	case val_f64:
+		val->num.f64 = 0.0;
+		break;
+	case val_ref_null:
+	case val_ref_func:
+	case val_ref_extern:
+		val->ref.addr = 0;
+		break;
+	}
+}
+
+static int prepare_function_args(struct wasm_interp *interp, struct func *func,
+		int func_index)
 {
 	static char buf[128];
-	int i;
-	struct functype *functype;
-	struct func *func;
-	struct val val;
+	struct local *local;
 	enum valtype paramtype;
+	struct val val;
+	int i, ind;
+
+	/* push params as locals */
+	for (i = 0; i < func->functype->params.num_valtypes; i++) {
+		paramtype = (enum valtype)func->functype->params.valtypes[i];
+		ind = func->functype->params.num_valtypes-1-i;
+		local = &func->locals[ind];
+
+		if (unlikely(!cursor_popval(&interp->stack, &val))) {
+			return interp_error(interp,
+				"not enough arguments for call to %s: [%s], needed %d args, got %d",
+				get_function_name(interp->module, func_index),
+				functype_str(func->functype, buf, sizeof(buf)),
+				func->functype->params.num_valtypes,
+				ind);
+		}
+
+		if (unlikely(val.type != paramtype)) {
+			return interp_error(interp,
+				"call parameter %d type mismatch. got %s, expected %s",
+				ind+1,
+				valtype_name(val.type),
+				valtype_name(paramtype));
+		}
+
+		debug("setting param %d (%s) to ",
+				ind, valtype_name(local->val.type));
+#ifdef DEBUG
+		print_val(&val); printf("\n");
+#endif
+		memcpy(&func->locals[ind], &val, sizeof(struct val));
+	}
+
+
+	for (; i < func->num_locals - func->functype->params.num_valtypes; i++) {
+		local = &func->locals[i];
+		make_default_val(&local->val);
+		debug("setting local %d (%s) to default\n",
+				i, valtype_name(local->val.type));
+	}
+
+	return 1;
+}
+
+static int call_function(struct wasm_interp *interp, int func_index)
+{
+	struct func *func;
 	unsigned int offset;
 
 	debug("calling %s:%d\n", get_function_name(interp->module, func_index), func_index);
@@ -2953,45 +3036,8 @@ static int call_function(struct wasm_interp *interp, int func_index)
 	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
 		return interp_error(interp, "push resolver offset");
 
-	/* get type signature to know how many locals to push as params */
-	if (unlikely(!(functype = get_function_type(interp, func_index)))) {
-		return interp_error(interp,
-			"couldn't get function type for function '%s' (%d)",
-			get_function_name(interp->module, func_index),
-			func_index);
-	}
-
-	/*
-	if (func.type == func_type_builtin && !func.builtin->prepare_args(interp)) {
-		return interp_error(interp, "prepare '%s' builtin",
-				func.builtin->name);
-	}
-	*/
-
-	/* push params as locals */
-	for (i = 0; i < functype->params.num_valtypes; i++) {
-		paramtype = (enum valtype)functype->params.valtypes[i];
-
-		if (unlikely(!cursor_popval(&interp->stack, &val))) {
-			return interp_error(interp,
-				"not enough arguments for call to %s: [%s], needed %d args, got %d",
-				get_function_name(interp->module, func_index),
-				functype_str(functype, buf, sizeof(buf)),
-				functype->params.num_valtypes,
-				i);
-		}
-
-		if (unlikely(val.type != paramtype)) {
-			return interp_error(interp,
-				"call parameter %d type mismatch. got %s, expected %s",
-				i+1,
-				valtype_name(val.type),
-				valtype_name(paramtype));
-		}
-
-		if (unlikely(!set_fn_local(interp, func_index, i, &val))) {
-			return interp_error(interp, "set param local %d", i);
-		}
+	if (!prepare_function_args(interp, func, func_index)) {
+		return interp_error(interp, "prepare args");
 	}
 
 	if (unlikely(!call_func(interp, func, func_index))) {
@@ -3121,7 +3167,7 @@ static int parse_blocktype(struct cursor *cur, struct errors *errs, struct block
 		blocktype->tag = blocktype_index;
 		cur->p--;
 
-		if (!leb128_read(cur, &blocktype->type_index)) {
+		if (!read_int(cur, &blocktype->type_index)) {
 			note_error(errs, cur, "parse_blocktype: read type_index\n");
 			return 0;
 		}
@@ -3442,8 +3488,8 @@ static int parse_block(struct expr_parser *p, struct block *block, u8 start_tag,
 
 static INLINE int parse_memarg(struct cursor *code, struct memarg *memarg)
 {
-	return leb128_read(code, &memarg->offset) &&
-	       leb128_read(code, &memarg->align);
+	return read_int(code, &memarg->align) &&
+	       read_int(code, &memarg->offset);
 }
 
 static int parse_call_indirect(struct cursor *code,
@@ -3510,7 +3556,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 
 		case i_memory_size:
 		case i_memory_grow:
-			return pull_byte(p->code, &op->memidx);
+			return consume_byte(p->code, 0);
 
 		case i_block:
 			return parse_block(p, &op->block, i_block, i_end);
@@ -3576,6 +3622,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_f32_const:
 		case i_f64_const:
 			return note_error(p->errs, p->code, "parse float const");
+
 
 		// single-tag ops
 		case i_unreachable:
@@ -3920,10 +3967,8 @@ static INLINE int interp_br_if(struct wasm_interp *interp, int ind)
 	return 1;
 }
 
-static struct val *get_global(struct wasm_interp *interp, int ind)
+static struct val *get_global_inst(struct wasm_interp *interp, int ind)
 {
-	struct globalsec *globsec;
-	struct global *global;
 	struct global_inst *global_inst;
 
 	if (unlikely(!was_section_parsed(interp->module, section_global))) {
@@ -3932,19 +3977,16 @@ static struct val *get_global(struct wasm_interp *interp, int ind)
 		return NULL;
 	}
 
-	globsec = &interp->module->global_section;
-
 	if (unlikely(ind >= interp->module_inst.num_globals)) {
 		interp_error(interp, "invalid global index %d (max %d)", ind,
-			     globsec->num_globals-1);
+			     interp->module_inst.num_globals);
 		return NULL;
 	}
 
-	global = &interp->module->global_section.globals[ind];
 	global_inst = &interp->module_inst.globals[ind];
 
 	/* copy initialized global from module to global instance */
-	memcpy(&global_inst->val, &global->val, sizeof(global_inst->val));
+	//memcpy(&global_inst->val, &global->val, sizeof(global_inst->val));
 
 	return &global_inst->val;
 }
@@ -3960,7 +4002,7 @@ static int interp_global_get(struct wasm_interp *interp, int ind)
 				ind, section->num_globals-1);
 	}
 
-	if (!(global = get_global(interp, ind))) {
+	if (!(global = get_global_inst(interp, ind))) {
 		return interp_error(interp, "get global");
 	}
 
@@ -4069,30 +4111,55 @@ static int store_val(struct wasm_interp *interp, int i,
 	return 1;
 }
 
-static int store_simple(struct wasm_interp *interp, int offset, struct val *val)
+static INLINE int store_simple(struct wasm_interp *interp, int offset, struct val *val)
 {
 	struct memarg memarg = {};
 	return store_val(interp, offset, &memarg, val->type, val, 0);
 }
 
+static INLINE int store_i32(struct wasm_interp *interp, int offset, int i)
+{
+	struct val val;
+	make_i32_val(&val, i);
+	return store_simple(interp, offset, &val);
+}
+
+static int builtin_get_args(struct wasm_interp *interp)
+{
+	struct val *argv, *argv_buf;
+
+	if (!(argv = get_local(interp, 0)))
+		return interp_error(interp, "argv");
+
+	if (!(argv_buf = get_local(interp, 1)))
+		return interp_error(interp, "argv_buf");
+
+	if (!stack_push_i32(interp, 0))
+		return interp_error(interp, "push ret");
+
+	debug("get args %d %d\n", argv->num.i32, argv_buf->num.i32);
+
+	return 1;
+}
+
 static int builtin_get_args_sizes(struct wasm_interp *interp)
 {
-	struct val *argc_addr, *argv_buf_size;
-	struct val argc;
-
-	make_i32_val(&argc, 1);
+	struct val *argc_addr, *argv_buf_size_addr;
 
 	if (!(argc_addr = get_local(interp, 0)))
 		return interp_error(interp, "argc");
 
-	if (!(argv_buf_size = get_local(interp, 1)))
+	if (!(argv_buf_size_addr = get_local(interp, 1)))
 		return interp_error(interp, "argv_buf_size");
 
-	if (!store_simple(interp, argc_addr->num.i32, &argc)) {
+	if (!store_i32(interp, argc_addr->num.i32, 1984))
 		return interp_error(interp, "store argc");
-	}
 
-	debug("get_args_sizes %d %d\n", argc_addr->num.i32, argv_buf_size->num.i32);
+	if (!store_i32(interp, argv_buf_size_addr->num.i32, 1))
+		return interp_error(interp, "store arg buf size");
+
+	debug("get_args_sizes %d %d\n", argc_addr->num.i32,
+			argv_buf_size_addr->num.i32);
 
 	return stack_push_i32(interp, 0);
 }
@@ -4151,7 +4218,7 @@ static INLINE int interp_global_set(struct wasm_interp *interp, int global_ind)
 {
 	struct val *global, setval;
 
-	if (unlikely(!(global = get_global(interp, global_ind)))) {
+	if (unlikely(!(global = get_global_inst(interp, global_ind)))) {
 		return interp_error(interp, "couldn't get global %d", global_ind);
 	}
 
@@ -4210,6 +4277,17 @@ static INLINE int interp_memory_size(struct wasm_interp *interp, u8 memidx)
 	}
 
 	return 1;
+}
+
+static INLINE int interp_i32_ne(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+		return interp_error(interp, "binop prep");
+	}
+
+	return stack_push_i32(interp, lhs.num.i32 != rhs.num.i32);
 }
 
 static INLINE int interp_i32_mul(struct wasm_interp *interp)
@@ -4625,6 +4703,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_or:      return interp_i32_or(interp);
 	case i_i32_and:     return interp_i32_and(interp);
 	case i_i32_mul:     return interp_i32_mul(interp);
+	case i_i32_ne:      return interp_i32_ne(interp);
 
 	case i_i64_shl:     return interp_i64_shl(interp);
 	case i_i64_or:      return interp_i64_or(interp);
@@ -4706,10 +4785,12 @@ static INLINE int interp_parse_instr(struct wasm_interp *interp,
 
 	instr->tag = tag;
 	instr->pos = code->p - 1 - code->start;
-	instr->tag = tag;
 
-	if (!is_control_instr(tag) &&
-	    !parse_instr(parser, instr->tag, instr)) {
+	if (is_control_instr(tag)) {
+		return 1;
+	}
+
+	if (!parse_instr(parser, instr->tag, instr)) {
 		return interp_error(interp, "parse instr %s", instr_name(tag));
 	}
 
@@ -4740,7 +4821,7 @@ static enum interp_end interp_code_end(struct wasm_interp *interp,
 		return interp_error(interp, "count local resolvers");
 	}
 
-	debug("interp_code_end local resolvers: %d\n", num_resolvers);
+	//debug("interp_code_end local resolvers: %d\n", num_resolvers);
 
 	if (num_resolvers == 0) {
 		return interp_end_done;
@@ -4755,6 +4836,7 @@ static enum interp_end interp_code_end(struct wasm_interp *interp,
 
 		resolve_label(label, code);
 
+		debug("loop jumping\n");
 		if (!interp_jump(interp, label_instr_pos(label))) {
 			return interp_error(interp, "jump to loop label");
 		}
@@ -4872,6 +4954,7 @@ static int count_fn_locals(struct func *func)
 	num_locals += func->functype->params.num_valtypes;
 
 	if (func->type == func_type_wasm) {
+		// counts locals of the same type
 		for (i = 0; i < func->wasm_func->num_locals; i++) {
 			num_locals += func->wasm_func->locals->val.num.i32;
 		}
@@ -4954,7 +5037,7 @@ static int calculate_locals_size(struct module *module)
 static int alloc_locals(struct module *module, struct cursor *mem,
 		struct errors *errs)
 {
-	int i, num_locals, size, sizes = 0;
+	int i, j, num_locals, size, sizes = 0;
 	struct func *func;
 
 	for (i = 0; i < module->num_funcs; i++) {
@@ -4972,6 +5055,10 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 			return note_error(errs, mem,
 					"could not alloc locals for %s",
 					func->name);
+		}
+
+		for (j = 0; j < func->num_locals; j++) {
+			func->locals[j].val.type = func->functype->params.valtypes[j];
 		}
 	}
 
