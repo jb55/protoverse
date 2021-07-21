@@ -34,6 +34,9 @@ wasm: $(WASMS)
 %.wasm: %.wat
 	wat2wasm $^ -o $@
 
+%.c.wasm: %.wasm.c
+	emcc -g $< -s WASM=1 -o $@
+
 wasm/hello-c.wasm: wasm/hello-c.c
 	emcc -g $< -s WASM=1 -o $@
 

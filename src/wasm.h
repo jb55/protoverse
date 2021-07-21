@@ -41,8 +41,8 @@ enum limit_type {
 };
 
 struct limits {
-	unsigned int min;
-	unsigned int max;
+	u32 min;
+	u32 max;
 	enum limit_type type;
 };
 
@@ -69,7 +69,7 @@ enum reftype {
 
 struct resulttype {
 	unsigned char *valtypes; /* enum valtype */
-	int num_valtypes;
+	u32 num_valtypes;
 };
 
 struct functype {
@@ -84,7 +84,7 @@ struct table {
 
 struct tablesec {
 	struct table *tables;
-	int num_tables;
+	u32 num_tables;
 };
 
 enum elem_mode {
@@ -94,24 +94,26 @@ enum elem_mode {
 };
 
 struct expr {
-	unsigned char *code;
-	int code_len;
+	u8 *code;
+	u32 code_len;
 };
 
 struct refval {
-	int addr;
+	u32 addr;
 };
 
 struct table_inst {
 	struct refval *refs;
 	enum reftype reftype;
-	int num_refs;
+	u32 num_refs;
 };
 
 struct numval {
 	union {
 		int i32;
-		u64 i64;
+		u32 u32;
+		int64_t i64;
+		uint64_t u64;
 		float f32;
 		double f64;
 	};
@@ -133,9 +135,9 @@ struct elem_inst {
 
 struct elem {
 	struct expr offset;
-	int tableidx;
+	u32 tableidx;
 	struct expr *inits;
-	int num_inits;
+	u32 num_inits;
 	enum elem_mode mode;
 	enum reftype reftype;
 	struct val val;
@@ -149,17 +151,17 @@ struct customsec {
 
 struct elemsec {
 	struct elem *elements;
-	int num_elements;
+	u32 num_elements;
 };
 
 struct memsec {
 	struct limits *mems; /* memtype */
-	int num_mems;
+	u32 num_mems;
 };
 
 struct funcsec {
-	unsigned int *type_indices;
-	int num_indices;
+	u32 *type_indices;
+	u32 num_indices;
 };
 
 enum mut {
@@ -174,12 +176,12 @@ struct globaltype {
 
 struct globalsec {
 	struct global *globals;
-	int num_globals;
+	u32 num_globals;
 };
 
 struct typesec {
 	struct functype *functypes;
-	int num_functypes;
+	u32 num_functypes;
 };
 
 enum import_type {
@@ -192,7 +194,7 @@ enum import_type {
 struct importdesc {
 	enum import_type type;
 	union {
-		unsigned int typeidx;
+		u32 typeidx;
 		struct limits tabletype;
 		struct limits memtype;
 		struct globaltype globaltype;
@@ -208,7 +210,7 @@ struct import {
 
 struct importsec {
 	struct import *imports;
-	int num_imports;
+	u32 num_imports;
 };
 
 struct global {
@@ -225,7 +227,7 @@ struct local {
 struct wasm_func {
 	struct expr code;
 	struct local *locals;
-	int num_locals;
+	u32 num_locals;
 };
 
 enum func_type {
@@ -239,7 +241,7 @@ struct func {
 		struct builtin *builtin;
 	};
 	struct local *locals;
-	int num_locals;
+	u32 num_locals;
 	struct functype *functype;
 	enum func_type type;
 	const char *name;
@@ -247,7 +249,7 @@ struct func {
 
 struct codesec {
 	struct wasm_func *funcs;
-	int num_funcs;
+	u32 num_funcs;
 };
 
 enum exportdesc {
@@ -259,13 +261,13 @@ enum exportdesc {
 
 struct wexport {
 	const char *name;
-	unsigned int index;
+	u32 index;
 	enum exportdesc desc;
 };
 
 struct exportsec {
 	struct wexport *exports;
-	int num_exports;
+	u32 num_exports;
 };
 
 struct section {
@@ -499,33 +501,33 @@ struct blocktype {
 struct block {
 	struct blocktype type;
 	unsigned char *instrs;
-	int instrs_len;
+	u32 instrs_len;
 };
 
 struct memarg {
-	int offset;
-	int align;
+	u32 offset;
+	u32 align;
 };
 
 struct br_table {
-	int num_label_indices;
-	int label_indices[32];
-	int default_label;
+	u32 num_label_indices;
+	u32 label_indices[32];
+	u32 default_label;
 };
 
 struct call_indirect {
-	int tableidx;
-	int typeidx;
+	u32 tableidx;
+	u32 typeidx;
 };
 
 struct table_init {
-	int tableidx;
-	int elemidx;
+	u32 tableidx;
+	u32 elemidx;
 };
 
 struct select_instr {
 	u8 *valtypes;
-	int num_valtypes;
+	u32 num_valtypes;
 };
 
 struct instr {
@@ -540,8 +542,10 @@ struct instr {
 		struct block block;
 		double fp_double;
 		float fp_single;
-		int integer;
+		int i32;
+		u32 u32;
 		int64_t i64;
+		u64 u64;
 		unsigned char memidx;
 		enum reftype reftype;
 	};
@@ -553,14 +557,14 @@ enum datamode {
 };
 
 struct wdata_active {
-	int mem_index;
+	u32 mem_index;
 	struct expr offset_expr;
 };
 
 struct wdata {
 	struct wdata_active active;
-	unsigned char *bytes;
-	int bytes_len;
+	u8 *bytes;
+	u32 bytes_len;
 	enum datamode mode;
 };
 
@@ -570,7 +574,7 @@ struct datasec {
 };
 
 struct startsec {
-	int start_fn;
+	u32 start_fn;
 };
 
 struct module {
@@ -578,7 +582,7 @@ struct module {
 	unsigned int custom_sections;
 
 	struct func *funcs;
-	int num_funcs;
+	u32 num_funcs;
 
 	struct customsec custom_section[MAX_CUSTOM_SECTIONS];
 	struct typesec type_section;
@@ -602,7 +606,7 @@ struct label {
 
 struct callframe {
 	struct cursor code;
-	int fn;
+	u32 fn;
 };
 
 struct resolver {
@@ -620,9 +624,9 @@ struct module_inst {
 	struct global_inst *globals;
 	struct elem_inst *elements;
 
-	int num_tables;
-	int num_globals;
-	int num_elements;
+	u32 num_tables;
+	u32 num_globals;
+	u32 num_elements;
 
 	int start_fn;
 	unsigned char *globals_init;

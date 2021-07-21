@@ -220,7 +220,9 @@ static inline int cursor_push(struct cursor *cursor, u8 *data, int len)
 		return 0;
 	}
 
-	memcpy(cursor->p, data, len);
+	if (cursor->p != data)
+		memcpy(cursor->p, data, len);
+
 	cursor->p += len;
 
 	return 1;

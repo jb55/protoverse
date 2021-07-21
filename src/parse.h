@@ -74,6 +74,7 @@ struct tok_str {
 	u8 *data;
 	int len;
 };
+
 union number {
 	int integer;
 	double fdouble;

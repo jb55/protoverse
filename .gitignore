@@ -11,3 +11,4 @@ todo/done.txt
 *.wasm
 /tags
 todo/todo.txt.bak
+*.txt
