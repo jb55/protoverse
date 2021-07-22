@@ -2985,18 +2985,20 @@ static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 
 static INLINE int drop_callframe(struct wasm_interp *interp)
 {
-	int count, offset;
+	int offset;
 
-	if (!count_local_resolvers(interp, &count)) {
+	/*
+	if (unlikely(!count_local_resolvers(interp, &count))) {
 		return interp_error(interp, "count local resolvers");
 	}
 
-	if (count != 0) {
+	if (unlikely(count != 0)) {
 		return interp_error(interp, "unclean callframe drop, still have"
 				" %d unpopped labels", count);
 	}
+	*/
 
-	if (!cursor_popint(&interp->resolver_offsets, &offset)) {
+	if (unlikely(!cursor_popint(&interp->resolver_offsets, &offset))) {
 		return interp_error(interp, "pop resolver_offsets");
 	}
 
@@ -5724,12 +5726,14 @@ static int instantiate_module(struct wasm_interp *interp)
 	     ? interp->module_inst.start_fn
 	     : find_start_function(interp->module);
 
+	/*
 	memset(interp->module_inst.globals, 0,
 			interp->module_inst.num_globals *
 			sizeof(*interp->module_inst.globals));
 
 	memset(interp->module_inst.globals_init, 0,
 			interp->module_inst.num_globals);
+			*/
 
 	if (func == -1) {
 		return interp_error(interp, "no start function found");
@@ -5775,7 +5779,7 @@ static int reset_memory(struct wasm_interp *interp)
 					pages);
 		}
 		assert(interp->memory.p > interp->memory.start);
-		memset(interp->memory.start, 0, pages * WASM_PAGE_SIZE);
+		//memset(interp->memory.start, 0, pages * WASM_PAGE_SIZE);
 	}
 
 	return 1;
