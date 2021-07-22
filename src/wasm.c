@@ -26,7 +26,7 @@
 #define NUM_LOCALS 0xFFFF
 #define WASM_PAGE_SIZE 65536
 
-static const int MAX_LABELS = 128;
+static const int MAX_LABELS = 256;
 
 static int interp_code(struct wasm_interp *interp);
 
