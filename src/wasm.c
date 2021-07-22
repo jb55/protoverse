@@ -2987,7 +2987,11 @@ static INLINE int drop_callframe(struct wasm_interp *interp)
 {
 	int count, offset;
 
-	if (!count_local_resolvers(interp, &count) != 0) {
+	if (!count_local_resolvers(interp, &count)) {
+		return interp_error(interp, "count local resolvers");
+	}
+
+	if (count != 0) {
 		return interp_error(interp, "unclean callframe drop, still have"
 				" %d unpopped labels", count);
 	}
