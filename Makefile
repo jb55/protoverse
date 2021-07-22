@@ -14,6 +14,8 @@ OBJS = src/io.o \
        src/error.o \
        src/wasm.o
 
+SRCS=$(OBJS:.o=.c)
+
 WASMS = wasm/hello-c.wasm \
 	wasm/hello.wasm
 
@@ -39,6 +41,9 @@ wasm: $(WASMS)
 
 wasm/hello-c.wasm: wasm/hello-c.c
 	emcc -g $< -s WASM=1 -o $@
+
+protoverse.wasm: src/protoverse.c $(SRCS)
+	emcc -g $^ -s WASM=1 -o $@
 
 protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"
