@@ -332,20 +332,20 @@ static int interp_exit(struct wasm_interp *interp)
 	return 0;
 }
 
-static int builtin_proc_exit(struct wasm_interp *interp)
+static int wasi_proc_exit(struct wasm_interp *interp)
 {
 	return interp_exit(interp);
 }
 
-static int builtin_get_args_sizes(struct wasm_interp *interp);
-static int builtin_get_args(struct wasm_interp *interp);
-static int builtin_fd_write(struct wasm_interp *interp);
+static int wasi_args_sizes_get(struct wasm_interp *interp);
+static int wasi_get_args(struct wasm_interp *interp);
+static int wasi_fd_write(struct wasm_interp *interp);
 
 static struct builtin BUILTINS[] = {
-	{ .name = "args_get",       .fn = builtin_get_args },
-	{ .name = "fd_write",       .fn = builtin_fd_write },
-	{ .name = "args_sizes_get", .fn = builtin_get_args_sizes },
-	{ .name = "proc_exit",      .fn = builtin_proc_exit  },
+	{ .name = "args_get",       .fn = wasi_get_args },
+	{ .name = "fd_write",       .fn = wasi_fd_write },
+	{ .name = "args_sizes_get", .fn = wasi_args_sizes_get },
+	{ .name = "proc_exit",      .fn = wasi_proc_exit  },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -3620,9 +3620,6 @@ static int pop_label_and_skip(struct wasm_interp *interp, struct label *label,
 	struct resolver resolver;
 	assert(is_label_resolved(label));
 
-	if (unlikely(times == 0))
-		return interp_error(interp, "can't pop label 0 times");
-
 	for (i = 0; i < times; i++) {
 		if (!pop_resolver(interp, &resolver)) {
 			return interp_error(interp, "top resolver");
@@ -3980,7 +3977,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 	return note_error(p->errs, p->code, "unhandled tag: 0x%x", tag);
 }
 
-static int branch_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
+static int if_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
 {
 	u8 *instrs;
 	u32 instrs_len;
@@ -4080,7 +4077,7 @@ static int interp_if(struct wasm_interp *interp)
 		return 1;
 	}
 
-	if (unlikely(!branch_jump(interp, i_if, i_if))) {
+	if (unlikely(!if_jump(interp, i_if, i_if))) {
 		return interp_error(interp, "jump");
 	}
 
@@ -4435,16 +4432,20 @@ static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 	return 1;
 }
 
-static INLINE int load_i32(struct wasm_interp *interp, int *i)
+static INLINE int load_i32(struct wasm_interp *interp, int addr, int *i)
 {
 	struct memarg memarg = { .offset = 0, .align = 0 };
-	if (!interp_load(interp, &memarg, val_i32, 0, -1)) {
+
+	if (unlikely(!stack_push_i32(interp, addr)))
+		return interp_error(interp, "push addr %d", addr);
+
+	if (unlikely(!interp_load(interp, &memarg, val_i32, 0, -1)))
 		return interp_error(interp, "load");
-	}
+
 	return stack_pop_i32(interp, i);
 }
 
-static int builtin_fd_write(struct wasm_interp *interp)
+static int wasi_fd_write(struct wasm_interp *interp)
 {
 	struct val *fd, *iovs_ptr, *iovs_len, *written;
 	int i, ind, iovec_data = 0, str_len = 0, wrote = 0;
@@ -4468,19 +4469,15 @@ static int builtin_fd_write(struct wasm_interp *interp)
 	for (i = 0; i < iovs_len->num.i32; i++) {
 		ind = 8*i;
 
-		if (unlikely(!stack_push_i32(interp, iovs_ptr->num.i32 + ind)))
-			return interp_error(interp, "push iovec ptr");
-
-		if (unlikely(!load_i32(interp, &iovec_data)))
+		if (unlikely(!load_i32(interp, iovs_ptr->num.i32 + ind,
+				       &iovec_data))) {
 			return interp_error(interp, "load iovec data");
-
-		if (unlikely(!stack_push_i32(interp,
-					     iovs_ptr->num.i32 + (ind+4)))) {
-			return interp_error(interp, "push strlen ptr");
 		}
 
-		if (unlikely(!load_i32(interp, &str_len)))
+		if (unlikely(!load_i32(interp,iovs_ptr->num.i32 + (ind+4),
+				       &str_len))) {
 			return interp_error(interp, "load iovec data");
+		}
 
 		if (unlikely(interp->memory.start + iovec_data + str_len >=
 				interp->memory.p)) {
@@ -4510,9 +4507,11 @@ static int builtin_fd_write(struct wasm_interp *interp)
 	return stack_push_i32(interp, written->num.i32);
 }
 
-static int builtin_get_args(struct wasm_interp *interp)
+static int wasi_get_args(struct wasm_interp *interp)
 {
 	struct val *argv, *argv_buf;
+	struct cursor writer;
+	int i;
 
 	if (!(argv = get_local(interp, 0)))
 		return interp_error(interp, "argv");
@@ -4523,15 +4522,30 @@ static int builtin_get_args(struct wasm_interp *interp)
 	if (!stack_push_i32(interp, 0))
 		return interp_error(interp, "push ret");
 
+	make_cursor(interp->memory.start + argv_buf->num.i32,
+		    interp->memory.p, &writer);
+
 	debug("get args %d %d\n", argv->num.i32, argv_buf->num.i32);
+
+	for (i = 0; i < interp->wasi.argc; i++) {
+		if (!store_i32(interp, argv->num.i32 + i*4,
+			       writer.p - interp->memory.start)) {
+			return interp_error(interp, "store argv %d ptr\n", i);
+		}
+
+		if (!cursor_push(&writer, (u8*)interp->wasi.argv[i],
+				strlen(interp->wasi.argv[i])+1)) {
+			return interp_error(interp,"write arg %d", i+1);
+		}
+	}
 
 	return 1;
 }
 
-static int builtin_get_args_sizes(struct wasm_interp *interp)
+static int wasi_args_sizes_get(struct wasm_interp *interp)
 {
 	struct val *argc_addr, *argv_buf_size_addr;
-	int i;
+	int i, size = 0;
 
 	if (!(argc_addr = get_local(interp, 0)))
 		return interp_error(interp, "argc");
@@ -4542,12 +4556,11 @@ static int builtin_get_args_sizes(struct wasm_interp *interp)
 	if (!store_i32(interp, argc_addr->num.i32, interp->wasi.argc))
 		return interp_error(interp, "store argc");
 
-	for (i = 0; i < interp->wasi.argc; i++) {
-		if (!store_i32(interp, argv_buf_size_addr->num.i32 + i*4,
-			       strlen(interp->wasi.argv[i]))) {
-			return interp_error(interp, "store arg size %d/%d",
-					    i+1, interp->wasi.argc);
-		}
+	for (i = 0; i < interp->wasi.argc; i++)
+		size += strlen(interp->wasi.argv[i])+1;
+
+	if (!store_i32(interp, argv_buf_size_addr->num.i32, size)) {
+		return interp_error(interp, "store arg size");
 	}
 
 	return stack_push_i32(interp, 0);
