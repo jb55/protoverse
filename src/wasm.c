@@ -119,7 +119,7 @@ static struct val *get_fn_local(struct wasm_interp *interp, int fn, u32 ind)
 	return &func->locals[ind].val;
 }
 
-static struct val *get_local(struct wasm_interp *interp, u32 ind)
+static INLINE struct val *get_local(struct wasm_interp *interp, u32 ind)
 {
 	struct callframe *frame;
 
@@ -2754,13 +2754,11 @@ static INLINE int interp_local_tee(struct wasm_interp *interp, u32 index)
 {
 	struct val *val;
 
-	if (unlikely(!(val = stack_topval(interp)))) {
+	if (unlikely(!(val = stack_topval(interp))))
 		return interp_error(interp, "pop");
-	}
 
-	if (unlikely(!set_local(interp, index, val))) {
+	if (unlikely(!set_local(interp, index, val)))
 		return interp_error(interp, "set local");
-	}
 
 	return 1;
 }
@@ -2769,13 +2767,11 @@ static int interp_local_set(struct wasm_interp *interp, u32 index)
 {
 	struct val val;
 
-	if (unlikely(!interp_local_tee(interp, index))) {
+	if (unlikely(!interp_local_tee(interp, index)))
 		return interp_error(interp, "tee set");
-	}
 
-	if (unlikely(!stack_popval(interp, &val))) {
+	if (unlikely(!stack_popval(interp, &val)))
 		return interp_error(interp, "pop");
-	}
 
 	return 1;
 }
@@ -3623,7 +3619,7 @@ static int pop_label_and_skip(struct wasm_interp *interp, struct label *label,
 	int i;
 	struct resolver resolver;
 	assert(is_label_resolved(label));
-	
+
 	if (unlikely(times == 0))
 		return interp_error(interp, "can't pop label 0 times");
 
@@ -3642,7 +3638,7 @@ static int pop_label_and_break(struct wasm_interp *interp, struct label *label,
 	int i;
 	struct resolver resolver;
 	assert(is_label_resolved(label));
-	
+
 	if (unlikely(times == 0))
 		return interp_error(interp, "can't pop label 0 times");
 
@@ -3663,7 +3659,7 @@ static int pop_label_and_break(struct wasm_interp *interp, struct label *label,
 	if (!(label = index_frame_label(interp, resolver.label))) {
 		return interp_error(interp, "index label");
 	}
-	
+
 	return break_jump(interp, &resolver, label);
 }
 
@@ -4450,64 +4446,65 @@ static INLINE int load_i32(struct wasm_interp *interp, int *i)
 
 static int builtin_fd_write(struct wasm_interp *interp)
 {
-	struct val *fd, *iovs, *iovs_len, *written;
-	int iovec_data = 0;
-	int str_len = 0;
+	struct val *fd, *iovs_ptr, *iovs_len, *written;
+	int i, ind, iovec_data = 0, str_len = 0, wrote = 0;
 
-	if (!(fd = get_local(interp, 0)))
+	if (unlikely(!(fd = get_local(interp, 0))))
 		return interp_error(interp, "fd");
 
-	if (!(iovs = get_local(interp, 1)))
-		return interp_error(interp, "iovs");
+	if (unlikely(!(iovs_ptr = get_local(interp, 1))))
+		return interp_error(interp, "iovs_ptr");
 
-	if (!(iovs_len = get_local(interp, 2)))
+	if (unlikely(!(iovs_len = get_local(interp, 2))))
 		return interp_error(interp, "iovs_len");
 
-	if (!(written = get_local(interp, 3)))
+	if (unlikely(!(written = get_local(interp, 3))))
 		return interp_error(interp, "written");
 
-	debug("fd_write %d %d %d %d\n",
-			fd->num.i32,
-			iovs->num.i32,
-			iovs_len->num.i32,
-			written->num.i32
+	if (unlikely(fd->num.i32 >= 10))
+		return interp_error(interp, "weird fd %d", fd->num.i32);
+
+	written->num.i32 = 0;
+	for (i = 0; i < iovs_len->num.i32; i++) {
+		ind = 8*i;
+
+		if (unlikely(!stack_push_i32(interp, iovs_ptr->num.i32 + ind)))
+			return interp_error(interp, "push iovec ptr");
+
+		if (unlikely(!load_i32(interp, &iovec_data)))
+			return interp_error(interp, "load iovec data");
+
+		if (unlikely(!stack_push_i32(interp,
+					     iovs_ptr->num.i32 + (ind+4)))) {
+			return interp_error(interp, "push strlen ptr");
+		}
+
+		if (unlikely(!load_i32(interp, &str_len)))
+			return interp_error(interp, "load iovec data");
+
+		if (unlikely(interp->memory.start + iovec_data + str_len >=
+				interp->memory.p)) {
+			return interp_error(interp, "fd_write oob");
+		}
+
+		debug("fd_write #iovec %d/%d len %d '%.*s'\n",
+				i+1,
+				iovs_len->num.i32,
+				str_len,
+				str_len,
+				interp->memory.start + iovec_data);
+
+		wrote = write(fd->num.i32,
+			interp->memory.start + iovec_data,
+			str_len
 			);
 
-	if (!stack_push_i32(interp, iovs->num.i32)) {
-		return interp_error(interp, "push iovec ptr");
-	}
+		if (wrote != str_len) {
+			return interp_error(interp, "written %d != %d",
+					written->num.i32, str_len);
+		}
 
-	if (!load_i32(interp, &iovec_data)) {
-		return interp_error(interp, "load iovec data");
-	}
-
-	if (!stack_push_i32(interp, iovs->num.i32 + 4)) {
-		return interp_error(interp, "push iovec ptr");
-	}
-
-	if (!load_i32(interp, &str_len)) {
-		return interp_error(interp, "load iovec data");
-	}
-
-	debug("fd_write len %d\n", str_len);
-
-	if (interp->memory.start + iovec_data + str_len >=
-			interp->memory.p) {
-		return interp_error(interp, "fd_write oob");
-	}
-
-	if (fd->num.i32 >= 10) {
-		return interp_error(interp, "weird fd %d", fd->num.i32);
-	}
-
-	written->num.i32 = write(fd->num.i32,
-		interp->memory.start + iovec_data,
-		str_len
-		);
-
-	if (written->num.i32 != str_len) {
-		return interp_error(interp, "written %d != %d",
-				written->num.i32, str_len);
+		written->num.i32 += wrote;
 	}
 
 	return stack_push_i32(interp, written->num.i32);
@@ -4534,6 +4531,7 @@ static int builtin_get_args(struct wasm_interp *interp)
 static int builtin_get_args_sizes(struct wasm_interp *interp)
 {
 	struct val *argc_addr, *argv_buf_size_addr;
+	int i;
 
 	if (!(argc_addr = get_local(interp, 0)))
 		return interp_error(interp, "argc");
@@ -4541,14 +4539,16 @@ static int builtin_get_args_sizes(struct wasm_interp *interp)
 	if (!(argv_buf_size_addr = get_local(interp, 1)))
 		return interp_error(interp, "argv_buf_size");
 
-	if (!store_i32(interp, argc_addr->num.i32, 1984))
+	if (!store_i32(interp, argc_addr->num.i32, interp->wasi.argc))
 		return interp_error(interp, "store argc");
 
-	if (!store_i32(interp, argv_buf_size_addr->num.i32, 1))
-		return interp_error(interp, "store arg buf size");
-
-	debug("get_args_sizes %d %d\n", argc_addr->num.i32,
-			argv_buf_size_addr->num.i32);
+	for (i = 0; i < interp->wasi.argc; i++) {
+		if (!store_i32(interp, argv_buf_size_addr->num.i32 + i*4,
+			       strlen(interp->wasi.argv[i]))) {
+			return interp_error(interp, "store arg size %d/%d",
+					    i+1, interp->wasi.argc);
+		}
+	}
 
 	return stack_push_i32(interp, 0);
 }
@@ -5469,9 +5469,11 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 
 		for (j = 0; j < func->wasm_func->num_locals; j++) {
 		for (k = 0; k < func->wasm_func->locals[j].val.num.u32; k++, ind++) {
+			/*
 			debug("initializing function %d local %d to type %s\n",
 				i, ind, valtype_name(
 					  func->wasm_func->locals[j].val.type));
+					  */
 
 			func->locals[ind].val.type =
 				func->wasm_func->locals[j].val.type;
@@ -5785,6 +5787,12 @@ static int reset_memory(struct wasm_interp *interp)
 	return 1;
 }
 
+static void setup_wasi(struct wasm_interp *interp, int argc, const char **argv)
+{
+	interp->wasi.argc = argc;
+	interp->wasi.argv = argv;
+}
+
 int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 {
 	unsigned char *mem, *heap, *start;
@@ -5796,6 +5804,8 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	    tables_size, elems_size, num_elements;
 
 	memset(interp, 0, sizeof(*interp));
+
+	setup_wasi(interp, 0, NULL);
 
 	interp->quitting = 0;
 	interp->module = module;
@@ -5972,7 +5982,8 @@ int interp_wasm_module(struct wasm_interp *interp)
 	return 1;
 }
 
-int run_wasm(unsigned char *wasm, unsigned long len)
+int run_wasm(unsigned char *wasm, unsigned long len,
+		int argc, const char **argv)
 {
 	struct wasm_parser p;
 	struct wasm_interp interp;
@@ -5988,6 +5999,8 @@ int run_wasm(unsigned char *wasm, unsigned long len)
 		print_error_backtrace(&interp.errors);
 		return 0;
 	}
+
+	setup_wasi(&interp, argc, argv);
 
 	if (!interp_wasm_module(&interp)) {
 		print_error_backtrace(&interp.errors);

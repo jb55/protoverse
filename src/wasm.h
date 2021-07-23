@@ -632,9 +632,15 @@ struct module_inst {
 	unsigned char *globals_init;
 };
 
+struct wasi {
+	int argc;
+	const char **argv;
+};
+
 struct wasm_interp {
 	struct module *module;
 	struct module_inst module_inst;
+	struct wasi wasi;
 
 	int prev_resolvers, quitting;
 
@@ -671,7 +677,7 @@ struct wasm_parser {
 };
 
 
-int run_wasm(unsigned char *wasm, unsigned long len);
+int run_wasm(unsigned char *wasm, unsigned long len, int argc, const char **argv);
 int parse_wasm(struct wasm_parser *p);
 int wasm_interp_init(struct wasm_interp *interp, struct module *module);
 void wasm_parser_free(struct wasm_parser *parser);
