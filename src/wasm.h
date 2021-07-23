@@ -635,6 +635,9 @@ struct module_inst {
 struct wasi {
 	int argc;
 	const char **argv;
+
+	int environc;
+	const char **environ;
 };
 
 struct wasm_interp {

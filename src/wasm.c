@@ -338,14 +338,18 @@ static int wasi_proc_exit(struct wasm_interp *interp)
 }
 
 static int wasi_args_sizes_get(struct wasm_interp *interp);
-static int wasi_get_args(struct wasm_interp *interp);
+static int wasi_args_get(struct wasm_interp *interp);
 static int wasi_fd_write(struct wasm_interp *interp);
+static int wasi_environ_sizes_get(struct wasm_interp *interp);
+static int wasi_environ_get(struct wasm_interp *interp);
 
 static struct builtin BUILTINS[] = {
-	{ .name = "args_get",       .fn = wasi_get_args },
-	{ .name = "fd_write",       .fn = wasi_fd_write },
-	{ .name = "args_sizes_get", .fn = wasi_args_sizes_get },
-	{ .name = "proc_exit",      .fn = wasi_proc_exit  },
+	{ .name = "args_get",          .fn = wasi_args_get },
+	{ .name = "fd_write",          .fn = wasi_fd_write },
+	{ .name = "environ_sizes_get", .fn = wasi_environ_sizes_get },
+	{ .name = "environ_get",       .fn = wasi_environ_get },
+	{ .name = "args_sizes_get",    .fn = wasi_args_sizes_get },
+	{ .name = "proc_exit",         .fn = wasi_proc_exit  },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -4421,6 +4425,14 @@ static INLINE int store_i32(struct wasm_interp *interp, int offset, int i)
 	return store_simple(interp, offset, &val);
 }
 
+static INLINE int store_i64(struct wasm_interp *interp, int offset, int64_t i)
+{
+	struct val val;
+	make_i64_val(&val, i);
+	return store_simple(interp, offset, &val);
+}
+
+
 static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 		enum valtype type, int N, int sign)
 {
@@ -4540,63 +4552,84 @@ static int wasi_fd_write(struct wasm_interp *interp)
 	return stack_push_i32(interp, 0);
 }
 
-static int wasi_get_args(struct wasm_interp *interp)
+static int wasi_get_strs(struct wasm_interp *interp, int count, const char **strs)
 {
 	struct val *argv, *argv_buf;
 	struct cursor writer;
 	int i;
 
 	if (!(argv = get_local(interp, 0)))
-		return interp_error(interp, "argv");
+		return interp_error(interp, "strs");
 
 	if (!(argv_buf = get_local(interp, 1)))
-		return interp_error(interp, "argv_buf");
-
-	if (!stack_push_i32(interp, 0))
-		return interp_error(interp, "push ret");
+		return interp_error(interp, "strs_buf");
 
 	make_cursor(interp->memory.start + argv_buf->num.i32,
 		    interp->memory.p, &writer);
 
-	debug("get args %d %d\n", argv->num.i32, argv_buf->num.i32);
+	debug("get strs %d %d\n", argv->num.i32, argv_buf->num.i32);
 
-	for (i = 0; i < interp->wasi.argc; i++) {
+	for (i = 0; i < count; i++) {
 		if (!store_i32(interp, argv->num.i32 + i*4,
 			       writer.p - interp->memory.start)) {
 			return interp_error(interp, "store argv %d ptr\n", i);
 		}
 
-		if (!cursor_push(&writer, (u8*)interp->wasi.argv[i],
-				strlen(interp->wasi.argv[i])+1)) {
+		if (!cursor_push(&writer, (u8*)strs[i], strlen(strs[i])+1)) {
 			return interp_error(interp,"write arg %d", i+1);
 		}
 	}
 
-	return 1;
+	return stack_push_i32(interp, 0);
+
 }
 
-static int wasi_args_sizes_get(struct wasm_interp *interp)
+static int wasi_strs_sizes_get(struct wasm_interp *interp, int count,
+		const char **strs)
 {
 	struct val *argc_addr, *argv_buf_size_addr;
 	int i, size = 0;
 
 	if (!(argc_addr = get_local(interp, 0)))
-		return interp_error(interp, "argc");
+		return interp_error(interp, "strs count");
 
 	if (!(argv_buf_size_addr = get_local(interp, 1)))
-		return interp_error(interp, "argv_buf_size");
+		return interp_error(interp, "strs buf_size");
 
-	if (!store_i32(interp, argc_addr->num.i32, interp->wasi.argc))
+	if (!store_i32(interp, argc_addr->num.i32, count))
 		return interp_error(interp, "store argc");
 
-	for (i = 0; i < interp->wasi.argc; i++)
-		size += strlen(interp->wasi.argv[i])+1;
+	for (i = 0; i < count; i++)
+		size += strlen(strs[i])+1;
 
 	if (!store_i32(interp, argv_buf_size_addr->num.i32, size)) {
-		return interp_error(interp, "store arg size");
+		return interp_error(interp, "store strs size");
 	}
 
 	return stack_push_i32(interp, 0);
+}
+
+static int wasi_args_get(struct wasm_interp *interp)
+{
+	return wasi_get_strs(interp, interp->wasi.argc, interp->wasi.argv);
+}
+
+static int wasi_environ_get(struct wasm_interp *interp)
+{
+	return wasi_get_strs(interp, interp->wasi.environc,
+			interp->wasi.environ);
+}
+
+static int wasi_args_sizes_get(struct wasm_interp *interp)
+{
+	return wasi_strs_sizes_get(interp, interp->wasi.argc,
+			interp->wasi.argv);
+}
+
+static int wasi_environ_sizes_get(struct wasm_interp *interp)
+{
+	return wasi_strs_sizes_get(interp, interp->wasi.environc,
+			interp->wasi.environ);
 }
 
 
