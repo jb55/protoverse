@@ -4180,12 +4180,30 @@ static int unresolved_break(struct wasm_interp *interp, int index)
 	return 1;
 }
 
+static int interp_return(struct wasm_interp *interp)
+{
+	int count;
+
+	if (unlikely(!count_local_resolvers(interp, &count))) {
+		return interp_error(interp, "failed to count fn labels?");
+	}
+
+	if (unlikely(!cursor_dropn(&interp->resolver_stack,
+					sizeof(struct resolver), count))) {
+		return interp_error(interp, "failed to drop %d local labels",
+				count);
+	}
+
+	return drop_callframe(interp);
+}
+
+
 static int interp_br_jump(struct wasm_interp *interp, u32 index)
 {
 	struct label *label;
 
 	if (unlikely(!(label = top_label(interp, index)))) {
-		return interp_error(interp, "no label?");
+		return interp_return(interp);
 	}
 
 	if (is_label_resolved(label)) {
@@ -5146,23 +5164,6 @@ static int interp_select(struct wasm_interp *interp, struct select_instr *select
 		return stack_pushval(interp, &bottom);
 	else
 		return stack_pushval(interp, &top);
-}
-
-static int interp_return(struct wasm_interp *interp)
-{
-	int count;
-
-	if (unlikely(!count_local_resolvers(interp, &count))) {
-		return interp_error(interp, "failed to count fn labels?");
-	}
-
-	if (unlikely(!cursor_dropn(&interp->resolver_stack,
-					sizeof(struct resolver), count))) {
-		return interp_error(interp, "failed to drop %d local labels",
-				count);
-	}
-
-	return drop_callframe(interp);
 }
 
 enum interp_end {
