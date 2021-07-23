@@ -46,8 +46,9 @@ int read_file(const char *filename, unsigned char *buf, int buflen, int *written
 
 	file = fopen(filename, "rb");
 	if (file == NULL) {
-		*written = strlen(filename) + 1;
-		strncpy((char*)buf, filename, buflen);
+		*written = strlen(filename)+1;
+		memcpy(buf, filename, *written);
+		buf[*written-1] = '\n';
 		return 1;
 	}
 

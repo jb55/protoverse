@@ -120,10 +120,16 @@ int main(int argc, const char *argv[])
 		if (argc != 3)
 			return usage();
 		ok = init_parser(&parser);
-		if (!ok) return 1;
+		if (!ok) {
+			printf("failed to initialize parser\n");
+			return 1;
+		}
 		space = argv[2];
 		ok = parse_file(&parser, space, &root);
-		if (!ok) return 1;
+		if (!ok) {
+			printf("failed to parse file\n");
+			return 1;
+		}
 
 		print_cell_tree(&parser, root, 0);
 
@@ -144,14 +150,14 @@ int main(int argc, const char *argv[])
 	} else if (streq(cmd, "client")) {
 		protoverse_connect("127.0.0.1", 1988);
 	} else if (streq(cmd, "run")) {
-		if (argc != 3)
+		if (argc < 3)
 			return usage();
 		code_file = argv[2];
 		if (!map_file(code_file, &wasm_data, &len)) {
 			perror("mmap");
 			return 1;
 		}
-		if (!run_wasm(wasm_data, len, argc, argv)) {
+		if (!run_wasm(wasm_data, len, argc - 2, argv + 2)) {
 			return 2;
 		}
 		munmap(wasm_data, len);

@@ -2850,6 +2850,15 @@ static INLINE int interp_i64_ge_u(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static INLINE int interp_i64_xor(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.num.i64 = lhs.num.i64 ^ rhs.num.i64;
+	return stack_pushval(interp, &c);
+}
+
 static INLINE int interp_i64_mul(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -2887,6 +2896,26 @@ static INLINE int interp_i64_gt_s(struct wasm_interp *interp)
 		return interp_error(interp, "binop prep");
 	c.type = val_i32;
 	c.num.i32 = lhs.num.i64 > rhs.num.i64;
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i64_lt_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.type = val_i32;
+	c.num.i32 = lhs.num.u64 < rhs.num.u64;
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i64_lt_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.type = val_i32;
+	c.num.i32 = lhs.num.i64 < rhs.num.i64;
 	return stack_pushval(interp, &c);
 }
 
@@ -3170,11 +3199,7 @@ static int call_function(struct wasm_interp *interp, int func_index)
 		return interp_error(interp, "prepare args");
 	}
 
-	if (unlikely(!call_func(interp, func, func_index))) {
-		return interp_error(interp, "call func");
-	}
-
-	return 1;
+	return call_func(interp, func, func_index);
 }
 
 static int interp_call(struct wasm_interp *interp, int func_index)
@@ -3186,9 +3211,8 @@ static int interp_call(struct wasm_interp *interp, int func_index)
 	memcpy(&prev_frame, top_callframe(&interp->callframes), sizeof(struct callframe));
 #endif
 
-	if (unlikely(!call_function(interp, func_index))) {
-		return interp_error(interp, "prepare");
-	}
+	if (unlikely(!call_function(interp, func_index)))
+		return 0;
 
 	debug("returning from %s:%d to %s:%d\n",
 			get_function_name(interp->module, func_index),
@@ -4770,14 +4794,48 @@ static int interp_i64_shl(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static int interp_i32_shr_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.num.u32 = lhs.num.u32 >> rhs.num.u32;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i32_shr_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.num.i32 = lhs.num.i32 >> rhs.num.i32;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_shr_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.num.u64 = lhs.num.u64 >> rhs.num.u64;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_shr_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.num.i64 = lhs.num.i64 >> rhs.num.i64;
+	return stack_pushval(interp, &c);
+}
+
+
 static int interp_i32_shl(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	}
-
 	c.num.i32 = lhs.num.i32 << rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
@@ -5119,6 +5177,8 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_lt_s:    return interp_i32_lt_s(interp);
 	case i_i32_lt_u:    return interp_i32_lt_u(interp);
 	case i_i32_shl:     return interp_i32_shl(interp);
+	case i_i32_shr_u:   return interp_i32_shr_u(interp);
+	case i_i32_shr_s:   return interp_i32_shr_s(interp);
 	case i_i32_or:      return interp_i32_or(interp);
 	case i_i32_and:     return interp_i32_and(interp);
 	case i_i32_mul:     return interp_i32_mul(interp);
@@ -5129,11 +5189,16 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 
 	case i_i64_eqz:     return interp_i64_eqz(interp);
 	case i_i64_gt_s:    return interp_i64_gt_s(interp);
+	case i_i64_lt_u:    return interp_i64_lt_u(interp);
+	case i_i64_lt_s:    return interp_i64_lt_s(interp);
 	case i_i64_gt_u:    return interp_i64_gt_u(interp);
 	case i_i64_ge_u:    return interp_i64_ge_u(interp);
 	case i_i64_div_u:   return interp_i64_div_u(interp);
+	case i_i64_xor:     return interp_i64_xor(interp);
 	case i_i64_mul:     return interp_i64_mul(interp);
 	case i_i64_shl:     return interp_i64_shl(interp);
+	case i_i64_shr_u:   return interp_i64_shr_u(interp);
+	case i_i64_shr_s:   return interp_i64_shr_s(interp);
 	case i_i64_or:      return interp_i64_or(interp);
 	case i_i64_sub:     return interp_i64_sub(interp);
 
