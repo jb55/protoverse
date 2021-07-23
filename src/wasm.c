@@ -4365,6 +4365,7 @@ static int store_val(struct wasm_interp *interp, int i,
 		struct memarg *memarg, enum valtype type, struct val *val, int N)
 {
 	struct memtarget target;
+	//struct cursor mem;
 
 	if (unlikely(!interp_mem_offset(interp, &N, i, type, memarg, &target))) {
 		return interp_error(interp, "memory target");
@@ -4378,9 +4379,13 @@ static int store_val(struct wasm_interp *interp, int i,
 		}
 	}
 
+	//make_cursor(target.pos, interp->memory.p, &mem);
+
 	debug("storing %d at %ld (%d bytes), N:%d\n", val->num.i32,
 			target.pos - interp->memory.start,
 			target.size, N);
+
+	//cursor_print_around(&mem, 20);
 
 	memcpy(target.pos, &val->num.i32, target.size);
 
@@ -4404,6 +4409,7 @@ static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 		enum valtype type, int N, int sign)
 {
 	struct memtarget target;
+//	struct cursor mem;
 	struct val out = {0};
 	int i;
 
@@ -4421,8 +4427,11 @@ static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 
 	memcpy(&out.num.i32, target.pos, target.size);
 	wrap_val(&out, target.size * 8);
+
+	//make_cursor(target.pos, interp->memory.p, &mem);
 	debug("loading %d from %ld (copying %d bytes)\n", out.num.i32,
 			target.pos - interp->memory.start, target.size);
+	//cursor_print_around(&mem, 20);
 
 	if (unlikely(!stack_pushval(interp, &out))) {
 		return interp_error(interp,
@@ -4448,7 +4457,7 @@ static INLINE int load_i32(struct wasm_interp *interp, int addr, int *i)
 static int wasi_fd_write(struct wasm_interp *interp)
 {
 	struct val *fd, *iovs_ptr, *iovs_len, *written;
-	int i, ind, iovec_data = 0, str_len = 0, wrote = 0;
+	int i, ind, iovec_data, str_len, wrote, all;
 
 	if (unlikely(!(fd = get_local(interp, 0))))
 		return interp_error(interp, "fd");
@@ -4465,8 +4474,12 @@ static int wasi_fd_write(struct wasm_interp *interp)
 	if (unlikely(fd->num.i32 >= 10))
 		return interp_error(interp, "weird fd %d", fd->num.i32);
 
-	written->num.i32 = 0;
-	for (i = 0; i < iovs_len->num.i32; i++) {
+	all = 0;
+	str_len = 0;
+	i = 0;
+	iovec_data = 0;
+
+	for (; i < iovs_len->num.i32; i++) {
 		ind = 8*i;
 
 		if (unlikely(!load_i32(interp, iovs_ptr->num.i32 + ind,
@@ -4496,15 +4509,19 @@ static int wasi_fd_write(struct wasm_interp *interp)
 			str_len
 			);
 
+		all += wrote;
+
 		if (wrote != str_len) {
 			return interp_error(interp, "written %d != %d",
 					written->num.i32, str_len);
 		}
-
-		written->num.i32 += wrote;
 	}
 
-	return stack_push_i32(interp, written->num.i32);
+	if (!store_i32(interp, written->num.i32, all)) {
+		return interp_error(interp, "store written");
+	}
+
+	return stack_push_i32(interp, 0);
 }
 
 static int wasi_get_args(struct wasm_interp *interp)
