@@ -585,6 +585,8 @@ static INLINE int was_section_parsed(struct module *module,
 	return module->parsed & (1 << section);
 }
 
+//static int callframe_cnt = 0;
+
 static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
 {
 	//debug("pushing callframe %d fn:%d\n", ++callframe_cnt, frame->fn);
@@ -3011,8 +3013,9 @@ static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 static INLINE int drop_callframe(struct wasm_interp *interp)
 {
 	int offset;
+#ifdef DEBUG
+	int count;
 
-	/*
 	if (unlikely(!count_local_resolvers(interp, &count))) {
 		return interp_error(interp, "count local resolvers");
 	}
@@ -3021,11 +3024,13 @@ static INLINE int drop_callframe(struct wasm_interp *interp)
 		return interp_error(interp, "unclean callframe drop, still have"
 				" %d unpopped labels", count);
 	}
-	*/
+#endif
 
 	if (unlikely(!cursor_popint(&interp->resolver_offsets, &offset))) {
 		return interp_error(interp, "pop resolver_offsets");
 	}
+
+	debug("dropping callframe\n");
 
 	return cursor_drop_callframe(&interp->callframes);
 }
@@ -3043,6 +3048,7 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 	if (unlikely(!cursor_push_callframe(&interp->callframes, &callframe)))
 		return interp_error(interp, "oob cursor_pushcode");
 
+	/*
 	if (unlikely(!interp_code(interp))) {
 		return interp_error(interp, "call %s:%d",
 				get_function_name(interp->module, fn),
@@ -3051,6 +3057,7 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 
 	if (unlikely(!drop_callframe(interp)))
 		return interp_error(interp, "drop callframe");
+	*/
 
 	return 1;
 }
@@ -3120,14 +3127,14 @@ static void make_default_val(struct val *val)
 	}
 }
 
-static int prepare_function_args(struct wasm_interp *interp, struct func *func,
+static int prepare_call(struct wasm_interp *interp, struct func *func,
 		int func_index)
 {
 	static char buf[128];
 	struct local *local;
 	enum valtype paramtype;
 	struct val val;
-	u32 i, ind;
+	u32 i, ind, offset;
 
 	/* push params as locals */
 	for (i = 0; i < func->functype->params.num_valtypes; i++) {
@@ -3161,6 +3168,11 @@ static int prepare_function_args(struct wasm_interp *interp, struct func *func,
 		memcpy(&func->locals[ind], &val, sizeof(struct val));
 	}
 
+	offset = count_resolvers(interp);
+	/* push label resolver offsets, used to keep track of per-func resolvers */
+	/* TODO: maybe move this data to struct func? */
+	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
+		return interp_error(interp, "push resolver offset");
 
 	for (i=func->functype->params.num_valtypes;
 	     i < func->num_locals; i++) {
@@ -3177,7 +3189,6 @@ static int prepare_function_args(struct wasm_interp *interp, struct func *func,
 static int call_function(struct wasm_interp *interp, int func_index)
 {
 	struct func *func;
-	unsigned int offset;
 
 	debug("calling %s:%d\n", get_function_name(interp->module, func_index), func_index);
 
@@ -3189,13 +3200,7 @@ static int call_function(struct wasm_interp *interp, int func_index)
 				interp->module->code_section.num_funcs);
 	}
 
-	offset = count_resolvers(interp);
-	/* push label resolver offsets, used to keep track of per-func resolvers */
-	/* TODO: maybe move this data to struct func? */
-	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
-		return interp_error(interp, "push resolver offset");
-
-	if (!prepare_function_args(interp, func, func_index)) {
+	if (!prepare_call(interp, func, func_index)) {
 		return interp_error(interp, "prepare args");
 	}
 
@@ -3214,11 +3219,13 @@ static int interp_call(struct wasm_interp *interp, int func_index)
 	if (unlikely(!call_function(interp, func_index)))
 		return 0;
 
+	/*
 	debug("returning from %s:%d to %s:%d\n",
 			get_function_name(interp->module, func_index),
 			func_index,
 			get_function_name(interp->module, prev_frame.fn),
 			prev_frame.fn);
+			*/
 
 	return 1;
 }
@@ -3379,18 +3386,15 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 static INLINE int pop_resolver(struct wasm_interp *interp,
 		struct resolver *resolver)
 {
-	/*
 #ifdef DEBUG
 	int num_resolvers;
 	struct label *label;
 #endif
-*/
 
 	if (!cursor_pop(&interp->resolver_stack, (u8*)resolver, sizeof(*resolver))) {
 		return interp_error(interp, "pop resolver");
 	}
 
-	/*
 #ifdef DEBUG
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
@@ -3410,7 +3414,6 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 			count_resolvers(interp),
 			num_resolvers
 			);
-			*/
 	return 1;
 }
 
@@ -3533,11 +3536,9 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	struct resolver resolver;
 	struct callframe *frame;
 
-	/*
 #ifdef DEBUG
 	int num_resolvers;
 #endif
-*/
 
 	resolver.start_tag = start_tag;
 	resolver.end_tag = end_tag;
@@ -3569,7 +3570,6 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
-	/*
 #ifdef DEBUG
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
@@ -3582,7 +3582,6 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 			instr_name(resolver.end_tag),
 			cursor_count(&interp->resolver_stack, sizeof(resolver)),
 			num_resolvers);
-			*/
 
 	return 1;
 }
@@ -3671,7 +3670,7 @@ static int pop_label_and_break(struct wasm_interp *interp, struct label *label,
 
 	// we have a loop, push the popped resolver
 	if (resolver.start_tag == i_loop) {
-		debug("repushing resolver\n");
+		debug("repushing resolver for loop\n");
 		if (unlikely(!cursor_push_resolver(&interp->resolver_stack, &resolver))) {
 			return interp_error(interp, "re-push loop resolver");
 		}
@@ -4024,7 +4023,6 @@ static int if_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
 
 	// consume instructions, use resolver stack to resolve jumps
 	if (!parse_instrs_until(&parser, end_tag, &instrs, &instrs_len)) {
-		cursor_print_around(interp_codeptr(interp), 10);
 		return interp_error(interp, "parse instrs start @ %s end @ %s",
 				instr_name(start_tag),
 				instr_name(end_tag));
@@ -4053,30 +4051,6 @@ static int interp_block(struct wasm_interp *interp)
 	}
 
 	return 1;
-}
-
-static INLINE int interp_end(struct wasm_interp *interp)
-{
-	return pop_label_checkpoint(interp);
-
-	/*
-	struct resolver resolver;
-	struct callframe *frame;
-	struct label *label;
-
-	debug("interp end\n");
-
-	if (!pop_label(interp, &resolver, &frame, &label)) {
-		return interp_error(interp, "pop label at end inst");
-	}
-
-	if (resolver.start_tag == i_loop) {
-		debug("loop jumping at end instr\n");
-		return interp_jump(interp, label->jump);
-	}
-
-	return 1;
-	*/
 }
 
 static int interp_if(struct wasm_interp *interp)
@@ -4757,6 +4731,24 @@ static INLINE int interp_i32_or(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static int interp_i32_rem_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.num.i32 = lhs.num.i32 % rhs.num.i32;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i32_rem_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.num.u32 = lhs.num.u32 % rhs.num.u32;
+	return stack_pushval(interp, &c);
+}
+
 static INLINE int interp_i32_and(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -4785,12 +4777,45 @@ static int interp_i64_or(struct wasm_interp *interp)
 static int interp_i64_shl(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
 		return interp_error(interp, "binop prep");
-	}
-
 	c.num.i64 = lhs.num.i64 << rhs.num.i64;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_ne(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	make_i32_val(&c, lhs.num.i64 != rhs.num.i64);
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_eq(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	make_i32_val(&c, lhs.num.i64 == rhs.num.i64);
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_rem_s(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.num.i64 = lhs.num.i64 % rhs.num.i64;
+	return stack_pushval(interp, &c);
+}
+
+static int interp_i64_rem_u(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	c.num.u64 = lhs.num.u64 % rhs.num.u64;
 	return stack_pushval(interp, &c);
 }
 
@@ -5137,8 +5162,64 @@ static int interp_return(struct wasm_interp *interp)
 				count);
 	}
 
-	return i_return;
+	return drop_callframe(interp);
 }
+
+enum interp_end {
+	interp_end_err,
+	interp_end_next,
+	interp_end_done,
+};
+
+// tricky...
+static int interp_end(struct wasm_interp *interp)
+{
+	struct resolver *resolver;
+	//struct label *label;
+	int loc_resolvers;
+
+	if (unlikely(!(resolver = top_resolver(interp, 0)))) {
+		// no more resolvers, we done.
+		return interp_end_done;
+	}
+
+	if (unlikely(!count_local_resolvers(interp, &loc_resolvers))) {
+		return interp_error(interp, "count local resolvers");
+	}
+
+	//debug("interp_code_end local resolvers: %d\n", num_resolvers);
+
+	debug("ending ? local_resolvers %d\n", loc_resolvers);
+
+	if (loc_resolvers == 0) {
+		if (!drop_callframe(interp))
+			return interp_error(interp, "drop callframe at end of fn");
+		return interp_end_next;
+	}
+
+	// if we hit the end of a loop, continue at the start
+	/*
+	if (resolver && resolver->start_tag == i_loop) {
+		if (unlikely(!(label = index_label(&interp->labels, frame->fn,
+						   resolver->label)))) {
+			return interp_error(interp, "no loop label?");
+		}
+
+		resolve_label(label, code);
+
+		debug("loop jumping\n");
+		if (!interp_jump(interp, label_instr_pos(label))) {
+			return interp_error(interp, "jump to loop label");
+		}
+
+		return interp_end_cont;
+	}
+	*/
+
+	return pop_label_checkpoint(interp);
+
+}
+
 
 static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 {
@@ -5184,6 +5265,8 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_mul:     return interp_i32_mul(interp);
 	case i_i32_xor:     return interp_i32_xor(interp);
 	case i_i32_ne:      return interp_i32_ne(interp);
+	case i_i32_rem_u:   return interp_i32_rem_u(interp);
+	case i_i32_rem_s:   return interp_i32_rem_s(interp);
 	case i_i32_eq:      return interp_i32_eq(interp);
 	case i_i32_wrap_i64:return interp_i32_wrap_i64(interp);
 
@@ -5197,6 +5280,10 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i64_xor:     return interp_i64_xor(interp);
 	case i_i64_mul:     return interp_i64_mul(interp);
 	case i_i64_shl:     return interp_i64_shl(interp);
+	case i_i64_ne:      return interp_i64_ne(interp);
+	case i_i64_eq:      return interp_i64_eq(interp);
+	case i_i64_rem_u:   return interp_i64_rem_u(interp);
+	case i_i64_rem_s:   return interp_i64_rem_s(interp);
 	case i_i64_shr_u:   return interp_i64_shr_u(interp);
 	case i_i64_shr_s:   return interp_i64_shr_s(interp);
 	case i_i64_or:      return interp_i64_or(interp);
@@ -5278,6 +5365,7 @@ static INLINE int interp_parse_instr(struct wasm_interp *interp,
 		return interp_error(interp, "no more instrs to pull");
 	}
 
+
 	instr->tag = tag;
 	instr->pos = code->p - 1 - code->start;
 
@@ -5285,65 +5373,12 @@ static INLINE int interp_parse_instr(struct wasm_interp *interp,
 		return 1;
 	}
 
+	parser->code = code;
 	if (!parse_instr(parser, instr->tag, instr)) {
 		return interp_error(interp, "parse instr %s", instr_name(tag));
 	}
 
 	return 1;
-}
-
-enum interp_end {
-	interp_end_err,
-	interp_end_done,
-	interp_end_cont,
-	interp_end_next,
-};
-
-// tricky...
-static enum interp_end interp_code_end(struct wasm_interp *interp,
-		struct callframe *frame, struct cursor *code)
-{
-	struct resolver *resolver;
-	//struct label *label;
-	int num_resolvers = 0;
-	(void)frame;
-	(void)code;
-
-	if (unlikely(!(resolver = top_resolver(interp, 0)))) {
-		// no more resolvers, we done.
-		return interp_end_done;
-	}
-
-	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
-		return interp_error(interp, "count local resolvers");
-	}
-
-	//debug("interp_code_end local resolvers: %d\n", num_resolvers);
-
-	if (num_resolvers == 0) {
-		return interp_end_done;
-	}
-
-	// if we hit the end of a loop, continue at the start
-	/*
-	if (resolver && resolver->start_tag == i_loop) {
-		if (unlikely(!(label = index_label(&interp->labels, frame->fn,
-						   resolver->label)))) {
-			return interp_error(interp, "no loop label?");
-		}
-
-		resolve_label(label, code);
-
-		debug("loop jumping\n");
-		if (!interp_jump(interp, label_instr_pos(label))) {
-			return interp_error(interp, "jump to loop label");
-		}
-
-		return interp_end_cont;
-	}
-	*/
-
-	return interp_end_next;
 }
 
 static int interp_elem_drop(struct wasm_interp *interp, int elemidx)
@@ -5358,43 +5393,42 @@ static int interp_code(struct wasm_interp *interp)
 {
 	struct instr instr;
 	struct expr_parser parser;
-	struct cursor *code;
 	struct callframe *frame;
 	int ret;
 
-	make_interp_expr_parser(interp, &parser);
-
-	if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
-		return interp_error(interp, "no callframe");
-	}
+	parser.interp = interp;
+	parser.errs = &interp->errors;
 
 	for (;;) {
-		if (unlikely(!(code = interp_codeptr(interp)))) {
-			return interp_error(interp, "codeptr");
+
+		if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
+			return interp_error(interp, "no callframe");
 		}
 
-		if (unlikely(!interp_parse_instr(interp, code, &parser, &instr))) {
-			cursor_print_around(code, 5);
-			debug("end ? %d\n", top_callframe(&interp->callframes)->fn);
+		debug("parsing in frame %s:%d\n",
+				interp->module->funcs[frame->fn].name, frame->fn);
+
+		if (unlikely(!interp_parse_instr(interp, &frame->code, &parser,
+						&instr))) {
 			return interp_error(interp, "parse instr");
 		}
 
-		if (instr.tag == i_end) {
-			switch (interp_code_end(interp, frame, code)) {
-				case interp_end_err: return 0;
-				case interp_end_done: return 1;
-				case interp_end_cont: continue;
-				case interp_end_next: break;
-			}
-		}
+		//cursor_print_around(&frame->code, 10);
 
 		if (unlikely(!(ret = interp_instr(interp, &instr)))) {
 			return interp_error(interp, "interp instr %s",
 					show_instr(&instr));
 		}
 
-		if (ret == i_return)
-			return 1;
+		if (instr.tag == i_end) {
+			//cursor_print_around(&frame->code, 10);
+			switch (ret) {
+				case interp_end_err: return 0;
+				case interp_end_done: return 1;
+				case interp_end_next: break;
+			}
+		}
+
 	}
 
 	return 1;
@@ -5882,7 +5916,7 @@ static int reset_memory(struct wasm_interp *interp)
 	return 1;
 }
 
-static void setup_wasi(struct wasm_interp *interp, int argc, const char **argv)
+void setup_wasi(struct wasm_interp *interp, int argc, const char **argv)
 {
 	interp->wasi.argc = argc;
 	interp->wasi.argv = argv;
@@ -6066,7 +6100,11 @@ int interp_wasm_module(struct wasm_interp *interp)
 
 	//interp->mem.p = interp->mem.start;
 
-	if (call_function(interp, interp->module_inst.start_fn)) {
+	if (!call_function(interp, interp->module_inst.start_fn)) {
+		return interp_error(interp, "call start function");
+	}
+
+	if (interp_code(interp)) {
 		debug("interp success!!\n");
 	} else if (interp->quitting) {
 		debug("finished running via process exit\n");

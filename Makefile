@@ -1,7 +1,7 @@
 
 CFLAGS = -Wno-error=unused-function -O2 -g -std=gnu90 -Wall -Wextra -Werror \
 	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
-	 -Wmissing-declarations -Wdeclaration-after-statement
+	 -Wmissing-declarations -Wdeclaration-after-statement -fno-stack-protector
 
 OBJS = src/io.o \
        src/parse.o \

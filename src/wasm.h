@@ -685,5 +685,6 @@ void wasm_parser_init(struct wasm_parser *parser, u8 *wasm, size_t wasm_len, siz
 void wasm_interp_free(struct wasm_interp *interp);
 int interp_wasm_module(struct wasm_interp *interp);
 void print_error_backtrace(struct errors *errors);
+void setup_wasi(struct wasm_interp *interp, int argc, const char **argv);
 
 #endif /* PROTOVERSE_WASM_H */
