@@ -5406,9 +5406,6 @@ static int interp_code(struct wasm_interp *interp)
 			return interp_error(interp, "no callframe");
 		}
 
-		debug("parsing in frame %s:%d\n",
-				interp->module->funcs[frame->fn].name, frame->fn);
-
 		if (unlikely(!interp_parse_instr(interp, &frame->code, &parser,
 						&instr))) {
 			return interp_error(interp, "parse instr");
