@@ -19,7 +19,7 @@ enum valtype {
 	val_i64 = 0x7E,
 	val_f32 = 0x7D,
 	val_f64 = 0x7C,
-	val_ref_null = 0xD0, // not sure if this is right...
+	val_ref_null = 0xD0,
 	val_ref_func = 0x70, 
 	val_ref_extern = 0x6F,
 };

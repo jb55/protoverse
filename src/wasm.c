@@ -5669,8 +5669,6 @@ static int calculate_locals_size(struct module *module)
 		locals_size += count_fn_locals(func) * sizeof(struct val);
 	}
 
-	debug("locals size %d\n", locals_size);
-
 	return locals_size;
 }
 
@@ -5717,8 +5715,6 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 		}
 		}
 	}
-
-	debug("alloc_locals sizes %d\n", sizes);
 
 	return 1;
 }
