@@ -60,6 +60,11 @@ static INLINE struct cursor *interp_codeptr(struct wasm_interp *interp)
 	return &frame->code;
 }
 
+static INLINE int active_pages(struct wasm_interp *interp)
+{
+	return cursor_count(&interp->memory, WASM_PAGE_SIZE);
+}
+
 static INLINE int cursor_popval(struct cursor *cur, struct val *val)
 {
 	return cursor_pop(cur, (unsigned char*)val, sizeof(*val));
@@ -555,7 +560,10 @@ static int wasi_fd_close(struct wasm_interp *interp);
 static int wasi_environ_sizes_get(struct wasm_interp *interp);
 static int wasi_environ_get(struct wasm_interp *interp);
 
+static int find_builtin(const char *name);
+
 #include "wasm_io.h"
+#include "wasm_gfx.h"
 
 static struct builtin BUILTINS[] = {
 	{ .name = "null",              .fn = NULL }, // for reasons
@@ -569,6 +577,7 @@ static struct builtin BUILTINS[] = {
 	{ .name = "abort",             .fn = wasi_abort  },
 
 	WASM_IO_IMPORTS
+	WASM_GFX_IMPORTS
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -5802,11 +5811,6 @@ static INLINE int interp_global_set(struct wasm_interp *interp, int global_ind)
 	memcpy(global, &setval, sizeof(setval));
 
 	return 1;
-}
-
-static INLINE int active_pages(struct wasm_interp *interp)
-{
-	return cursor_count(&interp->memory, WASM_PAGE_SIZE);
 }
 
 static int interp_memory_grow(struct wasm_interp *interp, u8 memidx)

@@ -1,20 +1,25 @@
 
 CFLAGS = -O2 -g -std=gnu90 -Wall -Wextra -Werror \
-	 -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes \
-	 -Wmissing-declarations -Wdeclaration-after-statement -fno-stack-protector \
-	 -Wno-unused-function 
+	 -Wold-style-definition -Wmissing-prototypes \
+	 -Wmissing-declarations -Wdeclaration-after-statement \
+	 -Wno-strict-prototypes -Wno-old-style-definition \
+	 -Wno-unused-function \
+	 $(shell pkg-config --cflags sdl2)
 
-LDFLAGS = -lm
+LDFLAGS = $(shell pkg-config --libs sdl2) -lm -ldl
 
 OBJS = src/io.o \
        src/parse.o \
        src/describe.o \
+       src/gl.o \
        src/serve.o \
        src/client.o \
        src/net.o \
        src/varint.o \
        src/error.o \
        src/wasm.o
+
+HEADS = src/wasm_gfx.h
 
 SRCS=$(OBJS:.o=.c)
 
@@ -33,6 +38,10 @@ examples: examples/server
 
 wasm: $(WASMS)
 
+src/wasm.o: src/wasm.c src/wasm_gfx.h
+	@echo "cc $<"
+	@$(CC) -c -o $@ $(CPPFLAGS) $(CFLAGS) $<
+
 %.o: %.c %.h
 	@echo "cc $<"
 	@$(CC) -c -o $@ $(CPPFLAGS) $(CFLAGS) $<
@@ -49,9 +58,9 @@ wasm/hello-c.wasm: wasm/hello-c.c
 protoverse.wasm: src/protoverse.c $(SRCS)
 	emcc -g $^ -s WASM=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -o $@
 
-protoverse: src/protoverse.c $(OBJS)
+protoverse: src/protoverse.c $(OBJS) $(HEADS)
 	@echo "ld $@"
-	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) src/protoverse.c $(OBJS) $(LDFLAGS) -o $@
 
 examples/server: examples/server.c libprotoverse.a
 	$(CC) -Isrc $(CFLAGS) $^ -o $@
@@ -66,9 +75,9 @@ bench: src/bench.c $(OBJS)
 clean:
 	rm -f protoverse test $(OBJS) libprotoverse.a
 
-test: src/test.c $(OBJS)
+test: src/test.c $(OBJS) $(HEADS)
 	@echo "ld $@"
-	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) src/test.c $(OBJS) $(LDFLAGS) -o $@
 
 check: test protoverse
 	@./test
