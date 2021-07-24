@@ -3887,10 +3887,6 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_if:
 			return parse_block(p, &op->block, i_if, i_end);
 
-		case i_else:
-		case i_end:
-			return 1;
-
 		case i_call:
 		case i_local_get:
 		case i_local_set:
@@ -3959,6 +3955,9 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 
 
 		// single-tag ops
+		case i_else:
+		case i_end:
+		case i_ref_null:
 		case i_unreachable:
 		case i_nop:
 		case i_return:
