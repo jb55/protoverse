@@ -100,7 +100,7 @@ static int usage(void)
 
 
 
-int main(int argc, const char *argv[])
+int main(int argc, const char *argv[], char **env)
 {
 	const char *space, *code_file;
 	const char *cmd;
@@ -157,7 +157,7 @@ int main(int argc, const char *argv[])
 			perror("mmap");
 			return 1;
 		}
-		if (!run_wasm(wasm_data, len, argc - 2, argv + 2)) {
+		if (!run_wasm(wasm_data, len, argc - 2, argv + 2, env)) {
 			return 2;
 		}
 		munmap(wasm_data, len);

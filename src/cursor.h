@@ -184,6 +184,15 @@ static inline int cursor_drop(struct cursor *cur, int size)
 	return cursor_dropn(cur, size, 1);
 }
 
+static inline unsigned char *cursor_topn(struct cursor *cur, int len, int n)
+{
+	n += 1;
+	if (unlikely(cur->p - len*n < cur->start)) {
+		return NULL;
+	}
+	return cur->p - len*n;
+}
+
 static inline unsigned char *cursor_top(struct cursor *cur, int len)
 {
 	if (unlikely(cur->p - len < cur->start)) {
@@ -216,7 +225,7 @@ static inline int cursor_pop(struct cursor *cur, u8 *data, int len)
 
 static inline int cursor_push(struct cursor *cursor, u8 *data, int len)
 {
-	if (unlikely(cursor->p + len > cursor->end)) {
+	if (unlikely(cursor->p + len >= cursor->end)) {
 		return 0;
 	}
 
@@ -303,7 +312,7 @@ static inline void *index_cursor(struct cursor *cursor, unsigned int index, int 
 	u8 *p;
 	p = &cursor->start[elem_size * index];
 
-	if (unlikely(p > cursor->end))
+	if (unlikely(p >= cursor->end))
 		return NULL;
 
 	return (void*)p;

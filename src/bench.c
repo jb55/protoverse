@@ -7,7 +7,7 @@
 #include "wasm.h"
 
 static int bench_wasm(unsigned char *wasm, unsigned long len, int times,
-		int argc, const char **argv)
+		int argc, const char **argv, char **env)
 {
 	struct wasm_parser p;
 	struct wasm_interp interp;
@@ -27,7 +27,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times,
 	}
 	interp.errors.enabled = 0;
 
-	setup_wasi(&interp, argc, argv);
+	setup_wasi(&interp, argc, argv, env);
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
 	for (i = 0; i < times; i++) {
@@ -48,7 +48,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times,
 	return 1;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char *argv[], char **env)
 {
 	unsigned char *wasm_data;
 	const char *code_file;
@@ -75,7 +75,8 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	fprintf(stderr, "executing %s %d times\n", code_file, times);
-	if (!bench_wasm(wasm_data, len, times, argc-args, ((const char**)argv)+args)) {
+	if (!bench_wasm(wasm_data, len, times, argc-args,
+				((const char**)argv)+args, env)) {
 		return 2;
 	}
 

@@ -511,7 +511,7 @@ struct memarg {
 
 struct br_table {
 	u32 num_label_indices;
-	u32 label_indices[32];
+	u32 label_indices[512];
 	u32 default_label;
 };
 
@@ -680,7 +680,7 @@ struct wasm_parser {
 };
 
 
-int run_wasm(unsigned char *wasm, unsigned long len, int argc, const char **argv);
+int run_wasm(unsigned char *wasm, unsigned long len, int argc, const char **argv, char **env);
 int parse_wasm(struct wasm_parser *p);
 int wasm_interp_init(struct wasm_interp *interp, struct module *module);
 void wasm_parser_free(struct wasm_parser *parser);
@@ -688,6 +688,6 @@ void wasm_parser_init(struct wasm_parser *parser, u8 *wasm, size_t wasm_len, siz
 void wasm_interp_free(struct wasm_interp *interp);
 int interp_wasm_module(struct wasm_interp *interp);
 void print_error_backtrace(struct errors *errors);
-void setup_wasi(struct wasm_interp *interp, int argc, const char **argv);
+void setup_wasi(struct wasm_interp *interp, int argc, const char **argv, char **env);
 
 #endif /* PROTOVERSE_WASM_H */
