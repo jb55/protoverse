@@ -99,9 +99,11 @@ static int usage(void)
 }
 
 
+extern char **environ;
 
-int main(int argc, const char *argv[], char **env)
+int main(int argc, const char *argv[])
 {
+	char **env = environ;
 	const char *space, *code_file;
 	const char *cmd;
 	unsigned char *wasm_data;

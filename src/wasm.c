@@ -603,6 +603,24 @@ static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *fr
 	return cursor_push(cur, (u8*)frame, sizeof(*frame));
 }
 
+static INLINE int count_resolvers(struct wasm_interp *interp)
+{
+	return cursor_count(&interp->resolver_stack, sizeof(struct resolver));
+}
+
+static INLINE int push_callframe(struct wasm_interp *interp, struct callframe *frame)
+{
+	u32 offset;
+
+	offset = count_resolvers(interp);
+	/* push label resolver offsets, used to keep track of per-func resolvers */
+	/* TODO: maybe move this data to struct func? */
+	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
+		return interp_error(interp, "push resolver offset");
+
+	return cursor_push_callframe(&interp->callframes, frame);
+}
+
 static INLINE int cursor_drop_callframe(struct cursor *cur)
 {
 	//debug("dropping callframe %d fn:%d\n", callframe_cnt--, top_callframe(cur)->fn);
@@ -3076,6 +3094,7 @@ static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 		return interp_error(interp, "resolver offset oob?");
 	}
 	*count = (interp->resolver_stack.p - p) / sizeof(struct resolver);
+	//debug("offset %d count %d stack.p - p %ld\n", offset, *count, interp->resolver_stack.p - p);
 	return 1;
 }
 
@@ -3132,8 +3151,8 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 
 	assert(func->code.code_len > 0);
 
-	if (unlikely(!cursor_push_callframe(&interp->callframes, &callframe)))
-		return interp_error(interp, "oob cursor_pushcode");
+	if (unlikely(!push_callframe(interp, &callframe)))
+		return interp_error(interp, "push callframe");
 
 	/*
 	if (unlikely(!interp_code(interp))) {
@@ -3157,9 +3176,8 @@ static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *
 	/* update current function and push it to the callframe as well */
 	callframe.fn = fn;
 
-	if (unlikely(!cursor_push_callframe(&interp->callframes, &callframe))) {
+	if (unlikely(!push_callframe(interp, &callframe)))
 		return interp_error(interp, "oob cursor_pushcode");
-	}
 
 	if (!builtin->fn(interp))
 		return interp_error(interp, "builtin trap");
@@ -3184,11 +3202,6 @@ static INLINE int call_func(struct wasm_interp *interp, struct func *func, int f
 		return call_builtin_func(interp, func->builtin, fn);
 	}
 	return interp_error(interp, "corrupt func type: %02x", func->type);
-}
-
-static INLINE int count_resolvers(struct wasm_interp *interp)
-{
-	return cursor_count(&interp->resolver_stack, sizeof(struct resolver));
 }
 
 static void make_default_val(struct val *val)
@@ -3221,7 +3234,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 	struct local *local;
 	enum valtype paramtype;
 	struct val val;
-	u32 i, ind, offset;
+	u32 i, ind;
 
 	/* push params as locals */
 	for (i = 0; i < func->functype->params.num_valtypes; i++) {
@@ -3254,12 +3267,6 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 #endif
 		memcpy(&func->locals[ind], &val, sizeof(struct val));
 	}
-
-	offset = count_resolvers(interp);
-	/* push label resolver offsets, used to keep track of per-func resolvers */
-	/* TODO: maybe move this data to struct func? */
-	if (unlikely(!cursor_push_int(&interp->resolver_offsets, offset)))
-		return interp_error(interp, "push resolver offset");
 
 	for (i=func->functype->params.num_valtypes;
 	     i < func->num_locals; i++) {
@@ -4094,16 +4101,11 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 	return note_error(p->errs, p->code, "unhandled tag: 0x%x", tag);
 }
 
-static int if_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
+static int if_jump(struct wasm_interp *interp, struct label *label)
 {
 	u8 *instrs;
 	u32 instrs_len;
 	struct expr_parser parser;
-	struct label *label;
-
-	if (!push_label_checkpoint(interp, &label, start_tag, end_tag)) {
-		return interp_error(interp, "label checkpoint");
-	}
 
 	if (!label) {
 		return interp_error(interp, "no label?");
@@ -4116,10 +4118,8 @@ static int if_jump(struct wasm_interp *interp, u8 start_tag, u8 end_tag)
 	make_interp_expr_parser(interp, &parser);
 
 	// consume instructions, use resolver stack to resolve jumps
-	if (!parse_instrs_until(&parser, end_tag, &instrs, &instrs_len)) {
-		return interp_error(interp, "parse instrs start @ %s end @ %s",
-				instr_name(start_tag),
-				instr_name(end_tag));
+	if (!parse_instrs_until(&parser, i_if, &instrs, &instrs_len)) {
+		return interp_error(interp, "parse instrs start (if)");
 	}
 
 	return pop_label_checkpoint(interp);
@@ -4152,6 +4152,7 @@ static int interp_if(struct wasm_interp *interp)
 	struct val cond;
 	struct blocktype blocktype;
 	struct cursor *code;
+	struct label *label;
 
 	if (unlikely(!(code = interp_codeptr(interp)))) {
 		return interp_error(interp, "empty callstack?");
@@ -4165,11 +4166,15 @@ static int interp_if(struct wasm_interp *interp)
 		return interp_error(interp, "if pop val");
 	}
 
+	if (!push_label_checkpoint(interp, &label, i_if, i_if)) {
+		return interp_error(interp, "label checkpoint");
+	}
+
 	if (cond.num.i32 == 1) {
 		return 1;
 	}
 
-	if (unlikely(!if_jump(interp, i_if, i_if))) {
+	if (unlikely(!if_jump(interp, label))) {
 		return interp_error(interp, "jump");
 	}
 
