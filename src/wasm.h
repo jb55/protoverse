@@ -540,8 +540,8 @@ struct instr {
 		struct memarg memarg;
 		struct select_instr select;
 		struct block block;
-		double fp_double;
-		float fp_single;
+		double f64;
+		float f32;
 		int i32;
 		u32 u32;
 		int64_t i64;

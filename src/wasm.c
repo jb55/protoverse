@@ -1095,6 +1095,15 @@ static INLINE int read_u32(struct cursor *read, u32 *val)
 	return uleb128_read(read, val);
 }
 
+static INLINE int read_f32(struct cursor *read, float *val)
+{
+	return cursor_pull(read, (u8*)val, 4);
+}
+
+static INLINE int read_f64(struct cursor *read, double *val)
+{
+	return cursor_pull(read, (u8*)val, 8);
+}
 
 static int parse_section_tag(struct cursor *cur, enum section_tag *section)
 {
@@ -1638,12 +1647,12 @@ static const char *show_instr(struct instr *instr)
 			break;
 
 		case i_f32_const:
-			sprintf(tmp, "%f", instr->fp_single);
+			sprintf(tmp, "%f", instr->f32);
 			cursor_push_str(&buf, tmp);
 			break;
 
 		case i_f64_const:
-			sprintf(tmp, "%f", instr->fp_double);
+			sprintf(tmp, "%f", instr->f64);
 			cursor_push_str(&buf, tmp);
 			break;
 
@@ -3261,7 +3270,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		}
 
 		debug("setting param %d (%s) to ",
-				ind, valtype_name(local->val.type));
+				ind, valtype_name(local->type));
 #ifdef DEBUG
 		print_val(&val); printf("\n");
 #endif
@@ -3274,7 +3283,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		make_default_val(&local->val);
 		debug("setting local %d (%s) to default\n",
 				i-func->functype->params.num_valtypes,
-				valtype_name(local->val.type));
+				valtype_name(local->type));
 	}
 
 	return 1;
@@ -3905,21 +3914,21 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_ref_func:
 		case i_table_set:
 		case i_table_get:
-			if (!read_u32(p->code, &op->u32)) {
+			if (unlikely(!read_u32(p->code, &op->u32))) {
 				return note_error(p->errs, p->code,
 						"couldn't read int");
 			}
 			return 1;
 
 		case i_i32_const:
-			if (!read_int(p->code, &op->i32)) {
+			if (unlikely(!read_int(p->code, &op->i32))) {
 				return note_error(p->errs, p->code,
 						"couldn't read int");
 			}
 			return 1;
 
 		case i_i64_const:
-			if (!read_i64(p->code, &op->i64)) {
+			if (unlikely(!read_i64(p->code, &op->i64))) {
 				return note_error(p->errs, p->code,
 						"couldn't read i64");
 			}
@@ -3957,9 +3966,10 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 			return parse_call_indirect(p->code, &op->call_indirect);
 
 		case i_f32_const:
-		case i_f64_const:
-			return note_error(p->errs, p->code, "parse float const");
+			return read_f32(p->code, &op->f32);
 
+		case i_f64_const:
+			return read_f64(p->code, &op->f64);
 
 		// single-tag ops
 		case i_else:
