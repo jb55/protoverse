@@ -122,7 +122,7 @@ static struct val *get_fn_local(struct wasm_interp *interp, int fn, u32 ind)
 		return NULL;
 	}
 
-	return &func->locals[ind].val;
+	return &func->locals[ind];
 }
 
 static INLINE struct val *get_local(struct wasm_interp *interp, u32 ind)
@@ -1284,14 +1284,14 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 	return 1;
 }
 
-static int parse_local(struct wasm_parser *p, struct local *local)
+static int parse_local(struct wasm_parser *p, struct val *local)
 {
-	if (unlikely(!parse_u32(&p->cur, &local->val.num.u32))) {
+	if (unlikely(!parse_u32(&p->cur, &local->num.u32))) {
 		debug("fail parse local\n");
 		return parse_err(p, "n");
 	}
 
-	if (unlikely(!parse_valtype(p, &local->val.type))) {
+	if (unlikely(!parse_valtype(p, &local->type))) {
 		debug("fail parse valtype\n");
 		return parse_err(p, "valtype");
 	}
@@ -1424,7 +1424,7 @@ static int parse_name_section(struct wasm_parser *p, struct namesec *sec,
 
 static int parse_func(struct wasm_parser *p, struct wasm_func *func)
 {
-	struct local *locals;
+	struct val *locals;
 	u32 i, size;
 	u8 *start;
 
@@ -1433,7 +1433,7 @@ static int parse_func(struct wasm_parser *p, struct wasm_func *func)
 	}
 
 	start = p->cur.p;
-	locals = (struct local*)p->mem.p;
+	locals = (struct val*)p->mem.p;
 
 	if (!parse_u32(&p->cur, &func->num_locals)) {
 		return parse_err(p, "read locals vec");
@@ -3410,7 +3410,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		int func_index)
 {
 	static char buf[128];
-	struct local *local;
+	struct val *local;
 	enum valtype paramtype;
 	struct val val;
 	u32 i, ind;
@@ -3440,7 +3440,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		}
 
 		debug("setting param %d (%s) to ",
-				ind, valtype_name(local->val.type));
+				ind, valtype_name(local->type));
 #ifdef DEBUG
 		print_val(&val); printf("\n");
 #endif
@@ -3450,10 +3450,10 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 	for (i=func->functype->params.num_valtypes;
 	     i < func->num_locals; i++) {
 		local = &func->locals[i];
-		make_default_val(&local->val);
+		make_default_val(local);
 		debug("setting local %d (%s) to default\n",
 				i-func->functype->params.num_valtypes,
-				valtype_name(local->val.type));
+				valtype_name(local->type));
 	}
 
 	return 1;
@@ -5789,7 +5789,7 @@ static int count_fn_locals(struct func *func)
 	if (func->type == func_type_wasm) {
 		// counts locals of the same type
 		for (i = 0; i < func->wasm_func->num_locals; i++) {
-			num_locals += func->wasm_func->locals->val.num.i32;
+			num_locals += func->wasm_func->locals->num.i32;
 		}
 	}
 
@@ -5874,7 +5874,7 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 		func = &module->funcs[i];
 		num_locals = count_fn_locals(func);
 
-		func->locals = (struct local*)mem->p;
+		func->locals = (struct val*)mem->p;
 		func->num_locals = num_locals;
 
 		size = num_locals * sizeof(struct val);
@@ -5888,22 +5888,22 @@ static int alloc_locals(struct module *module, struct cursor *mem,
 		}
 
 		for (j = 0, ind = 0; j < func->functype->params.num_valtypes; j++, ind++) {
-			func->locals[j].val.type = func->functype->params.valtypes[j];
+			func->locals[j].type = func->functype->params.valtypes[j];
 		}
 
 		if (func->type != func_type_wasm)
 			continue;
 
 		for (j = 0; j < func->wasm_func->num_locals; j++) {
-		for (k = 0; k < func->wasm_func->locals[j].val.num.u32; k++, ind++) {
+		for (k = 0; k < func->wasm_func->locals[j].num.u32; k++, ind++) {
 			/*
 			debug("initializing function %d local %d to type %s\n",
 				i, ind, valtype_name(
-					  func->wasm_func->locals[j].val.type));
+					  func->wasm_func->locals[j].type));
 					  */
 
-			func->locals[ind].val.type =
-				func->wasm_func->locals[j].val.type;
+			func->locals[ind].type =
+				func->wasm_func->locals[j].type;
 		}
 		}
 	}

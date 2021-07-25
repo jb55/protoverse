@@ -227,14 +227,10 @@ struct global {
 	struct val val;
 };
 
-struct local {
-	struct val val;
-};
-
 /* "code" */
 struct wasm_func {
 	struct expr code;
-	struct local *locals;
+	struct val *locals;
 	u32 num_locals;
 };
 
@@ -248,7 +244,7 @@ struct func {
 		struct wasm_func *wasm_func;
 		struct builtin *builtin;
 	};
-	struct local *locals;
+	struct val *locals;
 	u32 num_locals;
 	struct functype *functype;
 	enum func_type type;
