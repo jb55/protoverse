@@ -4180,7 +4180,7 @@ static int interp_if(struct wasm_interp *interp)
 		return interp_error(interp, "label checkpoint");
 	}
 
-	if (cond.num.i32 == 1) {
+	if (cond.num.i32 != 0) {
 		return 1;
 	}
 

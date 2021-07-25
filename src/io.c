@@ -44,7 +44,7 @@ int read_file(const char *filename, unsigned char *buf, int buflen, int *written
 	FILE *file = NULL;
 	int ok;
 
-	file = fopen(filename, "rb");
+	file = fopen(filename, "r");
 	if (file == NULL) {
 		*written = strlen(filename)+1;
 		memcpy(buf, filename, *written);
