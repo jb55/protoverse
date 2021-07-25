@@ -595,6 +595,16 @@ static INLINE int was_section_parsed(struct module *module,
 	return module->parsed & (1 << section);
 }
 
+static INLINE int was_name_section_parsed(struct module *module,
+		enum name_subsection_tag subsection)
+{
+	if (!was_section_parsed(module, section_name)) {
+		return 0;
+	}
+
+	return module->name_section.parsed & (1 << subsection);
+}
+
 //static int callframe_cnt = 0;
 
 static INLINE int cursor_push_callframe(struct cursor *cur, struct callframe *frame)
@@ -943,6 +953,9 @@ static void print_section(struct module *module, enum section_tag section)
 	case section_data:
 		print_data_section(&module->data_section);
 		break;
+	case section_name:
+		printf("todo: print name section\n");
+		break;
 	case num_sections:
 		assert(0);
 		break;
@@ -987,7 +1000,7 @@ static int leb128_write(struct cursor *write, unsigned int value)
 #define LEB128_4(type) (BYTE_AT(type, 3, 21) | LEB128_3(type))
 #define LEB128_5(type) (BYTE_AT(type, 4, 28) | LEB128_4(type))
 
-static INLINE int read_i64(struct cursor *read, int64_t *val)
+static INLINE int parse_i64(struct cursor *read, int64_t *val)
 {
 	int64_t shift;
 	u8 byte;
@@ -1084,13 +1097,13 @@ static INLINE int uleb128_read(struct cursor *read, unsigned int *val)
 }
 */
 
-static INLINE int read_int(struct cursor *read, int *val)
+static INLINE int parse_int(struct cursor *read, int *val)
 {
 	return sleb128_read(read, val);
 }
 
 
-static INLINE int read_u32(struct cursor *read, u32 *val)
+static INLINE int parse_u32(struct cursor *read, u32 *val)
 {
 	return uleb128_read(read, val);
 }
@@ -1155,7 +1168,7 @@ static int parse_result_type(struct wasm_parser *p, struct resulttype *rt)
 	rt->valtypes = 0;
 	start = p->mem.p;
 
-	if (unlikely(!read_u32(&p->cur, &elems))) {
+	if (unlikely(!parse_u32(&p->cur, &elems))) {
 		parse_err(p, "vec len");
 		return 0;
 	}
@@ -1205,7 +1218,7 @@ static int parse_func_type(struct wasm_parser *p, struct functype *func)
 static int parse_name(struct wasm_parser *p, const char **name)
 {
 	u32 bytes;
-	if (unlikely(!read_u32(&p->cur, &bytes))) {
+	if (unlikely(!parse_u32(&p->cur, &bytes))) {
 		parse_err(p, "name len");
 		return 0;
 	}
@@ -1222,6 +1235,11 @@ static int parse_name(struct wasm_parser *p, const char **name)
 	}
 
 	return 1;
+}
+
+static INLINE int is_valid_name_subsection(u8 tag)
+{
+	return tag < num_name_subsections;
 }
 
 static int parse_export_desc(struct wasm_parser *p, enum exportdesc *desc)
@@ -1258,7 +1276,7 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 		return 0;
 	}
 
-	if (!read_u32(&p->cur, &export->index)) {
+	if (!parse_u32(&p->cur, &export->index)) {
 		parse_err(p, "export index");
 		return 0;
 	}
@@ -1268,7 +1286,7 @@ static int parse_export(struct wasm_parser *p, struct wexport *export)
 
 static int parse_local(struct wasm_parser *p, struct local *local)
 {
-	if (unlikely(!read_u32(&p->cur, &local->val.num.u32))) {
+	if (unlikely(!parse_u32(&p->cur, &local->val.num.u32))) {
 		debug("fail parse local\n");
 		return parse_err(p, "n");
 	}
@@ -1284,7 +1302,7 @@ static int parse_local(struct wasm_parser *p, struct local *local)
 static int parse_vector(struct wasm_parser *p, int item_size,
 			u32 *elems, void **items)
 {
-	if (!read_u32(&p->cur, elems)) {
+	if (!parse_u32(&p->cur, elems)) {
 		return parse_err(p, "len");
 	}
 
@@ -1298,20 +1316,127 @@ static int parse_vector(struct wasm_parser *p, int item_size,
 	return 1;
 }
 
+static int parse_nameassoc(struct wasm_parser *p, struct nameassoc *assoc)
+{
+	if (!parse_u32(&p->cur, &assoc->index))
+		return parse_err(p, "index");
+
+	if (!parse_name(p, &assoc->name))
+		return parse_err(p, "name");
+
+	//debug("parsed nameassoc %d %s\n", assoc->index, assoc->name);
+
+	return 1;
+}
+
+static int parse_namemap(struct wasm_parser *p, struct namemap *map)
+{
+	u32 i;
+
+	if (!parse_vector(p, sizeof(struct nameassoc), &map->num_names,
+			  (void**)&map->names)) {
+		return parse_err(p, "parse funcmap vec");
+	}
+
+	for (i = 0; i < map->num_names; i++) {
+		if (!parse_nameassoc(p, &map->names[i])) {
+			return parse_err(p, "name assoc %d/%d", i+1,
+					 map->num_names);
+		}
+	}
+
+	return 1;
+}
+
+static int parse_name_subsection(struct wasm_parser *p, struct namesec *sec, u32 *size)
+{
+	u8 tag;
+	u8 *start = p->cur.p;
+
+	if (!pull_byte(&p->cur, &tag))
+		return parse_err(p, "name subsection tag oob?");
+
+	if (!is_valid_name_subsection(tag))
+		return parse_err(p, "invalid subsection tag 0x%02x", tag);
+
+	if (!parse_u32(&p->cur, size))
+		return parse_err(p, "subsection size");
+
+	// include tag and size in size
+	*size += p->cur.p - start;
+
+	switch((enum name_subsection_tag)tag) {
+	case name_subsection_module:
+		if (!parse_name(p, &sec->module_name))
+			return parse_err(p, "parse module name");
+		sec->parsed |= 1 << name_subsection_module;
+		return 1;
+
+	case name_subsection_funcs:
+		if (!parse_namemap(p, &sec->func_names))
+			return parse_err(p, "func namemap");
+		sec->parsed |= 1 << name_subsection_funcs;
+		return 1;
+
+	case name_subsection_locals:
+		debug("TODO: parse local name subsection\n");
+		return 1;
+
+	case num_name_subsections:
+		return parse_err(p, "impossibru");
+	}
+
+	return parse_err(p, "unknown name subsection: 0x%02x", tag);
+
+}
+
+static int parse_name_section(struct wasm_parser *p, struct namesec *sec,
+		struct customsec *customsec)
+{
+	int i;
+	u32 size, subsection_size;
+
+	subsection_size = 0;
+	size = 0;
+	i = 0;
+
+	for (; i < 3; i++) {
+		printf("size %d == data_len %d ?\n", size, customsec->data_len);
+		if (size == customsec->data_len) {
+			break;
+		} else if (size > customsec->data_len) {
+			return parse_err(p, "parse_name_section did not parse"
+				"the correct number of bytes. It parsed %d bytes"
+				" but %d was expected.",
+				size, customsec->data_len);
+		}
+
+		if (!parse_name_subsection(p, sec, &subsection_size))
+			return parse_err(p, "name subsection %d", i);
+
+		size += subsection_size;
+	}
+
+	p->module.parsed |= (1 << section_name);
+
+	return 1;
+}
+
+
 static int parse_func(struct wasm_parser *p, struct wasm_func *func)
 {
 	struct local *locals;
 	u32 i, size;
 	u8 *start;
 
-	if (!read_u32(&p->cur, &size)) {
+	if (!parse_u32(&p->cur, &size)) {
 		return parse_err(p, "code size");
 	}
 
 	start = p->cur.p;
 	locals = (struct local*)p->mem.p;
 
-	if (!read_u32(&p->cur, &func->num_locals)) {
+	if (!parse_u32(&p->cur, &func->num_locals)) {
 		return parse_err(p, "read locals vec");
 	}
 
@@ -1438,14 +1563,14 @@ static int parse_limits(struct wasm_parser *p, struct limits *limits)
 		return parse_err(p, "invalid tag %02x", tag);
 	}
 
-	if (!read_u32(&p->cur, &limits->min)) {
+	if (!parse_u32(&p->cur, &limits->min)) {
 		return parse_err(p, "min");
 	}
 
 	if (tag == limit_min)
 		return 1;
 
-	if (!read_u32(&p->cur, &limits->max)) {
+	if (!parse_u32(&p->cur, &limits->max)) {
 		return parse_err(p, "max");
 	}
 
@@ -2033,7 +2158,7 @@ static int parse_elem_func_inits(struct wasm_parser *p, struct elem *elem)
 	u32 index, i;
 	struct expr *expr;
 
-	if (!read_u32(&p->cur, &elem->num_inits))
+	if (!parse_u32(&p->cur, &elem->num_inits))
 		return parse_err(p, "func indices vec read fail");
 
 	if (!(elem->inits = cursor_alloc(&p->mem, elem->num_inits *
@@ -2045,7 +2170,7 @@ static int parse_elem_func_inits(struct wasm_parser *p, struct elem *elem)
 		expr = &elem->inits[i];
 		expr->code = p->mem.p;
 
-		if (!read_u32(&p->cur, &index))
+		if (!parse_u32(&p->cur, &index))
 			return parse_err(p, "func index %d read fail", i);
 		if (!cursor_push_byte(&p->mem, i_ref_func))
 			return parse_err(p, "push ref_func instr oob for %d", i);
@@ -2107,7 +2232,18 @@ static int parse_custom_section(struct wasm_parser *p, u32 size,
 
 	section->data = p->cur.p;
 	section->data_len = size - (p->cur.p - start);
-	p->cur.p += section->data_len;
+
+	debug("custom sec minus %ld\n", p->cur.p - start);
+
+	if (!strcmp(section->name, "name")) {
+		if (!parse_name_section(p, &p->module.name_section, section)) {
+			return parse_err(p,
+					"failed to parse name custom section");
+		}
+	} else {
+		p->cur.p += section->data_len;
+	}
+
 	p->module.custom_sections++;
 
 	return 1;
@@ -2157,7 +2293,7 @@ static int parse_memory_section(struct wasm_parser *p,
 static int parse_start_section(struct wasm_parser *p,
 		struct startsec *start_section)
 {
-	if (!read_u32(&p->cur, &start_section->start_fn)) {
+	if (!parse_u32(&p->cur, &start_section->start_fn)) {
 		return parse_err(p, "start_fn index");
 	}
 
@@ -2167,7 +2303,7 @@ static int parse_start_section(struct wasm_parser *p,
 static INLINE int parse_byte_vector(struct wasm_parser *p, u8 **data,
 		u32 *data_len)
 {
-	if (!read_u32(&p->cur, data_len)) {
+	if (!parse_u32(&p->cur, data_len)) {
 		return parse_err(p, "len");
 	}
 
@@ -2224,7 +2360,7 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 	case 2:
 		data->mode = datamode_active;
 
-		if (!read_u32(&p->cur, &data->active.mem_index))  {
+		if (!parse_u32(&p->cur, &data->active.mem_index))  {
 			return parse_err(p, "read active data mem_index");
 		}
 
@@ -2296,7 +2432,7 @@ static int parse_function_section(struct wasm_parser *p,
 	}
 
 	for (i = 0; i < elems; i++) {
-		if (!read_u32(&p->cur, &indices[i])) {
+		if (!parse_u32(&p->cur, &indices[i])) {
 			parse_err(p, "typeidx #%d", i);
 			return 0;
 		}
@@ -2336,7 +2472,7 @@ static int parse_importdesc(struct wasm_parser *p, struct importdesc *desc)
 
 	switch (desc->type) {
 	case import_func:
-		if (!read_u32(&p->cur, &desc->typeidx)) {
+		if (!parse_u32(&p->cur, &desc->typeidx)) {
 			parse_err(p, "typeidx");
 			return 0;
 		}
@@ -2525,7 +2661,7 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 	return 1;
 }
 
-static const char *section_name(enum section_tag tag)
+static const char *section_str(enum section_tag tag)
 {
 	switch (tag) {
 		case section_custom:
@@ -2569,12 +2705,12 @@ static int parse_section(struct wasm_parser *p)
 		return 2;
 	}
 
-	if (!read_u32(&p->cur, &bytes)) {
+	if (!parse_u32(&p->cur, &bytes)) {
 		return parse_err(p, "section len");
 	}
 
 	if (!parse_section_by_tag(p, tag, bytes)) {
-		return parse_err(p, "%s (%d bytes)", section_name(tag), bytes);
+		return parse_err(p, "%s (%d bytes)", section_str(tag), bytes);
 	}
 
 	p->module.parsed |= 1 << tag;
@@ -2598,7 +2734,7 @@ static const char *find_exported_function_name(struct module *module, u32 fn)
 	struct wexport *export;
 
 	if (!was_section_parsed(module, section_export))
-		return "unknown";
+		return NULL;
 
 	for (i = 0; i < module->export_section.num_exports; i++) {
 		export = &module->export_section.exports[i];
@@ -2608,9 +2744,44 @@ static const char *find_exported_function_name(struct module *module, u32 fn)
 		}
 	}
 
-	return "unknown";
+	return NULL;
 }
 
+static const char *find_debug_function_name(struct module *module, u32 fn)
+{
+	u32 i;
+	struct nameassoc *assoc;
+
+	if (!was_name_section_parsed(module, name_subsection_funcs))
+		return NULL;
+
+	for (i = 0; i < module->name_section.func_names.num_names; i++) {
+		assoc = &module->name_section.func_names.names[i];
+		if (fn == assoc->index) {
+			//debug("found fn debug name %d -> %s\n", fn, assoc->name);
+			return assoc->name;
+		}
+	}
+
+	debug("fn %d debug name not found\n", fn);
+
+	return NULL;
+}
+
+static const char *find_function_name(struct module *module, u32 fn)
+{
+	const char *name;
+
+	if ((name = find_exported_function_name(module, fn))) {
+		return name;
+	}
+
+	if ((name = find_debug_function_name(module, fn))) {
+		return name;
+	}
+
+	return "unknown";
+}
 
 static int make_func_lookup_table(struct wasm_parser *parser)
 {
@@ -2664,7 +2835,7 @@ static int make_func_lookup_table(struct wasm_parser *parser)
 		func->type = func_type_wasm;
 		func->wasm_func = &parser->module.code_section.funcs[i];
 		func->functype = &parser->module.type_section.functypes[typeidx];
-		func->name = find_exported_function_name(&parser->module, fn);
+		func->name = find_function_name(&parser->module, fn);
 	}
 
 	assert(fn == parser->module.num_funcs);
@@ -3270,7 +3441,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		}
 
 		debug("setting param %d (%s) to ",
-				ind, valtype_name(local->type));
+				ind, valtype_name(local->val.type));
 #ifdef DEBUG
 		print_val(&val); printf("\n");
 #endif
@@ -3283,7 +3454,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		make_default_val(&local->val);
 		debug("setting local %d (%s) to default\n",
 				i-func->functype->params.num_valtypes,
-				valtype_name(local->type));
+				valtype_name(local->val.type));
 	}
 
 	return 1;
@@ -3433,7 +3604,7 @@ static int parse_blocktype(struct cursor *cur, struct errors *errs, struct block
 		cur->p--;
 
 		// TODO: this should be read_s64
-		if (!read_int(cur, &blocktype->type_index)) {
+		if (!parse_int(cur, &blocktype->type_index)) {
 			note_error(errs, cur, "parse_blocktype: read type_index\n");
 			return 0;
 		}
@@ -3489,15 +3660,18 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 static INLINE int pop_resolver(struct wasm_interp *interp,
 		struct resolver *resolver)
 {
+	/*
 #ifdef DEBUG
 	int num_resolvers;
 	struct label *label;
 #endif
+*/
 
 	if (!cursor_pop(&interp->resolver_stack, (u8*)resolver, sizeof(*resolver))) {
 		return interp_error(interp, "pop resolver");
 	}
 
+	/*
 #ifdef DEBUG
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
@@ -3517,6 +3691,7 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 			count_resolvers(interp),
 			num_resolvers
 			);
+			*/
 	return 1;
 }
 
@@ -3639,9 +3814,11 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	struct resolver resolver;
 	struct callframe *frame;
 
+	/*
 #ifdef DEBUG
 	int num_resolvers;
 #endif
+*/
 
 	resolver.start_tag = start_tag;
 	resolver.end_tag = end_tag;
@@ -3673,6 +3850,7 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
+	/*
 #ifdef DEBUG
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
@@ -3685,6 +3863,7 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 			instr_name(resolver.end_tag),
 			cursor_count(&interp->resolver_stack, sizeof(resolver)),
 			num_resolvers);
+			*/
 
 	return 1;
 }
@@ -3818,15 +3997,15 @@ static int parse_block(struct expr_parser *p, struct block *block, u8 start_tag,
 
 static INLINE int parse_memarg(struct cursor *code, struct memarg *memarg)
 {
-	return read_u32(code, &memarg->align) &&
-	       read_u32(code, &memarg->offset);
+	return parse_u32(code, &memarg->align) &&
+	       parse_u32(code, &memarg->offset);
 }
 
 static int parse_call_indirect(struct cursor *code,
 		struct call_indirect *call_indirect)
 {
-	return read_u32(code, &call_indirect->typeidx) &&
-	       read_u32(code, &call_indirect->tableidx);
+	return parse_u32(code, &call_indirect->typeidx) &&
+	       parse_u32(code, &call_indirect->tableidx);
 }
 
 static int parse_br_table(struct cursor *code, struct errors *errs,
@@ -3834,7 +4013,7 @@ static int parse_br_table(struct cursor *code, struct errors *errs,
 {
 	u32 i;
 
-	if (unlikely(!read_u32(code, &br_table->num_label_indices))) {
+	if (unlikely(!parse_u32(code, &br_table->num_label_indices))) {
 		return note_error(errs, code, "fail read br_table num_indices");
 	}
 
@@ -3847,14 +4026,14 @@ static int parse_br_table(struct cursor *code, struct errors *errs,
 	}
 
 	for (i = 0; i < br_table->num_label_indices; i++) {
-		if (unlikely(!read_u32(code, &br_table->label_indices[i]))) {
+		if (unlikely(!parse_u32(code, &br_table->label_indices[i]))) {
 			return note_error(errs, code,
 					  "failed to read br_table label %d/%d",
 					  i+1, br_table->num_label_indices);
 		}
 	}
 
-	if (unlikely(!read_u32(code, &br_table->default_label))) {
+	if (unlikely(!parse_u32(code, &br_table->default_label))) {
 		return note_error(errs, code, "failed to parse default label");
 	}
 
@@ -3870,7 +4049,7 @@ static int parse_select(struct cursor *code, struct errors *errs, u8 tag,
 		return 1;
 	}
 
-	if (unlikely(!read_u32(code, &select->num_valtypes))) {
+	if (unlikely(!parse_u32(code, &select->num_valtypes))) {
 		return note_error(errs, code,
 				"couldn't parse select valtype vec count");
 	}
@@ -3914,21 +4093,21 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_ref_func:
 		case i_table_set:
 		case i_table_get:
-			if (unlikely(!read_u32(p->code, &op->u32))) {
+			if (unlikely(!parse_u32(p->code, &op->u32))) {
 				return note_error(p->errs, p->code,
 						"couldn't read int");
 			}
 			return 1;
 
 		case i_i32_const:
-			if (unlikely(!read_int(p->code, &op->i32))) {
+			if (unlikely(!parse_int(p->code, &op->i32))) {
 				return note_error(p->errs, p->code,
 						"couldn't read int");
 			}
 			return 1;
 
 		case i_i64_const:
-			if (unlikely(!read_i64(p->code, &op->i64))) {
+			if (unlikely(!parse_i64(p->code, &op->i64))) {
 				return note_error(p->errs, p->code,
 						"couldn't read i64");
 			}

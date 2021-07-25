@@ -59,7 +59,15 @@ enum section_tag {
 	section_element,
 	section_code,
 	section_data,
+	section_name,
 	num_sections,
+};
+
+enum name_subsection_tag {
+	name_subsection_module,
+	name_subsection_funcs,
+	name_subsection_locals,
+	num_name_subsections,
 };
 
 enum reftype {
@@ -146,7 +154,7 @@ struct elem {
 struct customsec {
 	const char *name;
 	unsigned char *data;
-	int data_len;
+	u32 data_len;
 };
 
 struct elemsec {
@@ -268,6 +276,22 @@ struct wexport {
 struct exportsec {
 	struct wexport *exports;
 	u32 num_exports;
+};
+
+struct nameassoc {
+	u32 index;
+	const char *name;
+};
+
+struct namemap {
+	struct nameassoc *names;
+	u32 num_names;
+};
+
+struct namesec {
+	const char *module_name;
+	struct namemap func_names;
+	int parsed;
 };
 
 struct section {
@@ -596,6 +620,7 @@ struct module {
 	struct startsec start_section;
 	struct elemsec element_section;
 	struct datasec data_section;
+	struct namesec name_section;
 };
 
 // make sure the struct is packed so that 
