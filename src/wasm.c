@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <inttypes.h>
 
 #define interp_error(p, fmt, ...) note_error(&((p)->errors), interp_codeptr(p), fmt, ##__VA_ARGS__)
@@ -554,6 +555,8 @@ static int wasi_fd_close(struct wasm_interp *interp);
 static int wasi_environ_sizes_get(struct wasm_interp *interp);
 static int wasi_environ_get(struct wasm_interp *interp);
 
+#include "wasm_io.h"
+
 static struct builtin BUILTINS[] = {
 	{ .name = "null",              .fn = NULL }, // for reasons
 	{ .name = "args_get",          .fn = wasi_args_get },
@@ -564,6 +567,8 @@ static struct builtin BUILTINS[] = {
 	{ .name = "args_sizes_get",    .fn = wasi_args_sizes_get },
 	{ .name = "proc_exit",         .fn = wasi_proc_exit  },
 	{ .name = "abort",             .fn = wasi_abort  },
+
+	WASM_IO_IMPORTS
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -3084,6 +3089,14 @@ static void make_builtin_func(struct func *func, const char *name,
 	func->idx = idx;
 }
 
+static void intercept_func(struct func *func, const char *name)
+{
+	int builtin = find_builtin(name);
+	assert(builtin != -1);
+	func->builtin = &BUILTINS[builtin];
+	func->type = func_type_builtin;
+}
+
 static int make_func_lookup_table(struct wasm_parser *parser)
 {
 	u32 i, num_imports, num_func_imports, num_internal_funcs, typeidx, fn;
@@ -3143,6 +3156,21 @@ static int make_func_lookup_table(struct wasm_parser *parser)
 		func->name = find_function_name(&parser->module, fn);
 		func->num_locals = count_fn_locals(func);
 		func->idx = fn;
+
+		// HACK: move these outside of here, they are protoverse specific
+		if (!strcmp(func->name, "fopen") ||
+		    !strcmp(func->name, "fseek") ||
+		    !strcmp(func->name, "ftell") ||
+		    !strcmp(func->name, "rand") ||
+		    !strcmp(func->name, "srand") ||
+		    !strcmp(func->name, "feof") ||
+		    !strcmp(func->name, "fclose") ||
+		    !strcmp(func->name, "fread") ||
+		    !strcmp(func->name, "stat") ||
+		    !strcmp(func->name, "fflush")
+		    ) {
+			intercept_func(func, func->name);
+		}
 	}
 
 	assert(fn == parser->module.num_funcs);
@@ -3802,9 +3830,9 @@ static INLINE int drop_callframe_return(struct wasm_interp *interp, int returnin
 	cnt = count_stack_vals(&interp->stack);
 
 	if (returning)  {
-		drop = cnt - frame->prev_stack_items - 
+		drop = cnt - frame->prev_stack_items -
 				func->functype->result.num_valtypes;
-		if (drop < 0 || 
+		if (drop < 0 ||
 		    !cursor_dropn(&interp->stack, sizeof(struct val), drop)) {
 			return interp_error(interp,
 				"error dropping extra stack values in return. "
@@ -5503,8 +5531,8 @@ static int store_val(struct wasm_interp *interp, int i,
 	debug("storing ");
 #ifdef DEBUG
 	print_val(val);
-#endif 
-	debug(" at %ld (%d bytes), N:%d\n", 
+#endif
+	debug(" at %ld (%d bytes), N:%d\n",
 			target.pos - interp->memory.start,
 			target.size, N);
 
@@ -7043,10 +7071,9 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 
 	interp->quitting = 0;
 	interp->module = module;
-
 	interp->module_inst.start_fn = -1;
-
 	interp->prev_resolvers = 0;
+	interp->open_files.num_files = 0;
 
 	//stack = calloc(1, STACK_SPACE);
 	fns = module->num_funcs;

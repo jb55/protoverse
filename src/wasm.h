@@ -701,10 +701,16 @@ struct wasi {
 	const char **environ;
 };
 
+struct open_files {
+	FILE *files[1024];
+	u32 num_files;
+};
+
 struct wasm_interp {
 	struct module *module;
 	struct module_inst module_inst;
 	struct wasi wasi;
+	struct open_files open_files;
 
 	int prev_resolvers, quitting;
 
