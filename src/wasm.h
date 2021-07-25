@@ -520,10 +520,14 @@ struct blocktype {
 	};
 };
 
+struct instrs {
+	unsigned char *data;
+	u32 len;
+};
+
 struct block {
 	struct blocktype type;
-	unsigned char *instrs;
-	u32 instrs_len;
+	struct expr instrs;
 };
 
 struct memarg {
@@ -562,6 +566,7 @@ struct instr {
 		struct memarg memarg;
 		struct select_instr select;
 		struct block block;
+		struct expr else_block;
 		double f64;
 		float f32;
 		int i32;

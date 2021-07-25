@@ -31,6 +31,7 @@
 static const int MAX_LABELS = 256;
 
 static int interp_code(struct wasm_interp *interp);
+static INLINE int pop_label_checkpoint(struct wasm_interp *interp);
 
 struct expr_parser {
 	struct wasm_interp *interp; // optional...
@@ -119,7 +120,7 @@ static INLINE u8 *mem_ptr(struct wasm_interp *interp, u32 ptr, int size)
 			pos, interp->memory.p - interp->memory.start);
 		return NULL;
 	}
-	
+
 	return pos;
 }
 
@@ -2225,16 +2226,25 @@ static INLINE void make_interp_expr_parser(struct wasm_interp *interp,
 	assert(p->code);
 }
 
-static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
-               u8 **parsed_instrs, u32 *instr_len)
+static int push_label_checkpoint(struct wasm_interp *interp, struct label **label,
+		u8 start_tag, u8 end_tag);
+
+static int parse_instrs_until_at(struct expr_parser *p, u8 stop_instr,
+               struct expr *expr, u8 *stopped_at)
 {
        u8 tag;
        struct instr op;
+#ifdef DEBUG
+       static int dbg = 0;
+       int dbg_inst = dbg++;
+#endif
 
-       *parsed_instrs = p->code->p;
-       *instr_len = 0;
+       expr->code = p->code->p;
+       expr->code_len = 0;
 
-       //debug("parse_instrs_until starting\n");
+       debug("%04lX parse_instrs_until %d for %s starting\n",
+		       p->code->p - p->code->start,
+		       dbg_inst, instr_name(stop_instr));
        for (;;) {
                if (!pull_byte(p->code, &tag))
                        return note_error(p->errs, p->code, "oob");
@@ -2242,7 +2252,20 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
 	       if ((tag != i_if && tag == stop_instr) ||
 		   (stop_instr == i_if && (tag == i_else || tag == i_end))) {
 		       //debug("parse_instrs_until ending\n");
-		       *instr_len = p->code->p - *parsed_instrs;
+		       expr->code_len = p->code->p - expr->code;
+
+		       *stopped_at = tag;
+
+		       debug("%04lX parse_instrs_until @%s %d for %s done\n",
+				       p->code->p - p->code->start,
+				       instr_name(tag),
+				       dbg_inst,
+				       instr_name(stop_instr));
+
+#ifdef DEBUG
+		       dbg--;
+#endif
+
                        return 1;
                }
 
@@ -2256,16 +2279,11 @@ static int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
        }
 }
 
-static int parse_expr(struct wasm_parser *p, struct expr *expr)
+static INLINE int parse_instrs_until(struct expr_parser *p, u8 stop_instr,
+               struct expr *expr)
 {
-	struct expr_parser parser;
-
-	make_expr_parser(&p->errs, &p->cur, &parser);
-
-	if (!parse_instrs_until(&parser, i_end, &expr->code, &expr->code_len))
-		return parse_err(p, "instrs");
-
-	return 1;
+	u8 at;
+	return parse_instrs_until_at(p, stop_instr, expr, &at);
 }
 
 static int parse_elem_func_inits(struct wasm_parser *p, struct elem *elem)
@@ -2304,7 +2322,10 @@ static int parse_elem_func_inits(struct wasm_parser *p, struct elem *elem)
 static int parse_element(struct wasm_parser *p, struct elem *elem)
 {
 	u8 tag = 0;
+	struct expr_parser expr_parser;
 	(void)elem;
+
+	make_expr_parser(&p->errs, &p->cur, &expr_parser);
 
 	if (!pull_byte(&p->cur, &tag))
 		return parse_err(p, "tag");
@@ -2314,12 +2335,13 @@ static int parse_element(struct wasm_parser *p, struct elem *elem)
 
 	switch (tag) {
 	case 0x00:
-		if (!parse_expr(p, &elem->offset))
+		if (!parse_instrs_until(&expr_parser, i_end, &elem->offset))
 			return parse_err(p, "elem 0x00 offset expr");
 
 		// func inits
 		if (!parse_elem_func_inits(p, elem))
 			return parse_err(p, "generate func index exprs");
+
 
 		elem->mode = elem_mode_active;
 		elem->tableidx = 0;
@@ -3735,11 +3757,8 @@ static int parse_blocktype(struct cursor *cur, struct errors *errs, struct block
 		blocktype->tag = blocktype_index;
 		cur->p--;
 
-		// TODO: this should be read_s64
-		if (!parse_int(cur, &blocktype->type_index)) {
-			note_error(errs, cur, "parse_blocktype: read type_index\n");
-			return 0;
-		}
+		if (!parse_int(cur, &blocktype->type_index))
+			return note_error(errs, cur, "parse_blocktype: read type_index\n");
 	}
 
 	return 1;
@@ -3792,18 +3811,15 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 static INLINE int pop_resolver(struct wasm_interp *interp,
 		struct resolver *resolver)
 {
-	/*
 #ifdef DEBUG
 	int num_resolvers;
 	struct label *label;
 #endif
-*/
 
 	if (!cursor_pop(&interp->resolver_stack, (u8*)resolver, sizeof(*resolver))) {
 		return interp_error(interp, "pop resolver");
 	}
 
-	/*
 #ifdef DEBUG
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
@@ -3814,8 +3830,9 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 			    resolver->label);
 #endif
 
-	debug("%04lX popped resolver %04x-%04x i_%s i_%s %d local_resolvers:%d\n",
+	debug("%04lX popped resolver label:%d %04x-%04x i_%s i_%s %d local_resolvers:%d\n",
 			interp_codeptr(interp)->p - interp_codeptr(interp)->start,
+			resolver->label,
 			label_instr_pos(label),
 			label->jump,
 			instr_name(resolver->start_tag),
@@ -3823,7 +3840,6 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 			count_resolvers(interp),
 			num_resolvers
 			);
-			*/
 	return 1;
 }
 
@@ -3946,7 +3962,7 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	struct resolver resolver;
 	struct callframe *frame;
 
-#if 0
+#ifdef DEBUG
 	int num_resolvers;
 #endif
 
@@ -3980,11 +3996,13 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
-#if 0
+#ifdef DEBUG
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
 	};
-	debug("pushed resolver label:%d 0x%04X-0x%04X i_%s i_%s %ld local_resolvers:%d \n",
+
+	debug("%04x pushed resolver label:%d 0x%04X-0x%04X i_%s i_%s %ld local_resolvers:%d \n",
+			instr_pos,
 			resolver.label,
 			label_instr_pos(*label),
 			(*label)->jump,
@@ -4031,22 +4049,6 @@ static INLINE struct resolver *top_resolver(struct wasm_interp *interp, u32 inde
 	return top_resolver_stack(&interp->resolver_stack, index);
 }
 
-static int break_jump(struct wasm_interp *interp, struct resolver *resolver,
-		struct label *label)
-{
-	/*
-	debug("break jumping to %s %s\n",
-			instr_name(resolver->start_tag),
-			instr_name(resolver->end_tag)
-			);
-			*/
-
-	if (resolver->start_tag != i_loop)
-		return interp_jump(interp, label->jump);
-
-	return interp_jump(interp, label_instr_pos(label));
-}
-
 static int pop_label_and_skip(struct wasm_interp *interp, struct label *label,
 		int times)
 {
@@ -4063,65 +4065,153 @@ static int pop_label_and_skip(struct wasm_interp *interp, struct label *label,
 	return interp_jump(interp, label->jump);
 }
 
-static int pop_label_and_break(struct wasm_interp *interp, struct label *label,
-		int times)
+static int unresolved_break(struct wasm_interp *interp, int index);
+
+static int break_if(struct wasm_interp *interp, struct label *label)
+{
+	struct cursor *code;
+	struct label *else_label;
+	struct expr_parser parser;
+	struct expr expr;
+
+	if (!interp_jump(interp, label->jump))
+		return interp_error(interp, "if break failed");
+
+	if (!(code = interp_codeptr(interp)))
+		return interp_error(interp, "if break codeptr");
+
+	if (code->p - 1 < code->start)
+		return interp_error(interp, "oob");
+
+	if (*(code->p - 1) != i_else)
+		return 1;
+
+	if (!push_label_checkpoint(interp, &else_label, i_else, i_end))
+		return interp_error(interp, "push else label");
+
+	if (is_label_resolved(else_label))
+		return pop_label_and_skip(interp, else_label, 1);
+
+	make_interp_expr_parser(interp, &parser);
+
+	if (!parse_instrs_until(&parser, i_end, &expr))
+		return interp_error(interp, "skip else instrs");
+
+	if (!pop_label_checkpoint(interp))
+		return interp_error(interp, "op else skip");
+
+	return 1;
+}
+
+
+static int break_label(struct wasm_interp *interp, struct resolver *resolver,
+		struct label *label)
+{
+
+	// we have a loop, push the popped resolver
+	if (resolver->start_tag == i_loop) {
+		debug("repushing resolver for loop\n");
+		if (unlikely(!cursor_push_resolver(&interp->resolver_stack, resolver))) {
+			return interp_error(interp, "re-push loop resolver");
+		}
+
+		// loop jump
+		return interp_jump(interp, label_instr_pos(label));
+
+	} else if (resolver->start_tag == i_if) {
+		return break_if(interp, label);
+	}
+
+	return interp_jump(interp, label->jump);
+}
+
+static int pop_label_and_break(struct wasm_interp *interp, int times)
 {
 	int i;
 	struct resolver resolver;
-	assert(is_label_resolved(label));
+	struct label *label;
+	struct callframe *frame;
 
 	if (unlikely(times == 0))
 		return interp_error(interp, "can't pop label 0 times");
 
 	for (i = 0; i < times; i++) {
-		if (!pop_resolver(interp, &resolver)) {
+		if (!pop_label(interp, &resolver, &frame, &label)) {
 			return interp_error(interp, "pop resolver");
 		}
 	}
 
-	// we have a loop, push the popped resolver
-	if (resolver.start_tag == i_loop) {
-		debug("repushing resolver for loop\n");
-		if (unlikely(!cursor_push_resolver(&interp->resolver_stack, &resolver))) {
-			return interp_error(interp, "re-push loop resolver");
-		}
-	}
-
-	if (!(label = index_frame_label(interp, resolver.label))) {
-		return interp_error(interp, "index label");
-	}
-
-	return break_jump(interp, &resolver, label);
+	return break_label(interp, &resolver, label);
 }
 
-static int parse_block(struct expr_parser *p, struct block *block, u8 start_tag, u8 end_tag)
+static int parse_block_instrs_at(struct expr_parser *p,
+		struct expr *exprs, u8 start_tag, u8 end_tag, u8 *stopped_at)
 {
 	struct label *label = NULL;
 
-	if (!parse_blocktype(p->code, p->errs, &block->type))
-		return note_error(p->errs, p->code, "blocktype");
-
 	// if we don't have an interpreter instance, we don't care about
 	// label resolution (NOT TRUE ANYMORE!)
-	if (p->interp != NULL && !push_label_checkpoint(p->interp, &label, start_tag, i_end))
+	if (p->interp && !push_label_checkpoint(p->interp, &label, start_tag,
+						end_tag)) {
 		return note_error(p->errs, p->code, "push checkpoint");
+	}
 
 	if (label && is_label_resolved(label)) {
 		debug("label is resolved, skipping block parse\n");
 		// TODO verify this is correct
-		block->instrs     = p->code->start + label_instr_pos(label);
-		block->instrs_len = (p->code->start + label->jump) - block->instrs;
+		exprs->code     = p->code->start + label_instr_pos(label);
+		exprs->code_len = (p->code->start + label->jump) - exprs->code;
 
 		return pop_label_and_skip(p->interp, label, 1);
 	}
 
-	if (!parse_instrs_until(p, end_tag, &block->instrs, &block->instrs_len))
+	if (!parse_instrs_until_at(p, end_tag, exprs, stopped_at))
 		return note_error(p->errs, p->code, "parse instrs");
 
-	if (p->interp)
-		return pop_label_checkpoint(p->interp);
+	if (!pop_label_checkpoint(p->interp))
+		return note_error(p->errs, p->code, "pop label");
 
 	return 1;
+
+}
+
+static INLINE int parse_block_instrs(struct expr_parser *p, struct expr *exprs,
+			      u8 start_tag, u8 end_tag)
+{
+	u8 stopped_at;
+	return parse_block_instrs_at(p, exprs, start_tag, end_tag, &stopped_at);
+}
+
+static int parse_block_at(struct expr_parser *p, struct block *block, u8 start_tag,
+		u8 end_tag, u8 *stopped_at)
+{
+	if (!parse_blocktype(p->code, p->errs, &block->type))
+		return note_error(p->errs, p->code, "blocktype");
+
+	if (!parse_block_instrs_at(p, &block->instrs, start_tag, end_tag,
+				stopped_at))
+		return note_error(p->errs, p->code, "block instrs");
+
+	debug("%04lX parse block ended\n",
+			p->interp ? p->code->p - p->code->start : 0L);
+
+	return 1;
+}
+
+static INLINE int parse_block(struct expr_parser *p, struct block *block,
+		u8 start_tag, u8 end_tag)
+{
+	u8 stopped_at;
+	return parse_block_at(p, block, start_tag, end_tag, &stopped_at);
+}
+
+static INLINE int parse_else(struct expr_parser *p, struct expr *instrs)
+{
+	if (p->interp && !pop_label_checkpoint(p->interp))
+		return note_error(p->errs, p->code, "pop if checkpoint");
+
+	debug("parsing else...\n");
+	return parse_block_instrs(p, instrs, i_else, i_end);
 }
 
 static INLINE int parse_memarg(struct cursor *code, struct memarg *memarg)
@@ -4189,6 +4279,34 @@ static int parse_select(struct cursor *code, struct errors *errs, u8 tag,
 	return 1;
 }
 
+static int parse_if(struct expr_parser *p, struct block *block)
+{
+	struct label *label;
+	struct expr expr;
+	u8 stopped_at;
+
+	if (!parse_block_at(p, block, i_if, i_if, &stopped_at))
+		return note_error(p->errs, p->code, "parse if block");
+
+	if (p->interp == NULL || stopped_at != i_else)
+		return 1;
+
+	// else
+	if (!push_label_checkpoint(p->interp, &label, i_else, i_end))
+		return note_error(p->errs, p->code, "push else checkpoint");
+
+	if (is_label_resolved(label))
+		return pop_label_and_skip(p->interp, label, 1);
+
+	if (!parse_instrs_until(p, i_end, &expr))
+		return note_error(p->errs, p->code, "parse else instrs");
+
+	if (!pop_label_checkpoint(p->interp))
+		return note_error(p->errs, p->code, "pop else checkpoint");
+
+	return 1;
+}
+
 static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 {
 	op->pos = p->code->p - 1 - p->code->start;
@@ -4209,7 +4327,9 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_loop:
 			return parse_block(p, &op->block, i_loop, i_end);
 		case i_if:
-			return parse_block(p, &op->block, i_if, i_end);
+			return parse_if(p, &op->block);
+		case i_else:
+			return parse_else(p, &op->else_block);
 
 		case i_call:
 		case i_local_get:
@@ -4284,7 +4404,6 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 			return read_f64(p->code, &op->f64);
 
 		// single-tag ops
-		case i_else:
 		case i_end:
 		case i_ref_null:
 		case i_unreachable:
@@ -4425,11 +4544,13 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 	return note_error(p->errs, p->code, "unhandled tag: 0x%x", tag);
 }
 
+// end or else
 static int if_jump(struct wasm_interp *interp, struct label *label)
 {
-	u8 *instrs;
-	u32 instrs_len;
+	struct expr expr;
 	struct expr_parser parser;
+	struct label *else_label;
+	u8 stopped_at;
 
 	if (!label) {
 		return interp_error(interp, "no label?");
@@ -4442,11 +4563,21 @@ static int if_jump(struct wasm_interp *interp, struct label *label)
 	make_interp_expr_parser(interp, &parser);
 
 	// consume instructions, use resolver stack to resolve jumps
-	if (!parse_instrs_until(&parser, i_if, &instrs, &instrs_len)) {
+	if (!parse_instrs_until_at(&parser, i_if, &expr, &stopped_at))
 		return interp_error(interp, "parse instrs start (if)");
+
+	if (!pop_label_checkpoint(interp))
+		return interp_error(interp, "pop label");
+
+	if (stopped_at == i_else && !push_label_checkpoint(interp, &else_label,
+							   i_else, i_end)) {
+		return interp_error(interp, "push else label");
 	}
 
-	return pop_label_checkpoint(interp);
+	debug("%04lX if_jump ended\n",
+		parser.code->p - parser.code->start);
+
+	return 1;
 }
 
 static int interp_block(struct wasm_interp *interp)
@@ -4455,18 +4586,49 @@ static int interp_block(struct wasm_interp *interp)
 	struct label *label;
 	struct blocktype blocktype;
 
-	if (unlikely(!(code = interp_codeptr(interp)))) {
-		interp_error(interp, "empty callstack?");
-		return 0;
-	}
+	if (unlikely(!(code = interp_codeptr(interp))))
+		return interp_error(interp, "empty callstack?");
 
-	if (unlikely(!parse_blocktype(code, &interp->errors, &blocktype))) {
+	if (unlikely(!parse_blocktype(code, &interp->errors, &blocktype)))
 		return interp_error(interp, "couldn't parse blocktype");
+
+	if (unlikely(!push_label_checkpoint(interp, &label, i_block, i_end)))
+		return interp_error(interp, "block label checkpoint");
+
+	return 1;
+}
+
+static INLINE struct label *top_label(struct wasm_interp *interp, u32 index)
+{
+	struct resolver *resolver;
+
+	if (unlikely(!(resolver = top_resolver(interp, index)))) {
+		interp_error(interp, "invalid resolver index %d", index);
+		return NULL;
 	}
 
-	if (unlikely(!push_label_checkpoint(interp, &label, i_block, i_end))) {
-		return interp_error(interp, "block label checkpoint");
+	return index_frame_label(interp, resolver->label);
+}
+
+static INLINE int interp_else(struct wasm_interp *interp)
+{
+	(void)interp;
+	/*
+	struct label *label;
+	struct expr expr;
+	struct expr_parser parser;
+
+	if (!(label = top_label(interp, 0)))
+		return interp_error(interp, "no label?");
+
+	if (!push_label_checkpoint(interp, &label, i_else, i_end)) {
+		return interp_error(interp, "label checkpoint");
 	}
+
+	if (!is_label_resolved(label)) {
+		return interp_error(interp, "expected label to be parsed");
+	}
+	*/
 
 	return 1;
 }
@@ -4552,24 +4714,11 @@ static INLINE int interp_i32_eqz(struct wasm_interp *interp)
 	return stack_push_i32(interp, a.num.i32 == 0);
 }
 
-static INLINE struct label *top_label(struct wasm_interp *interp, u32 index)
-{
-	struct resolver *resolver;
-
-	if (unlikely(!(resolver = top_resolver(interp, index)))) {
-		interp_error(interp, "invalid resolver index %d", index);
-		return NULL;
-	}
-
-	return index_frame_label(interp, resolver->label);
-}
-
 static int unresolved_break(struct wasm_interp *interp, int index)
 {
 	struct expr_parser parser;
 	struct callframe *frame;
-	u32 instrs_len;
-	u8 *instrs;
+	struct expr expr;
 
 	struct resolver *resolver = NULL;
 	struct label *label = NULL;
@@ -4602,22 +4751,25 @@ static int unresolved_break(struct wasm_interp *interp, int index)
 
 		// TODO: breaking from functions (return)
 		if (is_label_resolved(label)) {
-			if (!pop_label_and_skip(interp, label, 1))
+			if (index == -1)
+				return pop_label_and_break(interp, 1);
+			else if (!pop_label_and_skip(interp, label, 1))
 				return interp_error(interp, "pop and jump");
 			else
 				continue;
 		}
 
-		if (unlikely(!parse_instrs_until(&parser, resolver->end_tag,
-						 &instrs, &instrs_len))) {
+		if (unlikely(!parse_instrs_until(&parser, resolver->end_tag, &expr)))
 			return interp_error(interp, "parsing instrs");
-		}
 
-		if (unlikely(!pop_label_checkpoint(interp))) {
-		    return interp_error(interp, "pop label");
-		}
+		if (index == -1)
+			return pop_label_and_break(interp, 1);
+
+		if (!pop_label_checkpoint(interp))
+			return interp_error(interp, "pop label");
 	}
 
+	/*
 	debug("finished breaking %d times from unresolved label (it was a %s)\n",
 			times,
 			instr_name(resolver->start_tag));
@@ -4634,7 +4786,8 @@ static int unresolved_break(struct wasm_interp *interp, int index)
 		return interp_jump(interp, label_instr_pos(label));
 	}
 
-	return 1;
+	*/
+	return interp_error(interp, "shouldn't get here");
 }
 
 static int interp_return(struct wasm_interp *interp)
@@ -4664,7 +4817,7 @@ static int interp_br_jump(struct wasm_interp *interp, u32 index)
 	}
 
 	if (is_label_resolved(label)) {
-		return pop_label_and_break(interp, label, index+1);
+		return pop_label_and_break(interp, index+1);
 	}
 
 	return unresolved_break(interp, index);
@@ -5780,6 +5933,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_drop: return interp_drop(interp);
 	case i_loop: return interp_loop(interp);
 	case i_if: return interp_if(interp);
+	case i_else: return interp_else(interp);
 	case i_end: return interp_end(interp);
 	case i_call: return interp_call(interp, instr->i32);
 	case i_call_indirect: return interp_call_indirect(interp, &instr->call_indirect);
@@ -5807,7 +5961,6 @@ static int is_control_instr(u8 tag)
 		case i_if:
 		case i_block:
 		case i_loop:
-		case i_else:
 			return 1;
 	}
 	return 0;
@@ -5834,7 +5987,7 @@ static INLINE int interp_parse_instr(struct wasm_interp *interp,
 
 	parser->code = code;
 	if (!parse_instr(parser, instr->tag, instr)) {
-		return interp_error(interp, "parse instr %s", instr_name(tag));
+		return interp_error(interp, "parse non-control instr %s", instr_name(tag));
 	}
 
 	return 1;
@@ -6355,11 +6508,16 @@ static int reset_memory(struct wasm_interp *interp)
 
 	if (num_mems == 1) {
 		pages = interp->module->memory_section.mems[0].min;
+
+		if (pages == 0)
+			return 1;
+
 		if (!cursor_malloc(&interp->memory, pages * WASM_PAGE_SIZE)) {
 			return interp_error(interp,
 					"could not alloc %d memory pages",
 					pages);
 		}
+
 		assert(interp->memory.p > interp->memory.start);
 		// I technically need this...
 		//memset(interp->memory.start, 0, pages * WASM_PAGE_SIZE);
