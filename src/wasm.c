@@ -1401,7 +1401,6 @@ static int parse_name_section(struct wasm_parser *p, struct namesec *sec,
 	i = 0;
 
 	for (; i < 3; i++) {
-		printf("size %d == data_len %d ?\n", size, customsec->data_len);
 		if (size == customsec->data_len) {
 			break;
 		} else if (size > customsec->data_len) {
