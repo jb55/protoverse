@@ -110,6 +110,57 @@ static INLINE struct func *get_fn(struct module *module, u32 ind)
 	return &module->funcs[ind];
 }
 
+static INLINE u8 *mem_ptr(struct wasm_interp *interp, u32 ptr, int size)
+{
+	u8 *pos = interp->memory.start + ptr;
+
+	if (pos + size >= interp->memory.p) {
+		interp_error(interp, "guest invalid mem read: %d > %d",
+			pos, interp->memory.p - interp->memory.start);
+		return NULL;
+	}
+	
+	return pos;
+}
+
+static INLINE int read_mem(struct wasm_interp *interp, u32 ptr, int size,
+		void *dest)
+{
+	u8 *mem;
+	if (!(mem = mem_ptr(interp, ptr, size)))
+		return interp_error(interp, "invalid mem pointer");
+	memcpy(dest, mem, size);
+	return 1;
+}
+
+static INLINE int read_mem_u32(struct wasm_interp *interp, u32 ptr, u32 *i)
+{
+	return read_mem(interp, ptr, sizeof(*i), i);
+}
+
+static INLINE int mem_ptr_i32(struct wasm_interp *interp, u32 ptr, int **i)
+{
+	if (!(*i = (int*)mem_ptr(interp, ptr, sizeof(int)))) {
+		return interp_error(interp, "int memptr");
+	}
+	return 1;
+}
+
+static INLINE int mem_ptr_str(struct wasm_interp *interp, u32 ptr,
+		const char **str)
+{
+	// still technically unsafe if the string runs over the end of memory...
+	if (!(*str = (const char*)mem_ptr(interp, ptr, 1))) {
+		return interp_error(interp, "int memptr");
+	}
+	return 1;
+}
+
+static INLINE int read_mem_i32(struct wasm_interp *interp, u32 ptr, int *i)
+{
+	return read_mem(interp, ptr, sizeof(*i), i);
+}
+
 static struct val *get_fn_local(struct wasm_interp *interp, int fn, u32 ind)
 {
 	struct func *func;
