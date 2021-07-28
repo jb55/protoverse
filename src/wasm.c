@@ -3011,17 +3011,16 @@ static INLINE int interp_i32_lt_s(struct wasm_interp *interp)
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
 		return interp_error(interp, "binop prep");
 	}
-	c.num.i32 = (signed int)lhs.num.i32 < (signed int)rhs.num.i32;
+	c.num.i32 = lhs.num.i32 < rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
 static INLINE int interp_i32_lt_u(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	}
-	c.num.i32 = (unsigned int)lhs.num.i32 < (unsigned int)rhs.num.i32;
+	c.num.u32 = lhs.num.u32 < rhs.num.u32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3030,7 +3029,7 @@ static INLINE int interp_i32_le_u(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.i32 = (unsigned int)lhs.num.i32 <= (unsigned int)rhs.num.i32;
+	c.num.u32 = lhs.num.u32 <= rhs.num.u32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3039,7 +3038,7 @@ static INLINE int interp_i32_gt_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.i32 = (signed int)lhs.num.i32 > (signed int)rhs.num.i32;
+	c.num.i32 = lhs.num.i32 > rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3107,7 +3106,7 @@ static int interp_i64_eqz(struct wasm_interp *interp)
 	if (unlikely(!stack_pop_valtype(interp, val_i64, &a)))
 		return interp_error(interp, "pop val");
 	res.type = val_i32;
-	res.num.i64 = a.num.i64 == 0;
+	res.num.u32 = a.num.i64 == 0;
 	return cursor_pushval(&interp->stack, &res);
 }
 
@@ -3266,7 +3265,7 @@ static INLINE int interp_i32_ge_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.i32 = (signed int)lhs.num.i32 >= (signed int)rhs.num.i32;
+	c.num.i32 = lhs.num.i32 >= rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -3275,7 +3274,7 @@ static INLINE int interp_i32_le_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.i32 = (signed int)lhs.num.i32 <= (signed int)rhs.num.i32;
+	c.num.i32 = lhs.num.i32 <= rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
@@ -4406,15 +4405,10 @@ static int interp_if(struct wasm_interp *interp)
 
 static int interp_i32_eqz(struct wasm_interp *interp)
 {
-	struct val a, res;
-
+	struct val a;
 	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
 		return interp_error(interp, "if pop val");
-
-	res.type = val_i32;
-	res.num.i32 = a.num.i32 == 0;
-
-	return cursor_pushval(&interp->stack, &res);
+	return stack_push_i32(interp, a.num.i32 == 0);
 }
 
 static INLINE struct label *top_label(struct wasm_interp *interp, u32 index)
@@ -5049,22 +5043,16 @@ static INLINE int interp_i32_wrap_i64(struct wasm_interp *interp)
 static INLINE int interp_i32_xor(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	}
-
 	return stack_push_i32(interp, lhs.num.i32 ^ rhs.num.i32);
 }
 
 static INLINE int interp_i32_ne(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	}
-
 	return stack_push_i32(interp, lhs.num.i32 != rhs.num.i32);
 }
 
@@ -5084,13 +5072,9 @@ static INLINE int interp_i32_mul(struct wasm_interp *interp)
 static INLINE int interp_i32_or(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
-
-	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))) {
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	}
-
 	c.num.i32 = lhs.num.i32 | rhs.num.i32;
-
 	return stack_pushval(interp, &c);
 }
 
