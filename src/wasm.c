@@ -3219,18 +3219,27 @@ static INLINE int interp_i32_div_u(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static inline int shiftmask32(u32 val)
+{
+	return val & 31;
+}
+
+
+static inline int shiftmask64(u64 val)
+{
+	return val & 63;
+}
+
 const unsigned int ROTMASK = (CHAR_BIT*sizeof(uint32_t) - 1);  // assumes width is a power of 2.
 
 static inline uint32_t rotl32 (uint32_t n, unsigned int c)
 {
-	c &= ROTMASK;
-	return (n << c) | (n >> ((-c) & ROTMASK));
+	return (n << shiftmask32(c)) | (n >> shiftmask32(0 - c));
 }
 
 static inline uint32_t rotr32 (uint32_t n, unsigned int c)
 {
-	c &= ROTMASK;
-	return (n >> c) | (n << ((-c) & ROTMASK));
+	return (n >> shiftmask32(c)) | (n << shiftmask32(0 - c));
 }
 
 static INLINE int interp_i32_rotr(struct wasm_interp *interp)
@@ -5126,7 +5135,7 @@ static int interp_i64_shl(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
 		return interp_error(interp, "binop prep");
-	c.num.i64 = lhs.num.i64 << rhs.num.i64;
+	c.num.i64 = lhs.num.i64 << shiftmask64(rhs.num.i64);
 	return stack_pushval(interp, &c);
 }
 
@@ -5171,7 +5180,7 @@ static int interp_i32_shr_u(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.u32 = lhs.num.u32 >> rhs.num.u32;
+	c.num.u32 = lhs.num.u32 >> shiftmask32(rhs.num.u32);
 	return stack_pushval(interp, &c);
 }
 
@@ -5180,7 +5189,7 @@ static int interp_i32_shr_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.i32 = lhs.num.i32 >> rhs.num.i32;
+	c.num.i32 = lhs.num.i32 >> shiftmask32(rhs.num.i32);
 	return stack_pushval(interp, &c);
 }
 
@@ -5189,7 +5198,7 @@ static int interp_i64_shr_u(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
 		return interp_error(interp, "binop prep");
-	c.num.u64 = lhs.num.u64 >> rhs.num.u64;
+	c.num.u64 = lhs.num.u64 >> shiftmask64(rhs.num.u64);
 	return stack_pushval(interp, &c);
 }
 
@@ -5198,7 +5207,7 @@ static int interp_i64_shr_s(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
 		return interp_error(interp, "binop prep");
-	c.num.i64 = lhs.num.i64 >> rhs.num.i64;
+	c.num.i64 = lhs.num.i64 >> shiftmask64(rhs.num.i64);
 	return stack_pushval(interp, &c);
 }
 
@@ -5208,7 +5217,7 @@ static int interp_i32_shl(struct wasm_interp *interp)
 	struct val lhs, rhs, c;
 	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
 		return interp_error(interp, "binop prep");
-	c.num.i32 = lhs.num.i32 << rhs.num.i32;
+	c.num.i32 = lhs.num.i32 << shiftmask32(rhs.num.i32);
 	return stack_pushval(interp, &c);
 }
 
