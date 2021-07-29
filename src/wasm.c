@@ -2892,15 +2892,13 @@ static INLINE int interp_prep_binop(struct wasm_interp *interp, struct val *lhs,
 {
 	c->type = typ;
 
-	if (!cursor_popval(&interp->stack, rhs)) {
+	if (unlikely(!cursor_popval(&interp->stack, rhs)))
 		return interp_error(interp, "couldn't pop first val");
-	}
 
-	if (!cursor_popval(&interp->stack, lhs)) {
+	if (unlikely(!cursor_popval(&interp->stack, lhs)))
 		return interp_error(interp, "couldn't pop second val");
-	}
 
-	if (lhs->type != typ || rhs->type != typ) {
+	if (unlikely(lhs->type != typ || rhs->type != typ)) {
 	        return interp_error(interp, "type mismatch, %s != %s",
 			valtype_name(lhs->type), valtype_name(rhs->type));
 	}
@@ -2910,29 +2908,19 @@ static INLINE int interp_prep_binop(struct wasm_interp *interp, struct val *lhs,
 
 static int interp_i32_add(struct wasm_interp *interp)
 {
-	struct val a, b, c;
-
-	if (!interp_prep_binop(interp, &a, &b, &c, val_i32)) {
-		interp_error(interp, "add prep");
-		return 0;
-	}
-
-	c.num.i32 = a.num.i32 + b.num.i32;
-
+	struct val lhs, rhs, c;
+	if (!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))
+		return interp_error(interp, "add prep");
+	c.num.i32 = lhs.num.i32 + rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
 static int interp_i32_sub(struct wasm_interp *interp)
 {
-	struct val a, b, c;
-
-	if (!interp_prep_binop(interp, &a, &b, &c, val_i32)) {
-		interp_error(interp, "sub prep");
-		return 0;
-	}
-
-	c.num.i32 = a.num.i32 - b.num.i32;
-
+	struct val lhs, rhs, c;
+	if (!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32))
+		return interp_error(interp, "sub prep");
+	c.num.i32 = lhs.num.i32 - rhs.num.i32;
 	return stack_pushval(interp, &c);
 }
 
