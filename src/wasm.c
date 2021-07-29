@@ -5,6 +5,7 @@
 #include "error.h"
 
 #include <unistd.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <assert.h>
@@ -3219,6 +3220,38 @@ static INLINE int interp_i32_div_u(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+const unsigned int ROTMASK = (CHAR_BIT*sizeof(uint32_t) - 1);  // assumes width is a power of 2.
+
+static inline uint32_t rotl32 (uint32_t n, unsigned int c)
+{
+	c &= ROTMASK;
+	return (n << c) | (n >> ((-c) & ROTMASK));
+}
+
+static inline uint32_t rotr32 (uint32_t n, unsigned int c)
+{
+	c &= ROTMASK;
+	return (n >> c) | (n << ((-c) & ROTMASK));
+}
+
+static INLINE int interp_i32_rotr(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.num.u32 = rotr32(lhs.num.u32, rhs.num.u32);
+	return stack_pushval(interp, &c);
+}
+
+static INLINE int interp_i32_rotl(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	c.num.u32 = rotl32(lhs.num.u32, rhs.num.u32);
+	return stack_pushval(interp, &c);
+}
+
 static INLINE int interp_i32_ge_u(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -4844,8 +4877,6 @@ static int wasi_get_strs(struct wasm_interp *interp, int count, const char **str
 	make_cursor(interp->memory.start + argv_buf->num.i32,
 		    interp->memory.p, &writer);
 
-	debug("get strs %d %d\n", argv->num.i32, argv_buf->num.i32);
-
 	for (i = 0; i < count; i++) {
 		if (!store_i32(interp, argv->num.i32 + i*4,
 			       writer.p - interp->memory.start)) {
@@ -4854,7 +4885,7 @@ static int wasi_get_strs(struct wasm_interp *interp, int count, const char **str
 
 		len = strlen(strs[i]) + 1;
 
-		debug("get_str %d '%.*s'\n", i, len, strs[i]);
+//		debug("get_str %d '%.*s'\n", i, len, strs[i]);
 
 		if (!cursor_push(&writer, (u8*)strs[i], len)) {
 			return interp_error(interp,"write arg %d", i+1);
@@ -5543,6 +5574,8 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_div_u:   return interp_i32_div_u(interp);
 	case i_i32_div_s:   return interp_i32_div_s(interp);
 	case i_i32_ge_u:    return interp_i32_ge_u(interp);
+	case i_i32_rotl:    return interp_i32_rotl(interp);
+	case i_i32_rotr:    return interp_i32_rotr(interp);
 	case i_i32_ge_s:    return interp_i32_ge_s(interp);
 	case i_i32_gt_u:    return interp_i32_gt_u(interp);
 	case i_i32_gt_s:    return interp_i32_gt_s(interp);
