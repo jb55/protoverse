@@ -39,17 +39,17 @@ struct expr_parser {
 	struct cursor *stack; // optional
 };
 
+#ifdef DEBUG
 static INLINE struct callframe *top_callframes(struct cursor *cur, int top)
 {
 	return (struct callframe*)cursor_topn(cur, sizeof(struct callframe), top);
 }
+#endif
 
-#ifdef DEBUG
 static INLINE struct callframe *top_callframe(struct cursor *cur)
 {
 	return (struct callframe*)cursor_top(cur, sizeof(struct callframe));
 }
-#endif
 
 static INLINE struct cursor *interp_codeptr(struct wasm_interp *interp)
 {
