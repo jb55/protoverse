@@ -38,11 +38,6 @@ struct expr_parser {
 	struct cursor *stack; // optional
 };
 
-static INLINE struct callframe *top_callframes(struct cursor *cur, int top)
-{
-	return (struct callframe*)cursor_topn(cur, sizeof(struct callframe), top);
-}
-
 static INLINE struct callframe *top_callframe(struct cursor *cur)
 {
 	return (struct callframe*)cursor_top(cur, sizeof(struct callframe));
@@ -4707,14 +4702,6 @@ static INLINE int store_i32(struct wasm_interp *interp, int offset, int i)
 	make_i32_val(&val, i);
 	return store_simple(interp, offset, &val);
 }
-
-static INLINE int store_i64(struct wasm_interp *interp, int offset, int64_t i)
-{
-	struct val val;
-	make_i64_val(&val, i);
-	return store_simple(interp, offset, &val);
-}
-
 
 static int interp_load(struct wasm_interp *interp, struct memarg *memarg,
 		enum valtype type, int N, int sign)
