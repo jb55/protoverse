@@ -1026,8 +1026,6 @@ static INLINE int parse_i64(struct cursor *read, uint64_t *val)
 		if (!pull_byte(read, &byte))
 			return 0;
 		*val |= (byte & 0x7FULL) << shift;
-		debug("pi64 0x%02x (& 0x7F = 0x%02x) %" PRId64 " shift %d\n",
-				byte, byte & 0x7F, *val, shift);
 		shift += 7;
 	} while ((byte & 0x80) != 0);
 
@@ -4144,8 +4142,6 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 				return note_error(p->errs, p->code,
 						"couldn't read i64");
 			}
-			cursor_print_around(p->code, 20);
-			debug("parsed %" PRId64 " i64 const\n", op->i64);
 			return 1;
 
 		case i_i32_load:
