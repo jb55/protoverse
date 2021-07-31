@@ -411,7 +411,11 @@ static INLINE int stack_pushval(struct wasm_interp *interp, struct val *val)
 
 static int interp_exit(struct wasm_interp *interp)
 {
+	struct val *vals = NULL;
+	if (!get_params(interp, &vals, 1))
+		return interp_error(interp, "exit param missing?");
 	interp->quitting = 1;
+	stack_push_i32(interp, vals[0].num.i32);
 	return 0;
 }
 
@@ -6463,9 +6467,10 @@ void wasm_interp_free(struct wasm_interp *interp)
 	free(interp->memory.start);
 }
 
-int interp_wasm_module(struct wasm_interp *interp)
+int interp_wasm_module(struct wasm_interp *interp, int *retval)
 {
 	interp->ops = 0;
+	*retval = 0;
 
 	if (interp->module->code_section.num_funcs == 0) {
 		interp_error(interp, "empty module");
@@ -6494,10 +6499,13 @@ int interp_wasm_module(struct wasm_interp *interp)
 	}
 
 	if (interp_code(interp)) {
+		*retval = 0;
 		debug("interp success!!\n");
 	} else if (interp->quitting) {
+		stack_pop_i32(interp, retval);
 		debug("finished running via process exit\n");
 	} else {
+		*retval = 8;
 		return interp_error(interp, "interp_code");
 	}
 
@@ -6505,7 +6513,8 @@ int interp_wasm_module(struct wasm_interp *interp)
 }
 
 int run_wasm(unsigned char *wasm, unsigned long len,
-		int argc, const char **argv, char **env)
+		int argc, const char **argv, char **env,
+		int *retval)
 {
 	struct wasm_parser p;
 	struct wasm_interp interp;
@@ -6524,7 +6533,7 @@ int run_wasm(unsigned char *wasm, unsigned long len,
 
 	setup_wasi(&interp, argc, argv, env);
 
-	if (!interp_wasm_module(&interp)) {
+	if (!interp_wasm_module(&interp, retval)) {
 		print_error_backtrace(&interp.errors);
 	}
 

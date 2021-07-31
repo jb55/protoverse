@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+printf "\nWASM TESTS\n"
+for test in wasm/test/*.wasm
+do
+	printf 'running %s... ' $test
+	./protoverse run $test >/dev/null && echo "ok." || echo 'fail'
+done

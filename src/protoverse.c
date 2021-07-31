@@ -111,6 +111,7 @@ int main(int argc, const char *argv[])
 	struct protoverse_server server;
 	u16 root;
 	int ok;
+	int retval;
 	size_t len;
 
 	if (argc < 2)
@@ -159,10 +160,9 @@ int main(int argc, const char *argv[])
 			perror("mmap");
 			return 1;
 		}
-		if (!run_wasm(wasm_data, len, argc - 2, argv + 2, env)) {
-			return 2;
-		}
+		run_wasm(wasm_data, len, argc - 2, argv + 2, env, &retval);
 		munmap(wasm_data, len);
+		return retval;
 	}
 
 	return 0;

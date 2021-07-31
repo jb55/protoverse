@@ -63,8 +63,9 @@ test: src/test.c $(OBJS)
 	@echo "ld $@"
 	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-check: test
+check: test protoverse
 	@./test
+	./runtests
 
 tags: fake
 	ctags src/*.c src/*.h > $@

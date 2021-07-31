@@ -13,6 +13,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times,
 	struct wasm_interp interp;
 	struct timespec t1, t2;
 	int i, ops = 0;
+	int retval;
 	long nanos, ms;
 
 	wasm_parser_init(&p, wasm, len, len*16);
@@ -31,7 +32,7 @@ static int bench_wasm(unsigned char *wasm, unsigned long len, int times,
 
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
 	for (i = 0; i < times; i++) {
-		if (!interp_wasm_module(&interp)) {
+		if (!interp_wasm_module(&interp, &retval)) {
 			print_error_backtrace(&interp.errors);
 		}
 		ops += interp.ops;
