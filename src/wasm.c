@@ -140,6 +140,29 @@ static INLINE struct val *get_local(struct wasm_interp *interp, u32 ind)
 	return get_fn_local(interp, frame->fn, ind);
 }
 
+static INLINE int get_params(struct wasm_interp *interp,
+        struct val** vals, u32 num_vals)
+{
+    struct callframe *frame;
+    struct func *fn;
+
+    if (unlikely(!(frame = top_callframe(&interp->callframes))))
+        return interp_error(interp, "no callframe?");
+
+    if (unlikely(!(fn = get_fn(interp->module, frame->fn))))
+        return interp_error(interp, "invalid fn %d", frame->fn);
+
+    if (unlikely(num_vals != fn->functype->params.num_valtypes)) {
+        return interp_error(interp,
+                "requested %d params, but there are %d",
+                num_vals, fn->functype->params.num_valtypes);
+    }
+
+    *vals = fn->locals;
+
+    return 1;
+}
+
 static INLINE int stack_popval(struct wasm_interp *interp, struct val *val)
 {
 	return cursor_popval(&interp->stack, val);
