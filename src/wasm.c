@@ -1003,9 +1003,20 @@ static int leb128_write(struct cursor *write, unsigned int value)
 #define LEB128_4(type) (BYTE_AT(type, 3, 21) | LEB128_3(type))
 #define LEB128_5(type) (BYTE_AT(type, 4, 28) | LEB128_4(type))
 
-static INLINE int parse_i64(struct cursor *read, int64_t *val)
+static inline int shiftmask32(u32 val)
 {
-	int64_t shift;
+	return val & 31;
+}
+
+static inline int shiftmask64(u64 val)
+{
+	return val & 63;
+}
+
+
+static INLINE int parse_i64(struct cursor *read, uint64_t *val)
+{
+	u8 shift;
 	u8 byte;
 
 	*val = 0;
@@ -1014,13 +1025,15 @@ static INLINE int parse_i64(struct cursor *read, int64_t *val)
 	do {
 		if (!pull_byte(read, &byte))
 			return 0;
-		*val |= ((byte & 0x7F) << shift);
+		*val |= (byte & 0x7FULL) << shift;
+		debug("pi64 0x%02x (& 0x7F = 0x%02x) %" PRId64 " shift %d\n",
+				byte, byte & 0x7F, *val, shift);
 		shift += 7;
 	} while ((byte & 0x80) != 0);
 
 	/* sign bit of byte is second high-order bit (0x40) */
 	if ((shift < 64) && (byte & 0x40))
-		*val |= (~0 << shift);
+		*val |= (0xFFFFFFFFFFFFFFFF << shift);
 
 	return 1;
 }
@@ -1720,11 +1733,15 @@ static const char *show_instr(struct instr *instr)
 		case i_br:
 		case i_br_if:
 		case i_i32_const:
-		case i_i64_const:
 		case i_ref_func:
 		case i_table_set:
 		case i_table_get:
 			sprintf(tmp, "%d", instr->i32);
+			cursor_push_str(&buf, tmp);
+			break;
+
+		case i_i64_const:
+			sprintf(tmp, "%" PRId64, instr->i64);
 			cursor_push_str(&buf, tmp);
 			break;
 
@@ -2987,7 +3004,7 @@ static INLINE int interp_local_get(struct wasm_interp *interp, u32 index)
 	return stack_pushval(interp, val);
 }
 
-static INLINE void make_i64_val(struct val *val, u64 v)
+static INLINE void make_i64_val(struct val *val, s64 v)
 {
 	val->type = val_i64;
 	val->num.i64 = v;
@@ -3207,17 +3224,6 @@ static INLINE int interp_i32_div_u(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
-static inline int shiftmask32(u32 val)
-{
-	return val & 31;
-}
-
-
-static inline int shiftmask64(u64 val)
-{
-	return val & 63;
-}
-
 const unsigned int ROTMASK = (CHAR_BIT*sizeof(uint32_t) - 1);  // assumes width is a power of 2.
 
 static inline uint32_t rotl32 (uint32_t n, unsigned int c)
@@ -3275,7 +3281,7 @@ static INLINE int interp_i32_le_s(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
-static INLINE int interp_i64_const(struct wasm_interp *interp, u64 c)
+static INLINE int interp_i64_const(struct wasm_interp *interp, s64 c)
 {
 	struct val val;
 	make_i64_val(&val, c);
@@ -3844,11 +3850,9 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	struct resolver resolver;
 	struct callframe *frame;
 
-	/*
-#ifdef DEBUG
+#if 0
 	int num_resolvers;
 #endif
-*/
 
 	resolver.start_tag = start_tag;
 	resolver.end_tag = end_tag;
@@ -3880,20 +3884,19 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
-	/*
-#ifdef DEBUG
+#if 0
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
 	};
-#endif
-	debug("pushed resolver 0x%04X-0x%04X i_%s i_%s %ld local_resolvers:%d \n",
+	debug("pushed resolver label:%d 0x%04X-0x%04X i_%s i_%s %ld local_resolvers:%d \n",
+			resolver.label,
 			label_instr_pos(*label),
 			(*label)->jump,
 			instr_name(resolver.start_tag),
 			instr_name(resolver.end_tag),
 			cursor_count(&interp->resolver_stack, sizeof(resolver)),
 			num_resolvers);
-			*/
+#endif
 
 	return 1;
 }
@@ -4137,10 +4140,12 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 			return 1;
 
 		case i_i64_const:
-			if (unlikely(!parse_i64(p->code, &op->i64))) {
+			if (unlikely(!parse_i64(p->code, &op->u64))) {
 				return note_error(p->errs, p->code,
 						"couldn't read i64");
 			}
+			cursor_print_around(p->code, 20);
+			debug("parsed %" PRId64 " i64 const\n", op->i64);
 			return 1;
 
 		case i_i32_load:
