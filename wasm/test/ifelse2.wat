@@ -35,6 +35,17 @@
 	      end
 	      i32.const 0
 	      )
-	(export "_start" (func $start))
+
+	(func $enter (result i32)
+	      (local i32)
+	      (call $start)
+	      local.set 0
+	      (call $start)
+	      local.get 0
+	      i32.ne
+	      )
+
+	(export "start" (func $start))
+	(export "_start" (func $enter))
 	(export "add" (func $add))
 	(export "sub" (func $sub)))

@@ -9,7 +9,7 @@
 	      local.get $rhs
 	      i32.sub
 	      )
-	(func $start
+	(func $start (result i32)
 	      (local i32 i32)
 	      i32.const 0
 	      local.set 0
@@ -36,8 +36,21 @@
 		    end
 		  end
 	      end
+	      i32.const 0
 	      )
-	(export "_start" (func $start))
+
+	(func $enter (result i32)
+	      (local i32)
+	      (call $start)
+	      local.set 0
+	      (call $start)
+	      local.get 0
+	      i32.ne
+	      )
+
+	(export "start" (func $start))
+	(export "_start" (func $enter))
+
 	(export "add" (func $add))
 	(export "memory" (memory $mem))
 	(export "sub" (func $sub)))
