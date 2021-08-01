@@ -579,6 +579,8 @@ static char *instr_name(enum instr_tag tag)
 		case i_f64_le: return "f64_le";
 		case i_f64_ge: return "f64_ge";
 		case i_i32_clz: return "i32_clz";
+		case i_i32_ctz: return "i32_ctz";
+		case i_i32_popcnt: return "i32_popcnt";
 		case i_i32_add: return "i32_add";
 		case i_i32_sub: return "i32_sub";
 		case i_i32_mul: return "i32_mul";
@@ -1933,6 +1935,8 @@ static const char *show_instr(struct instr *instr)
 		case i_f64_le:
 		case i_f64_ge:
 		case i_i32_clz:
+		case i_i32_ctz:
+		case i_i32_popcnt:
 		case i_i32_add:
 		case i_i32_sub:
 		case i_i32_mul:
@@ -4190,7 +4194,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 	op->pos = p->code->p - 1 - p->code->start;
 	op->tag = tag;
 
-	switch (tag) {
+	switch ((enum instr_tag)tag) {
 		// two-byte instrs
 		case i_select:
 		case i_selects:
@@ -4238,6 +4242,7 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 			}
 			return 1;
 
+		case i_ref_is_null:
 		case i_i32_load:
 		case i_i64_load:
 		case i_f32_load:
@@ -4265,6 +4270,9 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 
 		case i_br_table:
 			return parse_br_table(p->code, p->errs, &op->br_table);
+
+		case i_table_op:
+			return note_error(p->errs, p->code, "parse table op");
 
 		case i_call_indirect:
 			return parse_call_indirect(p->code, &op->call_indirect);
@@ -4318,6 +4326,8 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_f64_le:
 		case i_f64_ge:
 		case i_i32_clz:
+		case i_i32_ctz:
+		case i_i32_popcnt:
 		case i_i32_add:
 		case i_i32_sub:
 		case i_i32_mul:
@@ -4495,7 +4505,46 @@ static int interp_if(struct wasm_interp *interp)
 	return 1;
 }
 
-static int interp_i32_eqz(struct wasm_interp *interp)
+static INLINE int clz(u32 x)
+{
+	return x ? __builtin_clz(x) : sizeof(x) * 8;
+}
+
+static INLINE int ctz(u32 x)
+{
+	return x ? __builtin_ctz(x) : (int)sizeof(x) * 8;
+}
+
+static INLINE int popcnt(u32 x)
+{
+	return x ? __builtin_popcount(x) : 0;
+}
+
+static INLINE int interp_i32_popcnt(struct wasm_interp *interp)
+{
+	struct val a;
+	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
+		return interp_error(interp, "if pop val");
+	return stack_push_i32(interp, popcnt(a.num.u32));
+}
+
+static INLINE int interp_i32_ctz(struct wasm_interp *interp)
+{
+	struct val a;
+	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
+		return interp_error(interp, "if pop val");
+	return stack_push_i32(interp, ctz(a.num.u32));
+}
+
+static INLINE int interp_i32_clz(struct wasm_interp *interp)
+{
+	struct val a;
+	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
+		return interp_error(interp, "if pop val");
+	return stack_push_i32(interp, clz(a.num.u32));
+}
+
+static INLINE int interp_i32_eqz(struct wasm_interp *interp)
 {
 	struct val a;
 	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
@@ -5643,6 +5692,9 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_global_get:  return interp_global_get(interp, instr->i32);
 	case i_global_set:  return interp_global_set(interp, instr->i32);
 
+	case i_i32_clz:     return interp_i32_clz(interp);
+	case i_i32_ctz:     return interp_i32_ctz(interp);
+	case i_i32_popcnt:  return interp_i32_popcnt(interp);
 	case i_i32_eqz:     return interp_i32_eqz(interp);
 	case i_i32_add:     return interp_i32_add(interp);
 	case i_i32_sub:     return interp_i32_sub(interp);

@@ -396,6 +396,8 @@ enum instr_tag {
 	i_f64_ge        = 0x66,
 
 	i_i32_clz       = 0x67,
+	i_i32_ctz       = 0x68,
+	i_i32_popcnt    = 0x69,
 
 	i_i32_add       = 0x6A,
 	i_i32_sub       = 0x6B,
