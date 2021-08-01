@@ -6066,11 +6066,11 @@ static int find_start_function(struct module *module)
 		return module->start_section.start_fn;
 	}
 
-	if ((res = find_function(module, "start")) != -1) {
+	if ((res = find_function(module, "_start")) != -1) {
 		return res;
 	}
 
-	return find_function(module, "_start");
+	return find_function(module, "start");
 }
 
 void wasm_parser_init(struct wasm_parser *p, u8 *wasm, size_t wasm_len, size_t arena_size)
@@ -6725,7 +6725,7 @@ int interp_wasm_module(struct wasm_interp *interp, int *retval)
 	}
 
 	if (interp_code(interp)) {
-		*retval = 0;
+		stack_pop_i32(interp, retval);
 		debug("interp success!!\n");
 	} else if (interp->quitting) {
 		stack_pop_i32(interp, retval);
