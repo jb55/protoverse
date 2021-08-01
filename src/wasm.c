@@ -424,6 +424,21 @@ static int wasi_proc_exit(struct wasm_interp *interp)
 	return interp_exit(interp);
 }
 
+static int wasi_abort(struct wasm_interp *interp)
+{
+	struct val *params = NULL;
+
+	if (!get_params(interp, &params, 4))
+		return interp_error(interp, "exit param missing?");
+
+	printf("abort\n");
+
+	interp->quitting = 1;
+	stack_push_i32(interp, 88);
+
+	return 0;
+}
+
 static int wasi_args_sizes_get(struct wasm_interp *interp);
 static int wasi_args_get(struct wasm_interp *interp);
 static int wasi_fd_write(struct wasm_interp *interp);
@@ -437,6 +452,7 @@ static struct builtin BUILTINS[] = {
 	{ .name = "environ_get",       .fn = wasi_environ_get },
 	{ .name = "args_sizes_get",    .fn = wasi_args_sizes_get },
 	{ .name = "proc_exit",         .fn = wasi_proc_exit  },
+	{ .name = "abort",             .fn = wasi_abort  },
 };
 
 static const int NUM_BUILTINS = sizeof(BUILTINS) / sizeof(*BUILTINS);
@@ -6503,7 +6519,7 @@ int interp_wasm_module(struct wasm_interp *interp, int *retval)
 		debug("interp success!!\n");
 	} else if (interp->quitting) {
 		stack_pop_i32(interp, retval);
-		debug("finished running via process exit\n");
+		debug("process exited\n");
 	} else {
 		*retval = 8;
 		return interp_error(interp, "interp_code");
