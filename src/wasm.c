@@ -3205,6 +3205,15 @@ static INLINE int interp_i64_xor(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static INLINE int interp_f32_max(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_f32)))
+		return interp_error(interp, "binop prep");
+	c.num.f32 = lhs.num.f32 > rhs.num.f32 ? lhs.num.f32 : rhs.num.f32;
+	return stack_pushval(interp, &c);
+}
+
 static INLINE int interp_i64_div_u(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -3224,6 +3233,62 @@ static int interp_i64_eqz(struct wasm_interp *interp)
 	res.type = val_i32;
 	res.num.u32 = a.num.i64 == 0;
 	return cursor_pushval(&interp->stack, &res);
+}
+
+static INLINE int interp_f32_sqrt(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f32(interp))))
+		return interp_error(interp, "pop");
+	val->num.f32 = sqrt(val->num.f32);
+	return 1;
+}
+
+static INLINE int interp_f64_sqrt(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	val->num.f64 = sqrt(val->num.f64);
+	return 1;
+}
+
+static INLINE int interp_f64_floor(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	val->num.f64 = floor(val->num.f64);
+	return 1;
+}
+
+static INLINE int interp_f64_ceil(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	val->num.f64 = ceil(val->num.f64);
+	return 1;
+}
+
+static INLINE int interp_f32_abs(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f32(interp))))
+		return interp_error(interp, "pop");
+	if (val->num.f32 >= 0)
+		return 1;
+	val->num.f32 = -val->num.f32;
+	return 1;
+}
+
+static INLINE int interp_f64_neg(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	val->num.f64 = -val->num.f64;
+	return 1;
 }
 
 static INLINE int interp_f64_abs(struct wasm_interp *interp)
@@ -3332,6 +3397,23 @@ static INLINE int interp_f64_const(struct wasm_interp *interp, double c)
 	return stack_pushval(interp, &val);
 }
 
+static INLINE int interp_i32_and(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i32)))
+		return interp_error(interp, "binop prep");
+	return stack_push_i32(interp, lhs.num.u32 & rhs.num.u32);
+}
+
+static INLINE int interp_i64_and(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_i64)))
+		return interp_error(interp, "binop prep");
+	return stack_push_i64(interp, lhs.num.u64 & rhs.num.u64);
+}
+
+
 #define BINOP(type, name, op) \
 static INLINE int interp_##type##_##name(struct wasm_interp *interp) \
 { \
@@ -3366,9 +3448,6 @@ BINOP(f32, add, +)
 BINOP(i32, add, +)
 BINOP(i64, add, +)
 
-BINOP(i32, and, &)
-BINOP(i64, and, &)
-
 BINOP(i32, or, |)
 BINOP(i64, or, |)
 
@@ -3399,6 +3478,11 @@ BINOP2(i32, u32, ge_u, >=)
 BINOP2(i64, u64, ge_u, >=)
 BINOP2(f32, f32, ge, >=)
 BINOP2(f64, f64, ge, >=)
+
+BINOP2(f32, f32, eq, ==)
+BINOP2(f64, f64, eq, ==)
+BINOP2(f32, f32, ne, !=)
+BINOP2(f64, f64, ne, !=)
 
 static int interp_i32_rem_s(struct wasm_interp *interp)
 {
@@ -3435,6 +3519,97 @@ static INLINE int interp_f32_neg(struct wasm_interp *interp)
 	return 1;
 }
 
+static INLINE int interp_f64_convert_i32_u(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_i32(interp))))
+		return interp_error(interp, "pop");
+	make_f64_val(val, (double)val->num.i32);
+	return 1;
+}
+
+static INLINE int interp_i32_trunc_f64_u(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	make_i32_val(val, (u32)val->num.f64);
+	return 1;
+}
+
+static INLINE int interp_f32_convert_i32_u(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_i32(interp))))
+		return interp_error(interp, "pop");
+	make_f32_val(val, (float)val->num.u32);
+	return 1;
+}
+
+static INLINE int interp_i32_trunc_f32_s(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f32(interp))))
+		return interp_error(interp, "pop");
+	make_i32_val(val, (int)val->num.f32);
+	return 1;
+}
+
+static INLINE int interp_f64_reinterpret_i64(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_i64(interp))))
+		return interp_error(interp, "pop");
+	val->type = val_f64;
+
+	return 1;
+}
+
+static INLINE int interp_i64_reinterpret_f64(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	val->type = val_i64;
+	return 1;
+}
+
+static INLINE int interp_f64_convert_i64_u(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_i64(interp))))
+		return interp_error(interp, "pop");
+	make_f64_val(val, (double)val->num.u64);
+	return 1;
+}
+
+static INLINE int interp_f64_convert_i32_s(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_i32(interp))))
+		return interp_error(interp, "pop");
+	make_f64_val(val, (double)val->num.i32);
+	return 1;
+}
+
+static INLINE int interp_f32_demote_f64(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	make_f32_val(val, (float)val->num.f64);
+	return 1;
+}
+
+static INLINE int interp_i32_trunc_f64_s(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_f64(interp))))
+		return interp_error(interp, "pop");
+	make_i32_val(val, (int)val->num.f64);
+	return 1;
+}
+
 static INLINE int interp_f64_promote_f32(struct wasm_interp *interp)
 {
 	struct val *val;
@@ -3449,7 +3624,7 @@ static INLINE int interp_i32_reinterpret_f32(struct wasm_interp *interp)
 	struct val *val;
 	if (unlikely(!(val = stack_top_f32(interp))))
 		return interp_error(interp, "pop");
-	make_i32_val(val, (int)val->num.f32);
+	val->type = val_i32;
 	return 1;
 }
 
@@ -5835,17 +6010,43 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_global_set:  return interp_global_set(interp, instr->i32);
 
 	case i_f32_const:   return interp_f32_const(interp, instr->f32);
+	case i_f32_abs:     return interp_f32_abs(interp);
 	case i_f32_div:     return interp_f32_div(interp);
 	case i_f32_mul:     return interp_f32_mul(interp);
 	case i_f32_neg:     return interp_f32_neg(interp);
 	case i_f32_add:     return interp_f32_add(interp);
 	case i_f32_sub:     return interp_f32_sub(interp);
+	case i_f32_lt:      return interp_f32_lt(interp);
+	case i_f32_le:      return interp_f32_le(interp);
+	case i_f32_gt:      return interp_f32_gt(interp);
+	case i_f32_ge:      return interp_f32_ge(interp);
+	case i_f32_eq:      return interp_f32_eq(interp);
+	case i_f32_ne:      return interp_f32_ne(interp);
+	case i_f32_max:     return interp_f32_max(interp);
+	case i_f32_sqrt:    return interp_f32_sqrt(interp);
 
 	case i_f32_convert_i32_s:   return interp_f32_convert_i32_s(interp);
 	case i_i32_reinterpret_f32: return interp_i32_reinterpret_f32(interp);
 	case i_f64_promote_f32:     return interp_f64_promote_f32(interp);
+	case i_i32_trunc_f64_s:     return interp_i32_trunc_f64_s(interp);
+	case i_f32_demote_f64:      return interp_f32_demote_f64(interp);
+	case i_f64_convert_i32_s:   return interp_f64_convert_i32_s(interp);
+	case i_f64_convert_i64_u:   return interp_f64_convert_i64_u(interp);
+	case i_i64_reinterpret_f64: return interp_i64_reinterpret_f64(interp);
+	case i_f64_reinterpret_i64: return interp_f64_reinterpret_i64(interp);
+	case i_i32_trunc_f32_s:     return interp_i32_trunc_f32_s(interp);
+	case i_f32_convert_i32_u:   return interp_f32_convert_i32_u(interp);
+	case i_i32_trunc_f64_u:     return interp_i32_trunc_f64_u(interp);
+	case i_f64_convert_i32_u:   return interp_f64_convert_i32_u(interp);
 
 	case i_f64_abs:     return interp_f64_abs(interp);
+	case i_f64_eq:      return interp_f64_eq(interp);
+	case i_f64_ne:      return interp_f64_ne(interp);
+	case i_f64_add:     return interp_f64_add(interp);
+	case i_f64_neg:     return interp_f64_neg(interp);
+	case i_f64_ceil:    return interp_f64_ceil(interp);
+	case i_f64_floor:   return interp_f64_floor(interp);
+	case i_f64_sqrt:    return interp_f64_sqrt(interp);
 	case i_f64_const:   return interp_f64_const(interp, instr->f64);
 	case i_f64_div:     return interp_f64_div(interp);
 	case i_f64_ge:      return interp_f64_ge(interp);
@@ -5853,6 +6054,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_f64_le:      return interp_f64_le(interp);
 	case i_f64_lt:      return interp_f64_lt(interp);
 	case i_f64_mul:     return interp_f64_mul(interp);
+	case i_f64_sub:     return interp_f64_sub(interp);
 
 	case i_i32_clz:     return interp_i32_clz(interp);
 	case i_i32_ctz:     return interp_i32_ctz(interp);
