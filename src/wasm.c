@@ -3080,8 +3080,10 @@ static INLINE int interp_prep_binop(struct wasm_interp *interp, struct val *lhs,
 		return interp_error(interp, "couldn't pop second val");
 
 	if (unlikely(lhs->type != typ || rhs->type != typ)) {
-	        return interp_error(interp, "type mismatch, %s != %s",
-			valtype_name(lhs->type), valtype_name(rhs->type));
+	        return interp_error(interp, "type mismatch, %s or %s != %s",
+			valtype_name(lhs->type),
+			valtype_name(rhs->type),
+			valtype_name(typ));
 	}
 
 	return 1;
