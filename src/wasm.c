@@ -28,7 +28,7 @@
 #define WASM_PAGE_SIZE 65536
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 
-static const int MAX_LABELS = 256;
+static const int MAX_LABELS = 1024;
 
 static int interp_code(struct wasm_interp *interp);
 static INLINE int pop_label_checkpoint(struct wasm_interp *interp);
@@ -6788,9 +6788,9 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 	stack_size       = sizeof(struct val) * 0xFF;
  	labels_size      = labels_capacity * sizeof(struct label);
  	num_labels_size  = fns * sizeof(u16);
-	resolver_offsets_size = sizeof(int) * 0xFF;
-	callframes_size  = sizeof(struct callframe) * 0xFF;
-	resolver_size    = sizeof(struct resolver) * MAX_LABELS;
+	resolver_offsets_size = sizeof(int) * 2048;
+	callframes_size  = sizeof(struct callframe) * 2048;
+	resolver_size    = sizeof(struct resolver) * MAX_LABELS * 32;
 	globals_size     = sizeof(struct global_inst) * num_globals;
 
 	num_elements     = count_element_insts(module);
@@ -6803,7 +6803,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 		return 0;
 	}
 
-	memory_pages_size = 256 * WASM_PAGE_SIZE;
+	memory_pages_size = 64 * 256 * WASM_PAGE_SIZE; /* 1 gb virt */
 
 	memsize =
 		stack_size +
