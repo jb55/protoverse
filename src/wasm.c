@@ -141,9 +141,22 @@ static INLINE int read_mem_u32(struct wasm_interp *interp, u32 ptr, u32 *i)
 
 static INLINE int mem_ptr_i32(struct wasm_interp *interp, u32 ptr, int **i)
 {
-	if (!(*i = (int*)mem_ptr(interp, ptr, sizeof(int)))) {
+	if (!(*i = (int*)mem_ptr(interp, ptr, sizeof(int))))
 		return interp_error(interp, "int memptr");
-	}
+	return 1;
+}
+
+static INLINE int mem_ptr_f32(struct wasm_interp *interp, u32 ptr, float **i)
+{
+	if (!(*i = (float*)mem_ptr(interp, ptr, sizeof(float))))
+		return interp_error(interp, "int memptr");
+	return 1;
+}
+
+static INLINE int mem_ptr_u32(struct wasm_interp *interp, u32 ptr, u32 **i)
+{
+	if (!(*i = (u32*)mem_ptr(interp, ptr, sizeof(int))))
+		return interp_error(interp, "uint memptr");
 	return 1;
 }
 
@@ -262,6 +275,11 @@ static INLINE struct val *stack_top_f32(struct wasm_interp *interp)
 static INLINE struct val *stack_top_f64(struct wasm_interp *interp)
 {
 	return stack_top_type(interp, val_f64);
+}
+
+static INLINE struct val *stack_top_i64(struct wasm_interp *interp)
+{
+	return stack_top_type(interp, val_i64);
 }
 
 static INLINE int cursor_pop_i32(struct cursor *stack, int *i)
@@ -420,6 +438,15 @@ static INLINE int cursor_push_i32(struct cursor *stack, int i)
 	return cursor_pushval(stack, &val);
 }
 
+static INLINE int cursor_push_u64(struct cursor *stack, u64 i)
+{
+	struct val val;
+	val.type = val_i64;
+	val.num.u64 = i;
+
+	return cursor_pushval(stack, &val);
+}
+
 static INLINE int cursor_push_funcref(struct cursor *stack, int addr)
 {
 	struct val val;
@@ -427,6 +454,17 @@ static INLINE int cursor_push_funcref(struct cursor *stack, int addr)
 	val.ref.addr = addr;
 	return cursor_pushval(stack, &val);
 }
+
+static INLINE int stack_push_i64(struct wasm_interp *interp, s64 i)
+{
+	return cursor_push_u64(&interp->stack, (u64)i);
+}
+
+static INLINE int stack_push_u64(struct wasm_interp *interp, u64 i)
+{
+	return cursor_push_u64(&interp->stack, i);
+}
+
 
 static INLINE int stack_push_i32(struct wasm_interp *interp, int i)
 {
