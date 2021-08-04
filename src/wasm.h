@@ -227,11 +227,16 @@ struct global {
 	struct val val;
 };
 
+struct local_def {
+	u32 num_types;
+	enum valtype type;
+};
+
 /* "code" */
 struct wasm_func {
 	struct expr code;
-	struct val *locals;
-	u32 num_locals;
+	struct local_def *local_defs;
+	u32 num_local_defs;
 };
 
 enum func_type {
@@ -244,7 +249,6 @@ struct func {
 		struct wasm_func *wasm_func;
 		struct builtin *builtin;
 	};
-	struct val *locals;
 	u32 num_locals;
 	struct functype *functype;
 	enum func_type type;
@@ -634,6 +638,7 @@ struct label {
 
 struct callframe {
 	struct cursor code;
+	struct val *locals;
 	u32 fn;
 };
 
@@ -684,6 +689,7 @@ struct wasm_interp {
 
 	struct cursor memory; /* memory pages (65536 blocks) */
 
+	struct cursor locals; /* struct val */
 	struct cursor labels; /* struct labels */
 	struct cursor num_labels;
 

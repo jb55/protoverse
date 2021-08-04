@@ -1,7 +1,8 @@
 chunked envelope (1280-byte sized chunks) @net
-do we need to reset function locals on return? @wasm
 check blocktypes when popping labels @wasm
 make chess demo @examples
 getting started @docs
 move module instantiate from alloc to wasm_interp @wasm
 memcpy table init like we do for memory init @wasm
+use hashtable for labels @wasm
+callframe locals
