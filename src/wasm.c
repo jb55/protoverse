@@ -6758,7 +6758,7 @@ int wasm_interp_init(struct wasm_interp *interp, struct module *module)
 
 	num_elements     = count_element_insts(module);
 	elems_size       = num_elements * sizeof(struct elem_inst);
-	locals_size      = sizeof(struct val) * 2048;
+	locals_size      = 1024 * 1024 * 5; // 5MB stack?
 	tables_size      = calculate_tables_size(module);
 
 	if (num_mems > 1) {
