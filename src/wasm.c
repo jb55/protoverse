@@ -5,6 +5,7 @@
 #include "error.h"
 
 #include <unistd.h>
+#include <math.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
