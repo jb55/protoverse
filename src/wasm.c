@@ -3685,10 +3685,17 @@ static INLINE int count_local_resolvers(struct wasm_interp *interp, int *count)
 	return 1;
 }
 
-static INLINE int drop_callframe(struct wasm_interp *interp)
+static INLINE u32 count_stack_vals(struct cursor *stack)
 {
-	int offset;
+	return cursor_count(stack, sizeof(struct val));
+}
+
+static INLINE int drop_callframe_return(struct wasm_interp *interp, int returning)
+{
+	int offset, drop;
+	u32 cnt;
 	struct callframe *frame;
+	struct func *func;
 
 #ifdef DEBUG
 	int count, from_fn, to_fn;
@@ -3722,12 +3729,37 @@ static INLINE int drop_callframe(struct wasm_interp *interp)
 #endif
 	frame = top_callframe(&interp->callframes);
 
-	if (unlikely(!cursor_popint(&interp->resolver_offsets, &offset))) {
+	if (unlikely(!cursor_popint(&interp->resolver_offsets, &offset)))
 		return interp_error(interp, "pop resolver_offsets");
+
+	if (unlikely(!(func = get_fn(interp->module, frame->fn))))
+		return interp_error(interp, "no fn??");
+
+	cnt = count_stack_vals(&interp->stack);
+
+	if (returning)  {
+		drop = cnt - frame->prev_stack_items - 
+				func->functype->result.num_valtypes;
+		if (drop < 0 || 
+		    !cursor_dropn(&interp->stack, sizeof(struct val), drop)) {
+			return interp_error(interp,
+				"error dropping extra stack values in return. "
+				"drop:%d vals:%d prev:%d ret:%d",
+				drop, cnt, frame->prev_stack_items,
+				func->functype->result.num_valtypes);
+		}
+
+	} else if (unlikely(cnt - frame->prev_stack_items !=
+				func->functype->result.num_valtypes)) {
+		return interp_error(interp,
+				"%s:%d extra values on stack: have %d-prev:%d=%d, expected %d",
+				func->name, frame->fn, cnt,
+				frame->prev_stack_items,
+				cnt - frame->prev_stack_items,
+				func->functype->result.num_valtypes);
 	}
 
 	// free frame locals
-	assert((u8*)frame->locals <= interp->locals.p);
 	interp->locals.p = (u8*)frame->locals;
 
 	debug("returning from %s:%d to %s:%d\n", from, from_fn, to, to_fn);
@@ -3735,8 +3767,13 @@ static INLINE int drop_callframe(struct wasm_interp *interp)
 	return cursor_drop_callframe(&interp->callframes);
 }
 
+static INLINE int drop_callframe(struct wasm_interp *interp)
+{
+	return drop_callframe_return(interp, 1);
+}
+
 static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *func,
-		int fn, struct val *locals)
+		int fn, struct val *locals, int prev_items)
 {
 	struct callframe callframe;
 
@@ -3744,6 +3781,7 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 	make_cursor(func->code.code, func->code.code + func->code.code_len, &callframe.code);
 	callframe.fn = fn;
 	callframe.locals = locals;
+	callframe.prev_stack_items = prev_items;
 
 	assert(func->code.code_len > 0);
 
@@ -3766,13 +3804,14 @@ static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *f
 
 
 static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *builtin,
-		int fn, struct val *params)
+		int fn, struct val *params, int prev_items)
 {
 	struct callframe callframe = {};
 
 	/* update current function and push it to the callframe as well */
 	callframe.fn = fn;
 	callframe.locals = params;
+	callframe.prev_stack_items = prev_items;
 
 	if (unlikely(!push_callframe(interp, &callframe)))
 		return interp_error(interp, "oob cursor_pushcode");
@@ -3787,18 +3826,20 @@ static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *
 }
 
 static INLINE int call_func(struct wasm_interp *interp, struct func *func,
-		int fn, struct val *locals)
+		int fn, struct val *locals, int prev_items)
 {
 	switch (func->type) {
 	case func_type_wasm:
-		return call_wasm_func(interp, func->wasm_func, fn, locals);
+		return call_wasm_func(interp, func->wasm_func, fn, locals,
+				prev_items);
 	case func_type_builtin:
 		if (func->builtin == NULL) {
 			return interp_error(interp,
 					"attempted to call unresolved fn: %s",
 					func->name);
 		}
-		return call_builtin_func(interp, func->builtin, fn, locals);
+		return call_builtin_func(interp, func->builtin, fn, locals,
+				prev_items);
 	}
 	return interp_error(interp, "corrupt func type: %02x", func->type);
 }
@@ -3845,18 +3886,28 @@ static struct val *alloc_frame_locals(struct wasm_interp *interp,
 }
 
 static int prepare_call(struct wasm_interp *interp, struct func *func,
-		int func_index, struct val **locals)
+		int func_index, struct val **locals, int *prev_items)
 {
 	static char buf[128];
 	struct val *local;
 	struct val val;
 	u32 i, j, ind;
 
+	*prev_items = count_stack_vals(&interp->stack);
+
 	if (!(*locals = alloc_frame_locals(interp, func)))
 		return interp_error(interp, "locals stack oom");
 
+	debug("new stack size %ld/%ld (%f%%)\n",
+			((u8*)*locals) - interp->locals.start,
+			interp->locals.end - interp->locals.start,
+			100.0*((double)(((u8*)*locals) - interp->locals.start)/
+			  (double)(interp->locals.end - interp->locals.start)));
+
 	/* push params as locals */
 	for (i = 0; i < func->functype->params.num_valtypes; i++) {
+		*prev_items = *prev_items - 1;
+
 		ind = func->functype->params.num_valtypes-1-i;
 		local = &(*locals)[ind];
 		local->type = (enum valtype)func->functype->params.valtypes[ind];
@@ -3913,6 +3964,7 @@ static int call_function(struct wasm_interp *interp, int func_index)
 {
 	struct func *func;
 	struct val *locals;
+	int prev_items;
 
 	debug("calling %s:%d\n", get_function_name(interp->module, func_index), func_index);
 
@@ -3924,11 +3976,10 @@ static int call_function(struct wasm_interp *interp, int func_index)
 				interp->module->code_section.num_funcs);
 	}
 
-	if (!prepare_call(interp, func, func_index, &locals)) {
+	if (!prepare_call(interp, func, func_index, &locals, &prev_items))
 		return interp_error(interp, "prepare args");
-	}
 
-	return call_func(interp, func, func_index, locals);
+	return call_func(interp, func, func_index, locals, prev_items);
 }
 
 static int interp_call(struct wasm_interp *interp, int func_index)
@@ -5113,7 +5164,7 @@ static int interp_return(struct wasm_interp *interp)
 				count);
 	}
 
-	return drop_callframe(interp);
+	return drop_callframe_return(interp, 1);
 }
 
 

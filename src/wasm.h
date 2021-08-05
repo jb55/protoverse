@@ -640,6 +640,7 @@ struct callframe {
 	struct cursor code;
 	struct val *locals;
 	u32 fn;
+	u16 prev_stack_items;
 };
 
 struct resolver {
