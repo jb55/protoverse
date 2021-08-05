@@ -116,6 +116,11 @@ static INLINE u8 *mem_ptr(struct wasm_interp *interp, u32 ptr, int size)
 {
 	u8 *pos = interp->memory.start + ptr;
 
+	if (ptr == 0) {
+		interp_error(interp, "null mem_ptr");
+		return NULL;
+	}
+
 	if (pos + size >= interp->memory.p) {
 		interp_error(interp, "guest invalid mem read: %d > %d",
 			pos, interp->memory.p - interp->memory.start);
@@ -160,6 +165,14 @@ static INLINE int mem_ptr_u32(struct wasm_interp *interp, u32 ptr, u32 **i)
 		return interp_error(interp, "uint memptr");
 	return 1;
 }
+
+static INLINE int mem_ptr_u32_arr(struct wasm_interp *interp, u32 ptr, int n, u32 **i)
+{
+	if (!(*i = (u32*)mem_ptr(interp, ptr, n * sizeof(int))))
+		return interp_error(interp, "uint memptr");
+	return 1;
+}
+
 
 static INLINE int mem_ptr_str(struct wasm_interp *interp, u32 ptr,
 		const char **str)
@@ -5262,9 +5275,8 @@ static int store_val(struct wasm_interp *interp, int i,
 	struct memtarget target;
 	//struct cursor mem;
 
-	if (unlikely(!interp_mem_offset(interp, &N, i, type, memarg, &target))) {
-		return interp_error(interp, "memory target");
-	}
+	if (unlikely(!interp_mem_offset(interp, &N, i, type, memarg, &target)))
+		return 0;
 
 	if (N != 0) {
 		if (!wrap_val(val, N)) {
