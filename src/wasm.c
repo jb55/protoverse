@@ -41,12 +41,10 @@ struct expr_parser {
 	struct cursor *stack; // optional
 };
 
-#ifdef DEBUG
 static INLINE struct callframe *top_callframes(struct cursor *cur, int top)
 {
 	return (struct callframe*)cursor_topn(cur, sizeof(struct callframe), top);
 }
-#endif
 
 static INLINE struct callframe *top_callframe(struct cursor *cur)
 {
@@ -427,6 +425,22 @@ static void print_stack(struct cursor *stack)
 	}
 
 	stack->p = p;
+}
+
+void print_callstack(struct wasm_interp *interp)
+{
+	int i = 0;
+	struct callframe *frame;
+	struct func *func;
+
+	printf("callstack:\n");
+	while ((frame = top_callframes(&interp->callframes, i++))) {
+		func = get_fn(interp->module, frame->fn);
+		if (!func)
+			printf("??\n");
+		else
+			printf("%d %s:%d\n", i, func->name, frame->fn);
+	}
 }
 
 static INLINE int cursor_pushval(struct cursor *cur, struct val *val)
@@ -7035,6 +7049,7 @@ int run_wasm(unsigned char *wasm, unsigned long len,
 	setup_wasi(&interp, argc, argv, env);
 
 	if (!interp_wasm_module(&interp, retval)) {
+		print_callstack(&interp);
 		print_error_backtrace(&interp.errors);
 	}
 

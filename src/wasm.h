@@ -724,5 +724,6 @@ void wasm_interp_free(struct wasm_interp *interp);
 int interp_wasm_module(struct wasm_interp *interp, int *retval);
 void print_error_backtrace(struct errors *errors);
 void setup_wasi(struct wasm_interp *interp, int argc, const char **argv, char **env);
+void print_callstack(struct wasm_interp *interp);
 
 #endif /* PROTOVERSE_WASM_H */
