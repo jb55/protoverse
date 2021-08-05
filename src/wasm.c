@@ -5276,7 +5276,11 @@ static int store_val(struct wasm_interp *interp, int i,
 
 	//make_cursor(target.pos, interp->memory.p, &mem);
 
-	debug("storing %d at %ld (%d bytes), N:%d\n", val->num.i32,
+	debug("storing ");
+#ifdef DEBUG
+	print_val(val);
+#endif 
+	debug(" at %ld (%d bytes), N:%d\n", 
 			target.pos - interp->memory.start,
 			target.size, N);
 
