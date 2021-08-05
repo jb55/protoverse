@@ -3215,6 +3215,15 @@ static INLINE int interp_i64_xor(struct wasm_interp *interp)
 	return stack_pushval(interp, &c);
 }
 
+static INLINE int interp_f32_min(struct wasm_interp *interp)
+{
+	struct val lhs, rhs, c;
+	if (unlikely(!interp_prep_binop(interp, &lhs, &rhs, &c, val_f32)))
+		return interp_error(interp, "binop prep");
+	c.num.f32 = lhs.num.f32 < rhs.num.f32 ? lhs.num.f32 : rhs.num.f32;
+	return stack_pushval(interp, &c);
+}
+
 static INLINE int interp_f32_max(struct wasm_interp *interp)
 {
 	struct val lhs, rhs, c;
@@ -3526,6 +3535,15 @@ static INLINE int interp_f32_neg(struct wasm_interp *interp)
 	if (unlikely(!(val = stack_top_f32(interp))))
 		return interp_error(interp, "pop");
 	val->num.f32 = -val->num.f32;
+	return 1;
+}
+
+static INLINE int interp_f32_reinterpret_i32(struct wasm_interp *interp)
+{
+	struct val *val;
+	if (unlikely(!(val = stack_top_i32(interp))))
+		return interp_error(interp, "pop");
+	val->type = val_f32;
 	return 1;
 }
 
@@ -4945,7 +4963,12 @@ static int interp_if(struct wasm_interp *interp)
 	return 1;
 }
 
-static INLINE int clz(u32 x)
+static INLINE int clz32(u32 x)
+{
+	return x ? __builtin_clz(x) : sizeof(x) * 8;
+}
+
+static INLINE int clz64(u64 x)
 {
 	return x ? __builtin_clz(x) : sizeof(x) * 8;
 }
@@ -4964,7 +4987,7 @@ static INLINE int interp_i32_popcnt(struct wasm_interp *interp)
 {
 	struct val a;
 	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
-		return interp_error(interp, "if pop val");
+		return interp_error(interp, "pop val");
 	return stack_push_i32(interp, popcnt(a.num.u32));
 }
 
@@ -4972,23 +4995,31 @@ static INLINE int interp_i32_ctz(struct wasm_interp *interp)
 {
 	struct val a;
 	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
-		return interp_error(interp, "if pop val");
+		return interp_error(interp, "pop val");
 	return stack_push_i32(interp, ctz(a.num.u32));
+}
+
+static INLINE int interp_i64_clz(struct wasm_interp *interp)
+{
+	struct val a;
+	if (unlikely(!stack_pop_valtype(interp, val_i64, &a)))
+		return interp_error(interp, "pop val");
+	return stack_push_i64(interp, clz64(a.num.u64));
 }
 
 static INLINE int interp_i32_clz(struct wasm_interp *interp)
 {
 	struct val a;
 	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
-		return interp_error(interp, "if pop val");
-	return stack_push_i32(interp, clz(a.num.u32));
+		return interp_error(interp, "pop val");
+	return stack_push_i32(interp, clz32(a.num.u32));
 }
 
 static INLINE int interp_i32_eqz(struct wasm_interp *interp)
 {
 	struct val a;
 	if (unlikely(!stack_pop_valtype(interp, val_i32, &a)))
-		return interp_error(interp, "if pop val");
+		return interp_error(interp, "pop val");
 	return stack_push_i32(interp, a.num.i32 == 0);
 }
 
@@ -6079,6 +6110,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_f32_eq:      return interp_f32_eq(interp);
 	case i_f32_ne:      return interp_f32_ne(interp);
 	case i_f32_max:     return interp_f32_max(interp);
+	case i_f32_min:     return interp_f32_max(interp);
 	case i_f32_sqrt:    return interp_f32_sqrt(interp);
 
 	case i_f32_convert_i32_s:   return interp_f32_convert_i32_s(interp);
@@ -6094,6 +6126,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_f32_convert_i32_u:   return interp_f32_convert_i32_u(interp);
 	case i_i32_trunc_f64_u:     return interp_i32_trunc_f64_u(interp);
 	case i_f64_convert_i32_u:   return interp_f64_convert_i32_u(interp);
+	case i_f32_reinterpret_i32: return interp_f32_reinterpret_i32(interp);
 
 	case i_f64_abs:     return interp_f64_abs(interp);
 	case i_f64_eq:      return interp_f64_eq(interp);
@@ -6144,6 +6177,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_i32_eq:      return interp_i32_eq(interp);
 	case i_i32_wrap_i64:return interp_i32_wrap_i64(interp);
 
+	case i_i64_clz:     return interp_i64_clz(interp);
 	case i_i64_add:     return interp_i64_add(interp);
 	case i_i64_and:     return interp_i64_and(interp);
 	case i_i64_eqz:     return interp_i64_eqz(interp);
