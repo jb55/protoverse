@@ -190,45 +190,39 @@ static INLINE int read_mem_i32(struct wasm_interp *interp, u32 ptr, int *i)
 static INLINE struct val *get_local(struct wasm_interp *interp, u32 ind)
 {
 	struct callframe *frame;
-	struct func *func;
 
 	if (unlikely(!(frame = top_callframe(&interp->callframes)))) {
 		interp_error(interp, "no callframe?");
 		return NULL;
 	}
 
-	func = &interp->module->funcs[frame->fn];
-
-	if (unlikely(ind >= func->num_locals)) {
+	if (unlikely(ind >= frame->func->num_locals)) {
 		interp_error(interp, "local index %d too high for %s:%d (max %d)",
-				ind, func->name, frame->fn, func->num_locals-1);
+				ind, frame->func->name, frame->func->idx,
+				frame->func->num_locals-1);
 		return NULL;
 	}
 
 	return &frame->locals[ind];
 }
 
-static INLINE int get_params(struct wasm_interp *interp,
-        struct val** vals, u32 num_vals)
+static INLINE int get_params(struct wasm_interp *interp, struct val** vals,
+			     u32 num_vals)
 {
-    struct callframe *frame;
-    struct func *fn;
+	struct callframe *frame;
 
-    if (unlikely(!(frame = top_callframe(&interp->callframes))))
-        return interp_error(interp, "no callframe?");
+	if (unlikely(!(frame = top_callframe(&interp->callframes))))
+		return interp_error(interp, "no callframe?");
 
-    if (unlikely(!(fn = get_fn(interp->module, frame->fn))))
-        return interp_error(interp, "invalid fn %d", frame->fn);
+	if (unlikely(num_vals != frame->func->functype->params.num_valtypes)) {
+		return interp_error(interp,
+				"requested %d params, but there are %d",
+				num_vals, frame->func->functype->params.num_valtypes);
+	}
 
-    if (unlikely(num_vals != fn->functype->params.num_valtypes)) {
-        return interp_error(interp,
-                "requested %d params, but there are %d",
-                num_vals, fn->functype->params.num_valtypes);
-    }
+	*vals = frame->locals;
 
-    *vals = frame->locals;
-
-    return 1;
+	return 1;
 }
 
 static INLINE int stack_popval(struct wasm_interp *interp, struct val *val)
@@ -431,15 +425,16 @@ void print_callstack(struct wasm_interp *interp)
 {
 	int i = 0;
 	struct callframe *frame;
-	struct func *func;
 
 	printf("callstack:\n");
 	while ((frame = top_callframes(&interp->callframes, i++))) {
-		func = get_fn(interp->module, frame->fn);
-		if (!func)
+		if (!frame->func) {
 			printf("??\n");
-		else
-			printf("%d %s:%d\n", i, func->name, frame->fn);
+			continue;
+		}
+		else {
+			printf("%d %s:%d\n", i, frame->func->name, frame->func->idx);
+		}
 	}
 }
 
@@ -543,6 +538,15 @@ static int wasi_abort(struct wasm_interp *interp)
 	return 0;
 }
 
+static INLINE const char *get_function_name(struct module *module, int fn)
+{
+	struct func *func = NULL;
+	if (unlikely(!(func = get_fn(module, fn)))) {
+		return "unknown";
+	}
+	return func->name;
+}
+
 static int wasi_args_sizes_get(struct wasm_interp *interp);
 static int wasi_args_get(struct wasm_interp *interp);
 static int wasi_fd_write(struct wasm_interp *interp);
@@ -550,6 +554,7 @@ static int wasi_environ_sizes_get(struct wasm_interp *interp);
 static int wasi_environ_get(struct wasm_interp *interp);
 
 static struct builtin BUILTINS[] = {
+	{ .name = "null",              .fn = NULL }, // for reasons
 	{ .name = "args_get",          .fn = wasi_args_get },
 	{ .name = "fd_write",          .fn = wasi_fd_write },
 	{ .name = "environ_sizes_get", .fn = wasi_environ_sizes_get },
@@ -1035,15 +1040,6 @@ static INLINE int count_imported_functions(struct module *module)
 {
 	enum import_type typ = import_func;
 	return count_imports(module, &typ);
-}
-
-static INLINE const char *get_function_name(struct module *module, int fn)
-{
-	struct func *func = NULL;
-	if (unlikely(!(func = get_fn(module, fn)))) {
-		return "unknown";
-	}
-	return func->name;
 }
 
 static void print_element_section(struct elemsec *section)
@@ -3036,12 +3032,24 @@ static int count_fn_locals(struct func *func)
 	return num_locals;
 }
 
+static void make_builtin_func(struct func *func, const char *name,
+		struct functype *type, struct builtin *builtin, u32 idx)
+{
+	func->name = name;
+	func->builtin = builtin;
+	func->functype = type;
+	func->type = func_type_builtin;
+	func->num_locals = count_fn_locals(func);
+	func->idx = idx;
+}
+
 static int make_func_lookup_table(struct wasm_parser *parser)
 {
 	u32 i, num_imports, num_func_imports, num_internal_funcs, typeidx, fn;
 	struct import *import;
 	struct importsec *imports;
 	struct func *func;
+	struct builtin *builtin;
 
 	fn = 0;
 
@@ -3067,18 +3075,20 @@ static int make_func_lookup_table(struct wasm_parser *parser)
 
 		func = &parser->module.funcs[fn++];
 
-		func->name = import->name;
-		typeidx = import->desc.typeidx;
-		func->functype = &parser->module.type_section.functypes[typeidx];
-		func->type = func_type_builtin;
-		func->num_locals = count_fn_locals(func);
-
 		if (import->resolved_builtin == -1) {
 			debug("warning: %s not resolved\n", func->name);
-			func->builtin = NULL;
+			builtin = NULL;
 		} else {
-			func->builtin = builtin_func(import->resolved_builtin);
+			builtin = builtin_func(import->resolved_builtin);
 		}
+
+		make_builtin_func(
+			func,
+			import->name,
+			&parser->module.type_section.functypes[import->desc.typeidx],
+			builtin,
+			fn
+			);
 	}
 
 	/* module fns */
@@ -3091,6 +3101,7 @@ static int make_func_lookup_table(struct wasm_parser *parser)
 		func->functype = &parser->module.type_section.functypes[typeidx];
 		func->name = find_function_name(&parser->module, fn);
 		func->num_locals = count_fn_locals(func);
+		func->idx = fn;
 	}
 
 	assert(fn == parser->module.num_funcs);
@@ -3729,25 +3740,23 @@ static INLINE int drop_callframe_return(struct wasm_interp *interp, int returnin
 		from = "(aux)";
 		from_fn = -1;
 	} else {
-		from = get_function_name(interp->module, frame->fn);
-		from_fn = frame->fn;
+		from = get_function_name(interp->module, frame->func->idx);
+		from_fn = frame->func->idx;
 	}
 
 	if (!(frame = top_callframes(&interp->callframes, 1))) {
 		to = "(aux)";
 		to_fn = -1;
 	} else {
-		to = get_function_name(interp->module, frame->fn);
-		to_fn = frame->fn;
+		to = get_function_name(interp->module, frame->func->idx);
+		to_fn = frame->func->idx;
 	}
 #endif
 	frame = top_callframe(&interp->callframes);
+	func = frame->func;
 
 	if (unlikely(!cursor_popint(&interp->resolver_offsets, &offset)))
 		return interp_error(interp, "pop resolver_offsets");
-
-	if (unlikely(!(func = get_fn(interp->module, frame->fn))))
-		return interp_error(interp, "no fn??");
 
 	cnt = count_stack_vals(&interp->stack);
 
@@ -3767,7 +3776,7 @@ static INLINE int drop_callframe_return(struct wasm_interp *interp, int returnin
 				func->functype->result.num_valtypes)) {
 		return interp_error(interp,
 				"%s:%d extra values on stack: have %d-prev:%d=%d, expected %d",
-				func->name, frame->fn, cnt,
+				func->name, frame->func->idx, cnt,
 				frame->prev_stack_items,
 				cnt - frame->prev_stack_items,
 				func->functype->result.num_valtypes);
@@ -3784,78 +3793,6 @@ static INLINE int drop_callframe_return(struct wasm_interp *interp, int returnin
 static INLINE int drop_callframe(struct wasm_interp *interp)
 {
 	return drop_callframe_return(interp, 1);
-}
-
-static INLINE int call_wasm_func(struct wasm_interp *interp, struct wasm_func *func,
-		int fn, struct val *locals, int prev_items)
-{
-	struct callframe callframe;
-
-	/* update current function and push it to the callframe as well */
-	make_cursor(func->code.code, func->code.code + func->code.code_len, &callframe.code);
-	callframe.fn = fn;
-	callframe.locals = locals;
-	callframe.prev_stack_items = prev_items;
-
-	assert(func->code.code_len > 0);
-
-	if (unlikely(!push_callframe(interp, &callframe)))
-		return interp_error(interp, "push callframe");
-
-	/*
-	if (unlikely(!interp_code(interp))) {
-		return interp_error(interp, "call %s:%d",
-				get_function_name(interp->module, fn),
-				fn);
-	}
-
-	if (unlikely(!drop_callframe(interp)))
-		return interp_error(interp, "drop callframe");
-	*/
-
-	return 1;
-}
-
-
-static INLINE int call_builtin_func(struct wasm_interp *interp, struct builtin *builtin,
-		int fn, struct val *params, int prev_items)
-{
-	struct callframe callframe = {};
-
-	/* update current function and push it to the callframe as well */
-	callframe.fn = fn;
-	callframe.locals = params;
-	callframe.prev_stack_items = prev_items;
-
-	if (unlikely(!push_callframe(interp, &callframe)))
-		return interp_error(interp, "oob cursor_pushcode");
-
-	if (!builtin->fn(interp))
-		return interp_error(interp, "builtin trap");
-
-	if (unlikely(!drop_callframe(interp)))
-		return interp_error(interp, "pop callframe");
-
-	return 1;
-}
-
-static INLINE int call_func(struct wasm_interp *interp, struct func *func,
-		int fn, struct val *locals, int prev_items)
-{
-	switch (func->type) {
-	case func_type_wasm:
-		return call_wasm_func(interp, func->wasm_func, fn, locals,
-				prev_items);
-	case func_type_builtin:
-		if (func->builtin == NULL) {
-			return interp_error(interp,
-					"attempted to call unresolved fn: %s",
-					func->name);
-		}
-		return call_builtin_func(interp, func->builtin, fn, locals,
-				prev_items);
-	}
-	return interp_error(interp, "corrupt func type: %02x", func->type);
 }
 
 static void make_default_val(struct val *val)
@@ -3900,7 +3837,7 @@ static struct val *alloc_frame_locals(struct wasm_interp *interp,
 }
 
 static int prepare_call(struct wasm_interp *interp, struct func *func,
-		int func_index, struct val **locals, int *prev_items)
+		struct val **locals, int *prev_items)
 {
 	static char buf[128];
 	struct val *local;
@@ -3930,7 +3867,7 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 		if (unlikely(!cursor_popval(&interp->stack, &val))) {
 			return interp_error(interp,
 				"not enough arguments for call to %s: [%s], needed %d args, got %d",
-				get_function_name(interp->module, func_index),
+				func->name,
 				functype_str(func->functype, buf, sizeof(buf)),
 				func->functype->params.num_valtypes,
 				ind);
@@ -3974,11 +3911,89 @@ static int prepare_call(struct wasm_interp *interp, struct func *func,
 	return 1;
 }
 
+static INLINE int call_wasm_func(struct wasm_interp *interp, struct func *func)
+{
+	struct callframe callframe;
+	struct val *locals;
+	int prev_items;
+
+	if (!prepare_call(interp, func, &locals, &prev_items))
+		return interp_error(interp, "prepare args");
+
+	/* update current function and push it to the callframe as well */
+	make_cursor(func->wasm_func->code.code,
+			func->wasm_func->code.code + func->wasm_func->code.code_len,
+			&callframe.code);
+
+	callframe.func = func;
+	callframe.locals = locals;
+	callframe.prev_stack_items = prev_items;
+
+	assert(func->wasm_func->code.code_len > 0);
+
+	if (unlikely(!push_callframe(interp, &callframe)))
+		return interp_error(interp, "push callframe");
+
+	/*
+	if (unlikely(!interp_code(interp))) {
+		return interp_error(interp, "call %s:%d",
+				get_function_name(interp->module, fn),
+				fn);
+	}
+
+	if (unlikely(!drop_callframe(interp)))
+		return interp_error(interp, "drop callframe");
+	*/
+
+	return 1;
+}
+
+static INLINE int call_builtin_func(struct wasm_interp *interp, struct func *func)
+{
+	struct callframe callframe = {};
+	struct val *locals;
+	int prev_items;
+
+	if (!prepare_call(interp, func, &locals, &prev_items))
+		return interp_error(interp, "prepare args");
+
+	/* update current function and push it to the callframe as well */
+	callframe.func = func;
+	callframe.locals = locals;
+	callframe.prev_stack_items = prev_items;
+
+	if (unlikely(!push_callframe(interp, &callframe)))
+		return interp_error(interp, "oob cursor_pushcode");
+
+	if (!func->builtin->fn(interp))
+		return interp_error(interp, "builtin trap");
+
+	if (unlikely(!drop_callframe(interp)))
+		return interp_error(interp, "pop callframe");
+
+	return 1;
+}
+
+static INLINE int call_func(struct wasm_interp *interp, struct func *func)
+{
+	switch (func->type) {
+	case func_type_wasm:
+		return call_wasm_func(interp, func);
+	case func_type_builtin:
+		if (func->builtin == NULL) {
+			return interp_error(interp,
+					"attempted to call unresolved fn: %s",
+					func->name);
+		}
+		return call_builtin_func(interp, func);
+	}
+	return interp_error(interp, "corrupt func type: %02x", func->type);
+}
+
+
 static int call_function(struct wasm_interp *interp, int func_index)
 {
 	struct func *func;
-	struct val *locals;
-	int prev_items;
 
 	debug("calling %s:%d\n", get_function_name(interp->module, func_index), func_index);
 
@@ -3990,10 +4005,7 @@ static int call_function(struct wasm_interp *interp, int func_index)
 				interp->module->code_section.num_funcs);
 	}
 
-	if (!prepare_call(interp, func, func_index, &locals, &prev_items))
-		return interp_error(interp, "prepare args");
-
-	return call_func(interp, func, func_index, locals, prev_items);
+	return call_func(interp, func);
 }
 
 static int interp_call(struct wasm_interp *interp, int func_index)
@@ -4024,8 +4036,9 @@ static int interp_call_indirect(struct wasm_interp *interp, struct call_indirect
 	static char buf[128];
 	static char buf2[128];
 	struct functype *type;
-	struct func *func;
+	struct func *func, pfunc;
 	struct table_inst *table;
+	struct builtin *builtin;
 	struct refval *ref;
 	u32 ftidx;
 	int i;
@@ -4073,9 +4086,13 @@ static int interp_call_indirect(struct wasm_interp *interp, struct call_indirect
 				i, call->tableidx);
 	}
 
-	if (ref->addr >= interp->module->num_funcs) {
-		return interp_error(interp, "invalid function ref %d (max %d)",
-				ref, interp->module->num_funcs-1);
+	// HACKY special case for indirect host builtins
+	i = -((int)ref->addr);
+	if (-i < 0 && i < NUM_BUILTINS) {
+		builtin = &BUILTINS[i];
+		make_builtin_func(&pfunc, builtin->name, type, builtin, -i);
+		debug("calling indirect builtin %s\n", pfunc.name);
+		return call_builtin_func(interp, &pfunc);
 	}
 
 	func = &interp->module->funcs[ref->addr];
@@ -4150,7 +4167,7 @@ static struct label *index_frame_label(struct wasm_interp *interp, u32 ind)
 		return NULL;
 	}
 
-	return index_label(&interp->labels, frame->fn, ind);
+	return index_label(&interp->labels, frame->func->idx, ind);
 }
 
 static INLINE int resolve_label(struct label *label, struct cursor *code)
@@ -4187,7 +4204,7 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 	};
 
 	label = index_label(&interp->labels,
-			    top_callframe(&interp->callframes)->fn,
+			    top_callframe(&interp->callframes)->func->idx,
 			    resolver->label);
 #endif
 
@@ -4215,7 +4232,7 @@ static int pop_label(struct wasm_interp *interp,
 	if (unlikely(!(*frame = top_callframe(&interp->callframes))))
 		return interp_error(interp, "no callframe?");
 
-	if (unlikely(!(*label = index_label(&interp->labels, (*frame)->fn,
+	if (unlikely(!(*label = index_label(&interp->labels, (*frame)->func->idx,
 					    resolver->label))))
 		return interp_error(interp, "index label");
 
@@ -4338,16 +4355,16 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 
 	if (unlikely(!frame)) {
 		return interp_error(interp, "no callframes available?");
-	} else if (unlikely(frame->fn >= fns)) {
+	} else if (unlikely(frame->func->idx >= fns)) {
 		return interp_error(interp, "invalid fn index?");
 	}
 
 	instr_pos = frame->code.p - frame->code.start;
-	if (unlikely(!upsert_label(interp, frame->fn, instr_pos, &ind))) {
+	if (unlikely(!upsert_label(interp, frame->func->idx, instr_pos, &ind))) {
 		return interp_error(interp, "upsert label");
 	}
 
-	if (unlikely(!(*label = index_label(&interp->labels, frame->fn, ind)))) {
+	if (unlikely(!(*label = index_label(&interp->labels, frame->func->idx, ind)))) {
 		return interp_error(interp, "couldn't index label");
 	}
 

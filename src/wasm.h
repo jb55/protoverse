@@ -253,6 +253,7 @@ struct func {
 	struct functype *functype;
 	enum func_type type;
 	const char *name;
+	u32 idx;
 };
 
 struct codesec {
@@ -639,7 +640,7 @@ struct label {
 struct callframe {
 	struct cursor code;
 	struct val *locals;
-	u32 fn;
+	struct func *func;
 	u16 prev_stack_items;
 };
 
