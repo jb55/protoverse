@@ -4061,7 +4061,7 @@ static int interp_call_indirect(struct wasm_interp *interp, struct call_indirect
 		return interp_error(interp, "pop i32");
 	}
 
-	if (unlikely(i >= (int)table->num_refs)) {
+	if (unlikely(i < 0 || i >= (int)table->num_refs)) {
 		return interp_error(interp, "invalid index %d in table %d (max %d)",
 				i, call->tableidx, table->num_refs-1);
 	}
