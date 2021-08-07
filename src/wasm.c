@@ -550,6 +550,7 @@ static INLINE const char *get_function_name(struct module *module, int fn)
 static int wasi_args_sizes_get(struct wasm_interp *interp);
 static int wasi_args_get(struct wasm_interp *interp);
 static int wasi_fd_write(struct wasm_interp *interp);
+static int wasi_fd_close(struct wasm_interp *interp);
 static int wasi_environ_sizes_get(struct wasm_interp *interp);
 static int wasi_environ_get(struct wasm_interp *interp);
 
@@ -557,6 +558,7 @@ static struct builtin BUILTINS[] = {
 	{ .name = "null",              .fn = NULL }, // for reasons
 	{ .name = "args_get",          .fn = wasi_args_get },
 	{ .name = "fd_write",          .fn = wasi_fd_write },
+	{ .name = "fd_close",          .fn = wasi_fd_close },
 	{ .name = "environ_sizes_get", .fn = wasi_environ_sizes_get },
 	{ .name = "environ_get",       .fn = wasi_environ_get },
 	{ .name = "args_sizes_get",    .fn = wasi_args_sizes_get },
@@ -5476,6 +5478,17 @@ static INLINE int load_i32(struct wasm_interp *interp, int addr, int *i)
 		return interp_error(interp, "load");
 
 	return stack_pop_i32(interp, i);
+}
+
+static int wasi_fd_close(struct wasm_interp *interp)
+{
+	struct val *params = NULL;
+	if (!get_params(interp, &params, 1))
+		return interp_error(interp, "param");
+
+	close(params[0].num.i32);
+
+	return stack_push_i32(interp, 0);
 }
 
 static int wasi_fd_write(struct wasm_interp *interp)

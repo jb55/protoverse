@@ -46,7 +46,7 @@ wasm/hello-c.wasm: wasm/hello-c.c
 	emcc -g $< -s WASM=1 -o $@
 
 protoverse.wasm: src/protoverse.c $(SRCS)
-	emcc -g $^ -s WASM=1 -o $@
+	emcc -g $^ -s WASM=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -o $@
 
 protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"
