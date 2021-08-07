@@ -1365,23 +1365,19 @@ int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root)
 }
 
 
-int parse_file(struct parser *parser, const char *filename, u16 *root)
+int parse_file(struct parser *parser, const char *filename, u16 *root, u8 *buf,
+		u32 bufsize)
 {
-	/* TODO: increase these limits */
-	int bufsize = 4096*4;
-	u8 *file_buf = calloc(1, bufsize);
-
 	int count, ok;
 
-	ok = read_file(filename, file_buf, bufsize, &count);
+	ok = read_file(filename, buf, bufsize, &count);
 
 	if (!ok) {
 		printf("failed to load '%s'\n", filename);
 		return 0;
 	}
 
-	ok = parse_buffer(parser, file_buf, count, root);
-	free(file_buf);
+	ok = parse_buffer(parser, buf, count, root);
 	return ok;
 }
 

@@ -103,6 +103,7 @@ extern char **environ;
 
 int main(int argc, const char *argv[])
 {
+	static u8 buf[4096*8];
 	char **env = environ;
 	const char *space, *code_file;
 	const char *cmd;
@@ -128,7 +129,7 @@ int main(int argc, const char *argv[])
 			return 1;
 		}
 		space = argv[2];
-		ok = parse_file(&parser, space, &root);
+		ok = parse_file(&parser, space, &root, buf, sizeof(buf));
 		if (!ok) {
 			printf("failed to parse file\n");
 			return 1;

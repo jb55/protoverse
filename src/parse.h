@@ -132,7 +132,7 @@ struct parser {
 };
 
 int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root);
-int parse_file(struct parser *parser, const char *filename, u16 *root);
+int parse_file(struct parser *parser, const char *filename, u16 *root, u8 *buf, u32 bufsize);
 int init_parser(struct parser *parser);
 int free_parser(struct parser *parser);
 void print_cell(struct cursor *attributes, struct cell *cell);
