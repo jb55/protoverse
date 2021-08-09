@@ -4302,19 +4302,19 @@ static INLINE u16 *func_num_labels(struct wasm_interp *interp, u32 fn)
 
 static int find_label(struct wasm_interp *interp, u32 fn, u32 instr_pos)
 {
-	u16 *num_labels, i;
+	u16 *num_labels;
+	int i;
 	struct label *label;
 
 	num_labels = func_num_labels(interp, fn);
 
-	if (!(label = index_label(&interp->labels, fn, 0)))
+	if (!(label = index_label(&interp->labels, fn, *num_labels-1)))
 		return interp_error(interp, "index label");
 
-	for (i = 0; i < *num_labels; label++) {
-		assert((u8*)label < interp->labels.end);
+	for (i = *num_labels-1; i >= 0; label--) {
 		if (label_instr_pos(label) == instr_pos)
 			return i;
-		i++;
+		i--;
 	}
 
 	return -1;
