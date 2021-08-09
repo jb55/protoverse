@@ -59,6 +59,7 @@ enum section_tag {
 	section_element,
 	section_code,
 	section_data,
+	section_data_count,
 	section_name,
 	num_sections,
 };
@@ -299,6 +300,17 @@ struct section {
 	enum section_tag tag;
 };
 
+enum bulk_tag {
+	i_memory_copy = 10,
+	i_memory_fill = 11,
+	i_table_init  = 12,
+	i_elem_drop   = 13,
+	i_table_copy  = 14,
+	i_table_grow  = 15,
+	i_table_size  = 16,
+	i_table_fill  = 17,
+};
+
 enum instr_tag {
 	/* control instructions */
 	i_unreachable   = 0x00,
@@ -506,7 +518,7 @@ enum instr_tag {
 	i_ref_is_null = 0xD1,
 	i_ref_func    = 0xD2,
 
-	i_table_op     = 0xFC,
+	i_bulk_op     = 0xFC,
 	/* TODO: more instrs */
 
 };
@@ -556,6 +568,20 @@ struct table_init {
 	u32 elemidx;
 };
 
+struct table_copy {
+	u32 from;
+	u32 to;
+};
+
+struct bulk_op {
+	enum bulk_tag tag;
+	union {
+		struct table_init table_init;
+		struct table_copy table_copy;
+		u32 idx;
+	};
+};
+
 struct select_instr {
 	u8 *valtypes;
 	u32 num_valtypes;
@@ -566,7 +592,7 @@ struct instr {
 	int pos;
 	union {
 		struct br_table br_table;
-		struct table_init table_init;
+		struct bulk_op bulk_op;
 		struct call_indirect call_indirect;
 		struct memarg memarg;
 		struct select_instr select;
@@ -602,7 +628,7 @@ struct wdata {
 
 struct datasec {
 	struct wdata *datas;
-	int num_datas;
+	u32 num_datas;
 };
 
 struct startsec {

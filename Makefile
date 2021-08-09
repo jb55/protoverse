@@ -13,7 +13,6 @@ OBJS = src/io.o \
        src/client.o \
        src/net.o \
        src/varint.o \
-       src/parser.o \
        src/error.o \
        src/wasm.o
 

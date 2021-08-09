@@ -786,7 +786,7 @@ static char *instr_name(enum instr_tag tag)
 		case i_ref_null: return "ref_null";
 		case i_ref_func: return "ref_func";
 		case i_ref_is_null: return "ref_is_null";
-		case i_table_op: return "table_op";
+		case i_bulk_op: return "bulk_op";
 		case i_table_get: return "table_get";
 		case i_table_set: return "table_set";
 		case i_selects: return "selects";
@@ -1153,6 +1153,9 @@ static void print_section(struct module *module, enum section_tag section)
 		break;
 	case section_data:
 		print_data_section(&module->data_section);
+		break;
+	case section_data_count:
+		printf("data count %d\n", module->data_section.num_datas);
 		break;
 	case section_name:
 		printf("todo: print name section\n");
@@ -1861,7 +1864,7 @@ static void print_code(u8 *code, int code_len)
 }
 */
 
-static inline int is_const_instr(u8 tag)
+static INLINE int is_const_instr(u8 tag)
 {
 	switch ((enum const_instr)tag) {
 	case ci_global_get:
@@ -1877,11 +1880,27 @@ static inline int is_const_instr(u8 tag)
 	return 0;
 }
 
-static int cursor_push_nullval(struct cursor *stack)
+static INLINE int cursor_push_nullval(struct cursor *stack)
 {
 	struct val val;
 	val.type = val_ref_null;
 	return cursor_pushval(stack, &val);
+}
+
+static INLINE const char *bulk_op_name(struct bulk_op *op)
+{
+	switch (op->tag) {
+	case i_memory_fill: return "memory.fill";
+	case i_memory_copy: return "memory.copy";
+	case i_table_init:  return "table.init";
+	case i_elem_drop:   return "elem.drop";
+	case i_table_copy:  return "table.copy";
+	case i_table_grow:  return "table.grow";
+	case i_table_size:  return "table.size";
+	case i_table_fill:  return "table.fill";
+	}
+
+	return "?";
 }
 
 static const char *show_instr(struct instr *instr)
@@ -2128,7 +2147,9 @@ static const char *show_instr(struct instr *instr)
 		case i_i64_extend16_s:
 		case i_i64_extend32_s:
 		case i_ref_is_null:
-		case i_table_op:
+			break;
+		case i_bulk_op:
+			cursor_push_str(&buf, bulk_op_name(&instr->bulk_op));
 			break;
 	}
 
@@ -2613,13 +2634,27 @@ static int parse_wdata(struct wasm_parser *p, struct wdata *data)
 	return 1;
 }
 
+static int parse_data_count_section(struct wasm_parser *p, struct datasec *section)
+{
+	if (!parse_u32(&p->cur, &section->num_datas))
+		return parse_err(p, "data count");
+	return 1;
+}
+
 static int parse_data_section(struct wasm_parser *p, struct datasec *section)
 {
 	struct wdata *data;
 	u32 elems, i;
 
-	if (!parse_vector(p, sizeof(*data), &elems, (void**)&data)) {
+	if (!parse_vector(p, sizeof(*data), &elems, (void**)&data))
 		return parse_err(p, "datas vector");
+
+	if (was_section_parsed(&p->module, section_data_count) &&
+			elems != section->num_datas) {
+		return parse_err(p, "we got a data count section with %d "
+				"elements but the data section says it has %d "
+				"elements. what's up with that?",
+				section->num_datas, elems);
 	}
 
 	for (i = 0; i < elems; i++) {
@@ -2884,13 +2919,17 @@ static int parse_section_by_tag(struct wasm_parser *p, enum section_tag tag,
 		return 1;
 
 	case section_data:
-		if (!parse_data_section(p, &p->module.data_section)) {
+		if (!parse_data_section(p, &p->module.data_section))
 			return parse_err(p, "data section");
-		}
+		return 1;
+
+	case section_data_count:
+		if (!parse_data_count_section(p, &p->module.data_section))
+			return parse_err(p, "data count section");
 		return 1;
 
 	default:
-		return parse_err(p, "invalid section tag");
+		return parse_err(p, "invalid section tag %d", tag);
 	}
 
 	return 1;
@@ -4607,6 +4646,62 @@ static int parse_call_indirect(struct cursor *code,
 	       parse_u32(code, &call_indirect->tableidx);
 }
 
+static int parse_bulk_op(struct cursor *code, struct errors *errs,
+		struct bulk_op *bulk_op)
+{
+	u8 tag;
+
+	if (unlikely(!pull_byte(code, &tag)))
+		return note_error(errs, code, "oob");
+
+	if (unlikely(tag < 10 || tag > 17))
+		return note_error(errs, code, "invalid bulk op %d", tag);
+
+	bulk_op->tag = tag;
+
+	switch ((enum bulk_tag)tag) {
+	case i_memory_copy:
+		if (unlikely(!consume_byte(code, 0)))
+			return note_error(errs, code, "mem idx dst 0");
+		if (unlikely(!consume_byte(code, 0)))
+			return note_error(errs, code, "mem idx src 0");
+		return 1;
+
+	case i_memory_fill:
+		if (unlikely(!consume_byte(code, 0)))
+			return note_error(errs, code, "mem idx 0");
+		return 1;
+
+	case i_table_init:
+		if (unlikely(!parse_u32(code, &bulk_op->table_init.elemidx)))
+			return note_error(errs, code, "elemidx");
+		if (unlikely(!parse_u32(code, &bulk_op->table_init.tableidx)))
+			return note_error(errs, code, "tableidx");
+		return 1;
+
+	case i_elem_drop:
+		if (unlikely(!parse_u32(code, &bulk_op->idx)))
+			return note_error(errs, code, "elemidx");
+		return 1;
+
+	case i_table_copy:
+		if (unlikely(!parse_u32(code, &bulk_op->table_copy.from)))
+			return note_error(errs, code, "elemidx");
+		if (unlikely(!parse_u32(code, &bulk_op->table_copy.to)))
+			return note_error(errs, code, "tableidx");
+		return 1;
+
+	case i_table_grow:
+	case i_table_size:
+	case i_table_fill:
+		if (unlikely(!parse_u32(code, &bulk_op->idx)))
+			return note_error(errs, code, "tableidx");
+		return 1;
+	}
+
+	return note_error(errs, code, "unhandled table op 0x%02x", tag);
+}
+
 static int parse_br_table(struct cursor *code, struct errors *errs,
 		struct br_table *br_table)
 {
@@ -4771,8 +4866,8 @@ static int parse_instr(struct expr_parser *p, u8 tag, struct instr *op)
 		case i_br_table:
 			return parse_br_table(p->code, p->errs, &op->br_table);
 
-		case i_table_op:
-			return note_error(p->errs, p->code, "parse table op");
+		case i_bulk_op:
+			return parse_bulk_op(p->code, p->errs, &op->bulk_op);
 
 		case i_call_indirect:
 			return parse_call_indirect(p->code, &op->call_indirect);
@@ -5965,6 +6060,77 @@ static INLINE int table_set(struct wasm_interp *interp,
 	return 1;
 }
 
+static int interp_memory_copy(struct wasm_interp *interp)
+{
+	int dest, src, size;
+	u8 *data_src, *data_dest;
+
+	if (unlikely(!stack_pop_i32(interp, &size)))
+		return interp_error(interp, "size");
+
+	if (unlikely(!stack_pop_i32(interp, &src)))
+		return interp_error(interp, "byte");
+
+	if (unlikely(!stack_pop_i32(interp, &dest)))
+		return interp_error(interp, "destination");
+
+	if (!(data_dest = mem_ptr(interp, dest, size)))
+		return interp_error(interp, "memory copy dest out of bounds");
+
+	if (!(data_src = mem_ptr(interp, src, size)))
+		return interp_error(interp, "memory copy src out of bounds");
+
+	debug("memory.copy src:%d dst:%d size:%d\n",
+			src, dest, size);
+
+	memcpy(data_dest, data_src, size);
+
+	return 1;
+}
+
+static int interp_memory_fill(struct wasm_interp *interp)
+{
+	int dest, byte, size;
+	u8 *data;
+
+	if (unlikely(!stack_pop_i32(interp, &size)))
+		return interp_error(interp, "size");
+
+	if (unlikely(!stack_pop_i32(interp, &byte)))
+		return interp_error(interp, "byte");
+
+	if (unlikely(!stack_pop_i32(interp, &dest)))
+		return interp_error(interp, "destination");
+
+	if (!(data = mem_ptr(interp, dest, size)))
+		return interp_error(interp, "memory fill out of bounds");
+
+	debug("memory.fill dst:%d byte:%d size:%d\n",
+			dest, byte, size);
+
+	memset(data, byte, size);
+
+	return 1;
+}
+
+static INLINE int interp_bulk_op(struct wasm_interp *interp, struct bulk_op *op)
+{
+	switch (op->tag) {
+	case i_memory_fill: return interp_memory_fill(interp);
+	case i_memory_copy: return interp_memory_copy(interp);
+	case i_table_init:
+	case i_elem_drop:
+	case i_table_copy:
+	case i_table_grow:
+	case i_table_size:
+	case i_table_fill:
+		return interp_error(interp, "unhandled bulk op: %s",
+				bulk_op_name(op));
+	}
+
+	return interp_error(interp, "unhandled unknown bulk op: %d", op->tag);
+}
+
 static int interp_table_set(struct wasm_interp *interp, u32 tableidx)
 {
 	struct table_inst *table;
@@ -6339,7 +6505,7 @@ static int interp_instr(struct wasm_interp *interp, struct instr *instr)
 	case i_br_if: return interp_br_if(interp, instr->i32);
 	case i_memory_size: return interp_memory_size(interp, instr->memidx);
 	case i_memory_grow: return interp_memory_grow(interp, instr->memidx);
-	case i_table_op: return interp_error(interp, "todo: interp table_op");
+	case i_bulk_op: return interp_bulk_op(interp, &instr->bulk_op);
 	case i_table_set: return interp_table_set(interp, instr->i32);
 	case i_return: return interp_return(interp);
 	default:
@@ -6674,7 +6840,7 @@ static int init_memory(struct wasm_interp *interp, struct wdata *data, int datai
 static int init_memories(struct wasm_interp *interp)
 {
 	struct wdata *data;
-	int i;
+	u32 i;
 
 	debug("init memories\n");
 
