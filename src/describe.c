@@ -218,7 +218,7 @@ static int describe_amount(struct describe *desc, int nobjs)
 		ok = push_word(desc->strs, "a single");
 		if (!ok) return 0;
 	} else if (nobjs == 2) {
-		ok = push_word(desc->strs, "a couple");
+		ok = push_word(desc->strs, "a couple of");
 		if (!ok) return 0;
 	} else if (nobjs == 3) {
 		ok = push_word(desc->strs, "three");
@@ -249,9 +249,13 @@ static int describe_object_name(struct cursor *strs, struct cursor *attrs, struc
 		if (!ok) return 0;
 	}
 
-	return push_word(strs, cell->type == C_OBJECT
-			  ? object_type_str(cell->obj_type)
-			  : cell_type_str(cell->type));
+	if (cell->type == C_OBJECT) {
+		if (cell->obj_type == O_OBJECT)
+			return 1;
+		return push_word(strs, object_type_str(cell->obj_type));
+	}
+
+	return push_word(strs, cell_type_str(cell->type));
 }
 
 static int describe_group(struct describe *desc)
@@ -304,8 +308,11 @@ static int describe_group(struct describe *desc)
 
 static int describe_object(struct describe *desc)
 {
-	(void)desc;
-	return 0;
+	if (!push_word(desc->strs, "a"))
+		return 0;
+
+	return describe_object_name(desc->strs, &desc->parsed->attributes,
+			desc->cell);
 }
 
 int describe_cell(struct cell *cell, struct parser *parsed, struct cursor *strbuf)
@@ -348,15 +355,13 @@ int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs
 		return 1;
 
 	if (cell->type == C_ROOM || cell->type == C_SPACE) {
-		ok = push_word(strs, "It contains");
-		if (!ok) return 0;
+		if (!push_word(strs, "It contains"))
+			return 0;
+		cell = get_cell(&parsed->cells, cell->children[0]);
+		return describe_cells(cell, parsed, strs, max_depth, depth+1);
 	}
 
-	/* TODO: for each cell ? for now we just care about the group */
-	cell = get_cell(&parsed->cells, cell->children[0]);
-	assert(cell);
-
-	return describe_cells(cell, parsed, strs, max_depth, depth+1);
+	return 1;
 }
 
 

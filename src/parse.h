@@ -29,6 +29,7 @@ enum cell_type {
 };
 
 enum object_type {
+	O_OBJECT,
 	O_TABLE,
 	O_CHAIR,
 	O_DOOR,

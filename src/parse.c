@@ -1067,6 +1067,7 @@ const char *object_type_str(enum object_type type)
 	case O_TABLE: return "table";
 	case O_CHAIR: return "chair";
 	case O_LIGHT: return "light";
+	case O_OBJECT: return "";
 	}
 
 	return "unknown";
@@ -1231,6 +1232,7 @@ static struct object_def object_defs[] = {
 	{"chair", O_CHAIR},
 	{"door", O_DOOR},
 	{"light", O_LIGHT},
+	{"object", O_OBJECT},
 };
 
 static int parse_object(struct parser *parser, u16 *index)

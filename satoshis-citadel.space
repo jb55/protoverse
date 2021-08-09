@@ -14,8 +14,10 @@
                 (location center)
                 (light (name "desk")))
 
-         (chair (id welcome-desk-chair)
-                (name "fancy"))
+         (chair (id a))
+         (chair (id b))
+         (chair (id c))
+         (chair (id d))
 
          (chair (name "throne") (material "invisible"))
 
