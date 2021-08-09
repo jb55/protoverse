@@ -1,4 +1,4 @@
-(room (shape rectangle)
+(space (shape rectangle)
       (condition "clean")
       (condition "shiny")
       (material "solid gold")

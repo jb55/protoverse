@@ -184,7 +184,7 @@ static int push_shape(struct describe *desc)
 	return 1;
 }
 
-static int describe_room(struct describe *desc)
+static int describe_area(struct describe *desc, const char *name)
 {
 	int ok;
 
@@ -198,7 +198,7 @@ static int describe_room(struct describe *desc)
 	ok = push_shape(desc);
 	if (!ok) return 0;
 
-	ok = push_word(desc->strs, "room");
+	ok = push_word(desc->strs, name);
 	if (!ok) return 0;
 
 	ok = push_made_of(desc);
@@ -308,12 +308,6 @@ static int describe_object(struct describe *desc)
 	return 0;
 }
 
-static int describe_space(struct describe *desc)
-{
-	(void)desc;
-	return 0;
-}
-
 int describe_cell(struct cell *cell, struct parser *parsed, struct cursor *strbuf)
 {
 	struct describe desc;
@@ -324,13 +318,13 @@ int describe_cell(struct cell *cell, struct parser *parsed, struct cursor *strbu
 
 	switch (cell->type) {
 	case C_ROOM:
-		return describe_room(&desc);
+		return describe_area(&desc, "room");
+	case C_SPACE:
+		return describe_area(&desc, "space");
 	case C_GROUP:
 		return describe_group(&desc);
 	case C_OBJECT:
 		return describe_object(&desc);
-	case C_SPACE:
-		return describe_space(&desc);
 	}
 
 	return 1;

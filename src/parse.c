@@ -1162,6 +1162,10 @@ static int parse_cell_by_name(struct parser *parser,
 	return 1;
 }
 
+static int parse_space(struct parser *parser, u16 *index)
+{
+	return parse_cell_by_name(parser, index, "space", C_SPACE);
+}
 
 static int parse_room(struct parser *parser, u16 *index)
 {
@@ -1292,6 +1296,12 @@ int parse_cell(struct parser *parser, u16 *index)
 	ok = parse_room(&backtracked, index);
 	if (ok) {
 		tokdebug("got parse_room\n");
+		goto close;
+	}
+
+	ok = parse_space(&backtracked, index);
+	if (ok) {
+		tokdebug("got parse_space\n");
 		goto close;
 	}
 
