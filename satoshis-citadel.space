@@ -16,8 +16,13 @@
                 (width 1) (depth 2) (height 1)
                 (location center)
                 (group 
-		  (light (name "desk"))
+		  (light (name "desk")
+		  	 (condition "dirty")
+		  	 (material "tin")
+			 )
 		  (obj (name "chessboard")
+		       (condition "pristine")
+		       (material "oak")
 		    (group
 		      (obj (p "a1") (color "white") (material "marble") (name "rook"))
 		      (obj (p "b1") (color "white") (material "marble") (name "knight"))

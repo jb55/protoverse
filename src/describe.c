@@ -183,7 +183,7 @@ static int push_shape(struct describe *desc)
 	return 1;
 }
 
-static int describe_area(struct describe *desc, const char *name)
+static int describe_detail(struct describe *desc, const char *name)
 {
 	int ok;
 
@@ -236,20 +236,11 @@ static int describe_amount(struct describe *desc, int nobjs)
 	return 1;
 }
 
-static int describe_object_name(struct cursor *strs, struct cursor *attrs, struct cell *cell)
+static int describe_object_name(struct cursor *strs,
+		struct cursor *attrs, struct cell *cell)
 {
 	const char *name;
 	int name_len;
-
-	cell_attr_str(attrs, cell, &name, &name_len, A_COLOR);
-	if (name_len > 0 && !push_sized_word(strs, name, name_len))
-		return 0;
-
-	/*
-	cell_attr_str(attrs, cell, &name, &name_len, A_MATERIAL);
-	if (name_len > 0 && !push_sized_word(strs, name, name_len))
-		return 0;
-		*/
 
 	cell_attr_str(attrs, cell, &name, &name_len, A_NAME);
 	if (name_len > 0 && !push_sized_word(strs, name, name_len))
@@ -321,24 +312,56 @@ static int describe_object(struct describe *desc)
 			desc->cell);
 }
 
+static int describe_object_detailed(struct describe *desc)
+{
+	if (!cursor_push_byte(desc->strs, 'A'))
+		return 0;
+
+	if (!push_adjectives(desc))
+		return 0;
+
+	if (!push_shape(desc))
+		return 0;
+
+	if (!describe_object_name(desc->strs, &desc->parsed->attributes, desc->cell))
+		return 0;
+
+	if (!push_made_of(desc))
+		return 0;
+
+	return 1;
+}
+
 int describe_cell(struct describe *desc)
 {
 	switch (desc->cell->type) {
 	case C_ROOM:
-		return describe_area(desc, "room");
+		return describe_detail(desc, "room");
 	case C_SPACE:
-		return describe_area(desc, "space");
+		return describe_detail(desc, "space");
 	case C_GROUP:
 		return describe_group(desc);
 	case C_OBJECT:
-		if (!push_word(desc->strs, "a"))
-			return 0;
-
 		return describe_object(desc);
 	}
 
 	return 1;
 }
+
+static int describe_cell_detailed(struct describe *desc)
+{
+	switch (desc->cell->type) {
+	case C_ROOM:
+	case C_SPACE:
+	case C_GROUP:
+		return describe_cell(desc);
+	case C_OBJECT:
+		return describe_object_detailed(desc);
+	}
+
+	return 0;
+}
+
 
 static int describe_cell_name(struct describe *desc)
 {
@@ -401,7 +424,7 @@ static int describe_cell_children(struct describe *desc)
 
 int describe_cells(struct describe *desc)
 {
-	if (!describe_cell(desc))
+	if (!describe_cell_detailed(desc))
 		return 0;
 
 	if (!cursor_push_str(desc->strs, ".\n"))
