@@ -42,12 +42,14 @@ enum attribute_type {
 	A_NAME,
 	A_MATERIAL,
 	A_CONDITION,
+	A_COLOR,
 	A_WIDTH,
 	A_DEPTH,
 	A_HEIGHT,
 	A_LOCATION,
 	A_SHAPE,
 	A_STATE,
+	A_DATA,
 };
 
 enum cell_state {
@@ -81,11 +83,19 @@ union number {
 	double fdouble;
 };
 
+struct bufstr {
+	const char *ptr;
+	int len;
+};
+
+struct data_attr {
+	struct bufstr str;
+	struct bufstr sym;
+};
+
 union attr_data {
-	struct {
-		const char *ptr;
-		int len;
-	} str;
+	struct bufstr str;
+	struct data_attr data_attr;
 	enum shape shape;
 	union number number;
 };
@@ -132,18 +142,19 @@ struct parser {
 	struct cursor cells;
 };
 
-int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root);
-int parse_file(struct parser *parser, const char *filename, u16 *root, u8 *buf, u32 bufsize);
+int parse_buffer(struct parser *parser, u8 *file_buf, int len, int *root);
+int parse_file(struct parser *parser, const char *filename, int *root, u8 *buf, u32 bufsize);
 int init_parser(struct parser *parser);
 int free_parser(struct parser *parser);
 void print_cell(struct cursor *attributes, struct cell *cell);
 int tokenize_cells(unsigned char *buf, int buf_size, struct token_cursor *tokens);
-int parse_cell(struct parser *parser, u16 *index);
+int parse_cell(struct parser *parser, int *index);
 void print_token_error(struct token_cursor *cursor);
 const char *cell_type_str(enum cell_type);
 const char *object_type_str(enum object_type);
-int cell_name(struct cursor *attributes, struct cell *cell, const char** name, int *len);
-struct cell *get_cell(struct cursor *cells, u16 index);
-struct attribute *get_attr(struct cursor *attributes, u16 index);
+struct cell *get_cell(struct cursor *cells, int index);
+struct attribute *get_attr(struct cursor *attributes, int index);
+int cell_attr_str(struct cursor *attributes, struct cell *cell, const char** name, int *len, enum attribute_type type);
+const char *cell_name(struct cursor *attributes, struct cell *cell, int *len);
 
 #endif /* PROTOVERSE_PARSE_H */

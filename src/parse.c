@@ -43,6 +43,7 @@ union token {
 
 
 #ifdef DEBUG
+#endif
 static const char *attr_type_str(enum attribute_type type)
 {
 	switch (type) {
@@ -52,16 +53,17 @@ static const char *attr_type_str(enum attribute_type type)
 	case A_ID: return "id";
 	case A_LOCATION: return "location";
 	case A_MATERIAL: return "material";
+	case A_COLOR: return "color";
 	case A_NAME: return "name";
 	case A_SHAPE: return "shape";
 	case A_TYPE: return "type";
 	case A_WIDTH: return "width";
 	case A_STATE: return "state";
+	case A_DATA: return "data";
 	}
 
 	return "unknown";
 }
-#endif
 
 static const char *token_error_string(enum token_error err)
 {
@@ -93,13 +95,14 @@ static void init_token_cursor(struct token_cursor *cursor)
 	memset(&cursor->err_data, 0, sizeof(cursor->err_data));
 }
 
-struct attribute *get_attr(struct cursor *attributes, u16 index)
+struct attribute *get_attr(struct cursor *attributes, int index)
 {
 	return (struct attribute*)index_cursor(attributes, index,
 					       sizeof(struct attribute));
 }
 
 /*
+*/
 static const char *shape_str(enum shape shape)
 {
 	switch (shape) {
@@ -142,7 +145,6 @@ static void print_attributes(struct cursor *attributes, struct cell *cell)
 		print_attribute(attr);
 	}
 }
-*/
 
 void print_cell(struct cursor *attributes, struct cell *cell)
 {
@@ -154,14 +156,14 @@ void print_cell(struct cursor *attributes, struct cell *cell)
 		return;
 	}
 
-	cell_name(attributes, cell, &name, &name_len);
+	cell_attr_str(attributes, cell, &name, &name_len, A_NAME);
 
 	printf("%.*s%s%s ", name_len, name, name_len > 0?" ":"",
 	       cell->type == C_OBJECT
 	       ? object_type_str(cell->obj_type)
 	       : cell_type_str(cell->type));
 
-	/* print_attributes(attributes, cell); */
+	//print_attributes(attributes, cell);
 }
 
 
@@ -228,9 +230,8 @@ static int push_token_data(struct token_cursor *tokens,
 #ifdef DEBUG
 	struct tok_str *str;
 #endif
-	int ok;
-	ok = cursor_push_byte(&tokens->c, token);
-	if (!ok) return 0;
+	if (!cursor_push_byte(&tokens->c, token))
+		return 0;
 
 	switch (token) {
 
@@ -258,8 +259,11 @@ static int push_token_data(struct token_cursor *tokens,
 			tokdebug("sym %.*s", str->len, str->data);
 		}
 #endif
-		ok = cursor_push(&tokens->c, token_data, token_data_size);
-		if (!ok) return 0;
+		if (!cursor_push(&tokens->c, token_data, token_data_size)) {
+			printf("hmm? %d\n", token_data_size);
+			cursor_print_around(&tokens->c, 10);
+			return 0;
+		}
 #ifdef DEBUG
 		printf("\n");
 #endif
@@ -489,8 +493,8 @@ static int read_and_push_atom(struct token_cursor *cursor, struct token_cursor *
 	if (ok) {
 		str.len  = ok;
 		str.data = start;
-		ok = push_symbol(tokens, str);
-		if (!ok) {
+		if (!push_symbol(tokens, str)) {
+			cursor_print_around(&tokens->c, 10);
 			printf("read_and_push_atom identifier push overflow\n");
 			return 0;
 		}
@@ -725,10 +729,9 @@ static int parse_stringy_token(struct token_cursor *tokens,
 			       enum token_type type)
 {
 	union token token;
-	int ok;
 
-	ok = pull_token(tokens, &token, type);
-	if (!ok) return 0;
+	if (!pull_token(tokens, &token, type))
+		return 0;
 
 	str->data = token.str.data;
 	str->len = token.str.len;
@@ -768,7 +771,7 @@ static int parse_number(struct token_cursor *tokens, union number *number)
 }
 
 
-struct cell *get_cell(struct cursor *cells, u16 index)
+struct cell *get_cell(struct cursor *cells, int index)
 {
 	return (struct cell*)index_cursor(cells, index,
 					  sizeof(struct cell));
@@ -782,11 +785,10 @@ static int symbol_eq(struct tok_str *a, const char *b, int b_len)
 
 static int parse_symbol(struct token_cursor *tokens, const char *match)
 {
-	int ok;
 	struct tok_str str;
 
-	ok = pull_symbol_token(tokens, &str);
-	if (!ok) return 0;
+	if (!pull_symbol_token(tokens, &str))
+		return 0;
 
 	if (!symbol_eq(&str, match, strlen(match)))
 		return 0;
@@ -837,23 +839,43 @@ static int parse_str_attr(struct token_cursor *tokens,
 {
 	struct token_cursor temp;
 	struct tok_str str;
-	int ok;
+	struct bufstr *bufstr;
 
 	assert(tok_type == T_NUMBER || tok_type == T_SYMBOL || tok_type == T_STRING);
 
 	copy_token_cursor(tokens, &temp);
 
-	ok = parse_symbol(&temp, sym);
-	if (!ok) return 0;
+	if (sym == NULL) {
+		if (!pull_symbol_token(&temp, &str))
+			return 0;
 
-	ok = parse_stringy_token(&temp, &str, tok_type);
-	if (!ok) return 0;
+		attr->data.data_attr.sym.ptr = (char*)str.data;
+		attr->data.data_attr.sym.len = str.len;
 
-	attr->data.str.ptr = (char*)str.data;
-	attr->data.str.len = str.len;
+		bufstr = &attr->data.data_attr.str;
+	} else {
+		if (!parse_symbol(&temp, sym))
+			return 0;
+		bufstr = &attr->data.str;
+	}
+
+	if (!parse_stringy_token(&temp, &str, tok_type))
+		return 0;
+
+	bufstr->ptr = (char*)str.data;
+	bufstr->len = str.len;
 	attr->type = type;
 
-	tokdebug("attribute %s %.*s\n", sym, str.len, str.data);
+#ifdef DEBUG
+	if (sym == NULL)
+		tokdebug("attribute %.*s %.*s\n",
+				attr->data.data_attr.sym.len,
+				attr->data.data_attr.sym.ptr,
+				str.len,
+				str.data);
+	else
+		tokdebug("attribute %s %.*s\n", sym, str.len, str.data);
+#endif
 
 	copy_token_cursor(&temp, tokens);
 
@@ -891,23 +913,41 @@ static int parse_size(struct token_cursor *tokens, struct attribute *attr)
 	return 1;
 }
 
-int cell_name(struct cursor *attributes, struct cell *cell, const char** name, int *len)
+static struct bufstr *attr_bufstr(struct attribute *attr)
+{
+	if (attr->type == A_DATA)
+		return &attr->data.data_attr.str;
+	return &attr->data.str;
+}
+
+int cell_attr_str(struct cursor *attributes, struct cell *cell,
+		const char** name, int *len, enum attribute_type type)
 {
 	int i;
 	struct attribute *attr;
+	struct bufstr *bufstr;
 	*len = 0;
 	*name = "";
 
 	for (i = 0; i < cell->n_attributes; i++) {
 		attr = get_attr(attributes, cell->attributes[i]);
-		if (attr->type == A_NAME) {
-			*name = attr->data.str.ptr;
-			*len = attr->data.str.len;
+		if (attr->type == type) {
+			bufstr = attr_bufstr(attr);
+			*name = bufstr->ptr;
+			*len = bufstr->len;
 			return 1;
 		}
 	}
 
 	return 0;
+}
+
+const char *cell_name(struct cursor *attributes, struct cell *cell, int *len)
+{
+	const char *name = NULL;
+	if (!cell_attr_str(attributes, cell, &name, len, A_NAME))
+		return NULL;
+	return name;
 }
 
 static int parse_attribute(struct token_cursor *tokens, struct attribute *attr)
@@ -934,6 +974,9 @@ static int parse_attribute(struct token_cursor *tokens, struct attribute *attr)
 	ok = parse_str_attr(&temp, attr, "material", A_MATERIAL, T_STRING);
 	if (ok) goto close;
 
+	ok = parse_str_attr(&temp, attr, "color", A_COLOR, T_STRING);
+	if (ok) goto close;
+
 	/* TODO: parse multiple conditions */
 	ok = parse_str_attr(&temp, attr, "condition", A_CONDITION, T_STRING);
 	if (ok) goto close;
@@ -942,6 +985,9 @@ static int parse_attribute(struct token_cursor *tokens, struct attribute *attr)
 	if (ok) goto close;
 
 	ok = parse_str_attr(&temp, attr, "state", A_STATE, T_SYMBOL);
+	if (ok) goto close;
+
+	ok = parse_str_attr(&temp, attr, NULL, A_DATA, T_STRING);
 	if (ok) goto close;
 
 	ok = parse_size(&temp, attr);
@@ -1010,7 +1056,7 @@ static int parse_group(struct cursor *tokens)
 */
 
 
-static int push_cell(struct cursor *cells, struct cell *cell, u16 *cell_index)
+static int push_cell(struct cursor *cells, struct cell *cell, int *cell_index)
 {
 	int index;
 	int ok;
@@ -1041,7 +1087,7 @@ static void copy_parser(struct parser *from, struct parser *to)
 	copy_cursor(&from->attributes, &to->attributes);
 }
 
-static int push_cell_child(struct cell *parent, u16 child_ind)
+static int push_cell_child(struct cell *parent, int child_ind)
 {
 	int ok;
 	struct cursor child_inds;
@@ -1085,11 +1131,11 @@ const char *cell_type_str(enum cell_type type)
 	return "unknown";
 }
 
-static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell)
+static int parse_cell_attrs(struct parser *parser, int *index, struct cell *cell)
 {
 	struct cursor cell_attr_inds;
 	struct cell *child_cell;
-	u16 child_cell_index;
+	int child_cell_index;
 	int attr_inds[2] = {0};
 	int i, ok;
 
@@ -1116,11 +1162,11 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 	tokdebug("optional child cell in parse_cell_attrs\n");
 	ok = parse_cell(parser, &child_cell_index);
 	if (ok) {
-		child_cell = get_cell(&parser->cells, child_cell_index);
-		if (!child_cell) return 0;
+		if (!(child_cell = get_cell(&parser->cells, child_cell_index)))
+			return 0l
 		tokdebug("parse_cell_attrs push child cell\n");
-		ok = push_cell_child(cell, child_cell_index);
-		if (!ok) return 0;
+		if (!push_cell_child(cell, child_cell_index))
+			return 0;
 
 	}
 	else {
@@ -1134,14 +1180,14 @@ static int parse_cell_attrs(struct parser *parser, u16 *index, struct cell *cell
 }
 
 static int parse_cell_by_name(struct parser *parser,
-			      u16 *index,
+			      int *index,
 			      const char *name,
 			      enum cell_type type)
 {
 	int ok;
 	struct parser backtracked;
 	struct cell cell;
-	u16 ind;
+	int ind;
 
 	init_cell(&cell);
 
@@ -1163,21 +1209,20 @@ static int parse_cell_by_name(struct parser *parser,
 	return 1;
 }
 
-static int parse_space(struct parser *parser, u16 *index)
+static int parse_space(struct parser *parser, int *index)
 {
 	return parse_cell_by_name(parser, index, "space", C_SPACE);
 }
 
-static int parse_room(struct parser *parser, u16 *index)
+static int parse_room(struct parser *parser, int *index)
 {
 	return parse_cell_by_name(parser, index, "room", C_ROOM);
 }
 
-static int parse_group(struct parser *parser, u16 *index)
+static int parse_group(struct parser *parser, int *index)
 {
-	int ok;
 	int ncells = 0;
-	u16 child_ind;
+	int child_ind;
 
 	struct parser backtracked;
 	struct cell group;
@@ -1187,12 +1232,12 @@ static int parse_group(struct parser *parser, u16 *index)
 
 	copy_parser(parser, &backtracked);
 
-	ok = parse_symbol(&backtracked.tokens, "group");
-	if (!ok) return 0;
+	if (!parse_symbol(&backtracked.tokens, "group"))
+		return 0;
 
 	while (1) {
-		ok = parse_cell(&backtracked, &child_ind);
-		if (!ok) break;
+		if (!parse_cell(&backtracked, &child_ind))
+			break;
 
 		child_cell = get_cell(&backtracked.cells, child_ind);
 		if (child_cell == NULL) {
@@ -1201,8 +1246,8 @@ static int parse_group(struct parser *parser, u16 *index)
 		}
 
 		tokdebug("group child cell type %s\n", cell_type_str(child_cell->type));
-		ok = push_cell_child(&group, child_ind);
-		if (!ok) return 0;
+		if (!push_cell_child(&group, child_ind))
+			return 0;
 
 		ncells++;
 	}
@@ -1214,8 +1259,8 @@ static int parse_group(struct parser *parser, u16 *index)
 
 	group.type = C_GROUP;
 
-	ok = push_cell(&backtracked.cells, &group, index);
-	if (!ok) return 0;
+	if (!push_cell(&backtracked.cells, &group, index))
+		return 0;
 
 	copy_parser(&backtracked, parser);
 
@@ -1232,25 +1277,25 @@ static struct object_def object_defs[] = {
 	{"chair", O_CHAIR},
 	{"door", O_DOOR},
 	{"light", O_LIGHT},
-	{"object", O_OBJECT},
+	{"obj", O_OBJECT},
 };
 
-static int parse_object(struct parser *parser, u16 *index)
+static int parse_object(struct parser *parser, int *index)
 {
-	int ok, i;
+	int i;
 	struct parser backtracked;
 	struct tok_str str;
 	struct object_def *def;
 	struct cell cell;
-	u16 ind;
+	int ind;
 
 	init_cell(&cell);
 	cell.type = C_OBJECT;
 
 	copy_parser(parser, &backtracked);
 
-	ok = pull_symbol_token(&backtracked.tokens, &str);
-	if (!ok) return 0;
+	if (!pull_symbol_token(&backtracked.tokens, &str))
+		return 0;
 
 	for (i = 0; i < ARRAY_SIZE(object_defs); i++) {
 		def = &object_defs[i];
@@ -1261,10 +1306,9 @@ static int parse_object(struct parser *parser, u16 *index)
 		}
 	}
 
-	ok = parse_cell_attrs(&backtracked, &ind, &cell);
-	if (!ok) return 0;
+	if (!parse_cell_attrs(&backtracked, &ind, &cell))
+		return 0;
 
-	assert(ind < 10);
 	if (index)
 		*index = ind;
 
@@ -1273,7 +1317,7 @@ static int parse_object(struct parser *parser, u16 *index)
 	return 1;
 }
 
-int parse_cell(struct parser *parser, u16 *index)
+int parse_cell(struct parser *parser, int *index)
 {
 	int ok;
 	struct parser backtracked;
@@ -1328,7 +1372,7 @@ int init_parser(struct parser *parser)
 	int ok;
 
 	int attrs_size = sizeof(struct attribute) * 1024;
-	int tokens_size = 2048;
+	int tokens_size = 2048*32;
 	int cells_size = sizeof(struct cell) * 1024;
 	int memsize = attrs_size + tokens_size + cells_size;
 
@@ -1356,7 +1400,7 @@ int free_parser(struct parser *parser)
 	return 1;
 }
 
-int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root)
+int parse_buffer(struct parser *parser, u8 *file_buf, int len, int *root)
 {
 	int ok;
 
@@ -1377,7 +1421,7 @@ int parse_buffer(struct parser *parser, u8 *file_buf, int len, u16 *root)
 }
 
 
-int parse_file(struct parser *parser, const char *filename, u16 *root, u8 *buf,
+int parse_file(struct parser *parser, const char *filename, int *root, u8 *buf,
 		u32 bufsize)
 {
 	int count, ok;

@@ -12,15 +12,13 @@
 
 static int push_sized_word(struct cursor *strs, const char *str, int len)
 {
-	int ok;
-
 	if (strs->p-1 >= strs->start && !isspace(*(strs->p-1))) {
-		ok = cursor_push_str(strs, " ");
-		if (!ok) return 0;
+		if (!cursor_push_str(strs, " "))
+			return 0;
 	}
 
-	ok = push_sized_str(strs, str, len);
-	if (!ok) return 0;
+	if (!push_sized_str(strs, str, len))
+		return 0;
 
 	return 1;
 }
@@ -51,7 +49,7 @@ static int push_adjective(struct cursor *strs, struct attribute *attr)
 
 static int is_adjective(struct attribute *attr)
 {
-	return attr->type == A_CONDITION;
+	return attr->type == A_CONDITION || attr->type == A_COLOR;
 }
 
 static int count_adjectives(struct describe *desc)
@@ -147,7 +145,8 @@ static int push_named(struct describe *desc)
 	int name_len;
 	int ok;
 
-	cell_name(&desc->parsed->attributes, desc->cell, &name, &name_len);
+	cell_attr_str(&desc->parsed->attributes, desc->cell, &name, &name_len,
+			A_NAME);
 
 	if (name_len == 0)
 		return 1;
@@ -239,15 +238,22 @@ static int describe_amount(struct describe *desc, int nobjs)
 
 static int describe_object_name(struct cursor *strs, struct cursor *attrs, struct cell *cell)
 {
-	int ok;
 	const char *name;
 	int name_len;
 
-	cell_name(attrs, cell, &name, &name_len);
-	if (name_len > 0) {
-		ok = push_sized_word(strs, name, name_len);
-		if (!ok) return 0;
-	}
+	cell_attr_str(attrs, cell, &name, &name_len, A_COLOR);
+	if (name_len > 0 && !push_sized_word(strs, name, name_len))
+		return 0;
+
+	/*
+	cell_attr_str(attrs, cell, &name, &name_len, A_MATERIAL);
+	if (name_len > 0 && !push_sized_word(strs, name, name_len))
+		return 0;
+		*/
+
+	cell_attr_str(attrs, cell, &name, &name_len, A_NAME);
+	if (name_len > 0 && !push_sized_word(strs, name, name_len))
+		return 0;
 
 	if (cell->type == C_OBJECT) {
 		if (cell->obj_type == O_OBJECT)
@@ -258,118 +264,162 @@ static int describe_object_name(struct cursor *strs, struct cursor *attrs, struc
 	return push_word(strs, cell_type_str(cell->type));
 }
 
-static int describe_group(struct describe *desc)
+static int describe_group_children(struct cell *parent, struct describe *desc)
 {
-	int i, ok, nobjs;
-	struct cell *cell;
+	int i;
+	struct cell *child;
 
-	nobjs = desc->cell->n_children;
+	if (!push_word(desc->strs, "a"))
+		return 0;
 
-	ok = describe_amount(desc, nobjs);
-
-	ok = push_word(desc->strs, "object");
-	if (!ok) return 0;
-
-	if (nobjs > 1) {
-		ok = cursor_push_str(desc->strs, "s:");
-		if (!ok) return 0;
-	}
-	else {
-		cursor_push_str(desc->strs, ":");
-		if (!ok) return 0;
-	}
-
-	ok = push_word(desc->strs, "a");
-	if (!ok) return 0;
-
-	for (i = 0; i < nobjs; i++) {
-		cell = get_cell(&desc->parsed->cells,
-				desc->cell->children[i]);
-		assert(cell);
+	for (i = 0; i < parent->n_children; i++) {
+		child = get_cell(&desc->parsed->cells, parent->children[i]);
+		assert(child);
 
 		if (i > 0) {
-			if (i == nobjs-1) {
-				ok = push_word(desc->strs, "and");
-				if (!ok) return 0;
+			if (i == parent->n_children-1) {
+				if (!push_word(desc->strs, "and"))
+					return 0;
 			}
-			else if (i != nobjs-1) {
-				ok = cursor_push_str(desc->strs, ",");
-				if (!ok) return 0;
+			else if (i != parent->n_children-1) {
+				if (!cursor_push_str(desc->strs, ","))
+					return 0;
 			}
 
 		}
 
-		ok = describe_object_name(desc->strs, &desc->parsed->attributes, cell);
-		if (!ok) return 0;
+		if (!describe_object_name(desc->strs, &desc->parsed->attributes, child))
+			return 0;
 	}
 
 	return 1;
+}
+
+static int describe_group(struct describe *desc)
+{
+	if (!describe_amount(desc, desc->cell->n_children))
+		return 0;
+
+	if (!push_word(desc->strs, "object"))
+		return 0;
+
+	if (desc->cell->n_children > 1) {
+		if (!cursor_push_str(desc->strs, "s:"))
+			return 0;
+	}
+	else {
+		if (!cursor_push_str(desc->strs, ":"))
+			return 0;
+	}
+
+	return describe_group_children(desc->cell, desc);
 }
 
 static int describe_object(struct describe *desc)
 {
-	if (!push_word(desc->strs, "a"))
-		return 0;
-
 	return describe_object_name(desc->strs, &desc->parsed->attributes,
 			desc->cell);
 }
 
-int describe_cell(struct cell *cell, struct parser *parsed, struct cursor *strbuf)
+int describe_cell(struct describe *desc)
 {
-	struct describe desc;
-
-	desc.cell = cell;
-	desc.parsed = parsed;
-	desc.strs = strbuf;
-
-	switch (cell->type) {
+	switch (desc->cell->type) {
 	case C_ROOM:
-		return describe_area(&desc, "room");
+		return describe_area(desc, "room");
 	case C_SPACE:
-		return describe_area(&desc, "space");
+		return describe_area(desc, "space");
 	case C_GROUP:
-		return describe_group(&desc);
+		return describe_group(desc);
 	case C_OBJECT:
-		return describe_object(&desc);
+		if (!push_word(desc->strs, "a"))
+			return 0;
+
+		return describe_object(desc);
 	}
 
 	return 1;
 }
 
-
-int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs, int max_depth, int depth)
+static int describe_cell_name(struct describe *desc)
 {
-	int ok;
+	if (desc->cell->type == C_OBJECT)
+		return describe_object(desc);
 
-	if (depth > max_depth)
-		return 1;
+	return push_word(desc->strs, cell_type_str(desc->cell->type));
+}
 
-	ok = describe_cell(cell, parsed, strs);
-	if (!ok) return 0;
+static int describe_cell_children(struct describe *desc);
 
-	ok = cursor_push_str(strs, ".\n");
-	if (!ok) return 0;
+static int describe_cell_children_rest(struct describe desc)
+{
+	int i;
+	struct cell *parent = desc.cell; 
 
-	if (cell->n_children == 0)
-		return 1;
+	for (i = 0; i < parent->n_children; i++) {
+		desc.cell = get_cell(&desc.parsed->cells, parent->children[i]);
 
-	if (cell->type == C_ROOM || cell->type == C_SPACE) {
-		if (!push_word(strs, "It contains"))
+		if (desc.cell->n_children > 0 && !describe_cell_children(&desc))
 			return 0;
-		cell = get_cell(&parsed->cells, cell->children[0]);
-		return describe_cells(cell, parsed, strs, max_depth, depth+1);
 	}
 
 	return 1;
+}
+
+static int describe_cell_children_group(struct describe desc)
+{
+	struct cell *child;
+
+	if (desc.cell->n_children == 1 && 
+	    (child = get_cell(&desc.parsed->cells, desc.cell->children[0])) &&
+	    child->type == C_GROUP) {
+		desc.cell = child;
+		return describe_cell_children_group(desc);
+	}
+
+	if (!describe_group_children(desc.cell, &desc))
+		return 0;
+
+	if (!cursor_push_byte(desc.strs, '\n'))
+		return 0;
+
+	return describe_cell_children_rest(desc);
+}
+
+static int describe_cell_children(struct describe *desc)
+{
+	if (!push_word(desc->strs, "The"))
+		return 0;
+
+	if (!describe_cell_name(desc))
+		return 0;
+
+	if (!push_word(desc->strs, "contains"))
+		return 0;
+
+	return describe_cell_children_group(*desc);
+}
+
+int describe_cells(struct describe *desc)
+{
+	if (!describe_cell(desc))
+		return 0;
+
+	if (!cursor_push_str(desc->strs, ".\n"))
+		return 0;
+
+	if (desc->cell->n_children == 0)
+		return 1;
+
+	return describe_cell_children(desc);
 }
 
 
 int describe(struct parser *parser, u16 root_cell)
 {
-	static char strbuf[2048];
+	static char strbuf[4096*32];
 	struct cursor strs;
 	struct cell *cell;
+	struct describe desc;
 
 	strbuf[0] = 0;
 
@@ -377,7 +427,11 @@ int describe(struct parser *parser, u16 root_cell)
 
 	make_cursor((u8*)strbuf, (u8*)strbuf + sizeof(strbuf), &strs);
 
-	describe_cells(cell, parser, &strs, 10, 0);
+	desc.cell = cell;
+	desc.parsed = parser;
+	desc.strs = &strs;
+
+	describe_cells(&desc);
 
 	printf("\n\ndescription\n-----------\n\n%s\n", strbuf);
 

@@ -41,7 +41,43 @@ static void print_all_cells(struct parser *parser)
 }
 */
 
-static int print_cell_tree(struct parser *parser, u16 root, int depth)
+static int match_selector(struct cursor *attrs, struct cell *cell, const char *query)
+{
+	const char *str;
+	int str_len;
+	int query_len = strlen(query);
+
+	if (!cell_attr_str(attrs, cell, &str, &str_len, A_NAME))
+		return 0;
+	if (query_len == str_len && !memcmp(str, query, str_len))
+		return 1;
+	if (!cell_attr_str(attrs, cell, &str, &str_len, A_ID))
+		return 0;
+	if (query_len == str_len && !memcmp(str, query, str_len))
+		return 1;
+
+	return 0;
+}
+
+static int cell_selector(struct parser *parser, u32 root, const char *query)
+{
+	int res;
+	int i;
+	struct cell *cell = get_cell(&parser->cells, root);
+
+	if ((res = match_selector(&parser->attributes, cell, query)))
+		return root;
+
+	for (i = 0; i < cell->n_children; i++) {
+		//cell = get_cell(&parser->cells, cell->children[i]);
+		if ((res = cell_selector(parser, cell->children[i], query)))
+			return res;
+	}
+
+	return 0;
+}
+
+static int print_cell_tree(struct parser *parser, u32 root, int depth)
 {
 	int i;
 
@@ -110,7 +146,7 @@ int main(int argc, const char *argv[])
 	unsigned char *wasm_data;
 	struct parser parser;
 	struct protoverse_server server;
-	u16 root;
+	int root, found;
 	int ok;
 	int retval;
 	size_t len;
@@ -121,7 +157,7 @@ int main(int argc, const char *argv[])
 	cmd = argv[1];
 
 	if (streq(cmd, "parse")) {
-		if (argc != 3)
+		if (argc < 3)
 			return usage();
 		ok = init_parser(&parser);
 		if (!ok) {
@@ -133,6 +169,11 @@ int main(int argc, const char *argv[])
 		if (!ok) {
 			printf("failed to parse file\n");
 			return 1;
+		}
+
+		if (argc > 3) {
+			if ((found = cell_selector(&parser, root, argv[3])))
+				root = found;
 		}
 
 		print_cell_tree(&parser, root, 0);

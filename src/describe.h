@@ -11,7 +11,7 @@ struct describe {
 };
 
 int describe(struct parser *parser, u16 root_cell);
-int describe_cell(struct cell *cell, struct parser *parsed, struct cursor *strbuf);
-int describe_cells(struct cell *cell, struct parser *parsed, struct cursor *strs, int max_depth, int depth);
+int describe_cell(struct describe *desc);
+int describe_cells(struct describe *desc);
 
 #endif
