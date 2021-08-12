@@ -176,7 +176,7 @@ int main(int argc, const char *argv[])
 				root = found;
 		}
 
-		print_cell_tree(&parser, root, 0);
+		//print_cell_tree(&parser, root, 0);
 
 		describe(&parser, root);
 		free_parser(&parser);

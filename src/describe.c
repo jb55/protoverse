@@ -33,6 +33,7 @@ static int push_adjective(struct cursor *strs, struct attribute *attr)
 	int ok;
 
 	switch (attr->type) {
+	case A_COLOR:
 	case A_CONDITION:
 		ok = cursor_push_str(strs, " ");
 		if (!ok) return 0;
