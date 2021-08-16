@@ -1163,7 +1163,7 @@ static int parse_cell_attrs(struct parser *parser, int *index, struct cell *cell
 	ok = parse_cell(parser, &child_cell_index);
 	if (ok) {
 		if (!(child_cell = get_cell(&parser->cells, child_cell_index)))
-			return 0l
+			return 0;
 		tokdebug("parse_cell_attrs push child cell\n");
 		if (!push_cell_child(cell, child_cell_index))
 			return 0;
