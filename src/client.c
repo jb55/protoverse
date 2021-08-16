@@ -19,7 +19,7 @@ static int handle_data_response(struct parser *parser, const char *expected_path
 				struct packet *packet)
 {
 	struct fetch_response_packet *resp = &packet->data.fetch_response;
-	u16 root;
+	int root;
 	int ok;
 
 	if (packet->type == PKT_FETCH_DATA_RESPONSE &&
