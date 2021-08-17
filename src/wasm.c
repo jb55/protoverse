@@ -3804,7 +3804,7 @@ static INLINE int drop_callframe_return(struct wasm_interp *interp, int returnin
 	if (returning)  {
 		drop = cnt - frame->prev_stack_items - 
 				func->functype->result.num_valtypes;
-		if (drop < 0 || 
+		if (drop > 0 &&
 		    !cursor_dropn(&interp->stack, sizeof(struct val), drop)) {
 			return interp_error(interp,
 				"error dropping extra stack values in return. "
