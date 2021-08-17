@@ -4220,9 +4220,11 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 	label->jump = code->p - code->start;
 	label->instr_pos |= 0x80000000;
 
+	/*
 	debug("resolving label %04x to %04x\n",
 			label_instr_pos(label),
 			label->jump);
+			*/
 
 	return 1;
 }
@@ -4230,7 +4232,7 @@ static INLINE int resolve_label(struct label *label, struct cursor *code)
 static INLINE int pop_resolver(struct wasm_interp *interp,
 		struct resolver *resolver)
 {
-#ifdef DEBUG
+#if 0
 	int num_resolvers;
 	struct label *label;
 #endif
@@ -4239,7 +4241,7 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 		return interp_error(interp, "pop resolver");
 	}
 
-#ifdef DEBUG
+#if 0
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
 	};
@@ -4247,7 +4249,6 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 	label = index_label(&interp->labels,
 			    top_callframe(&interp->callframes)->func->idx,
 			    resolver->label);
-#endif
 
 	debug("%04lX popped resolver label:%d %04x-%04x i_%s i_%s %d local_resolvers:%d\n",
 			interp_codeptr(interp)->p - interp_codeptr(interp)->start,
@@ -4259,6 +4260,7 @@ static INLINE int pop_resolver(struct wasm_interp *interp,
 			count_resolvers(interp),
 			num_resolvers
 			);
+#endif
 	return 1;
 }
 
@@ -4381,7 +4383,7 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 	struct resolver resolver;
 	struct callframe *frame;
 
-#ifdef DEBUG
+#if 0
 	int num_resolvers;
 #endif
 
@@ -4415,7 +4417,7 @@ static int push_label_checkpoint(struct wasm_interp *interp, struct label **labe
 		return interp_error(interp, "push label index to resolver stack oob");
 	}
 
-#ifdef DEBUG
+#if 0
 	if (unlikely(!count_local_resolvers(interp, &num_resolvers))) {
 		return interp_error(interp, "local resolvers fn start");
 	};
@@ -4443,7 +4445,7 @@ static int interp_jump(struct wasm_interp *interp, int jmp)
 		return interp_error(interp, "no callframe?");
 	}
 
-	debug("jumping to %04x\n", jmp);
+	//debug("jumping to %04x\n", jmp);
 	frame->code.p = frame->code.start + jmp;
 
 	if (unlikely(frame->code.p >= frame->code.end)) {
@@ -4529,7 +4531,7 @@ static int break_label(struct wasm_interp *interp, struct resolver *resolver,
 
 	// we have a loop, push the popped resolver
 	if (resolver->start_tag == i_loop) {
-		debug("repushing resolver for loop\n");
+		//debug("repushing resolver for loop\n");
 		if (unlikely(!cursor_push_resolver(&interp->resolver_stack, resolver))) {
 			return interp_error(interp, "re-push loop resolver");
 		}
