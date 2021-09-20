@@ -107,21 +107,6 @@ static int print_cell_tree(struct parser *parser, u32 root, int depth)
 	return 1;
 }
 
-static void init_protoverse_server(struct protoverse_server *server)
-{
-	(void)server;
-	/*
-	init_resource_manager(&server->env.entities, sizeof(struct entity),
-			1024, MAX_ENTITIES, "entity");
-			*/
-}
-
-static void free_protoverse_server(struct protoverse_server *server)
-{
-	(void)server;
-	//destroy_resource_manager(&server->env.entities);
-}
-
 static int usage(void)
 {
 	printf("usage: protoverse <command> [args]\n\n");
@@ -185,13 +170,12 @@ int main(int argc, const char *argv[])
 			return usage();
 		space = argv[2];
 		printf("serving protoverse on port 1988...\n");
+		protoverse_server_init(&server);
 
 		server.port = 1988;
 		server.bind = "127.0.0.1";
 
-		init_protoverse_server(&server);
 		protoverse_serve(&server);
-		free_protoverse_server(&server);
 	} else if (streq(cmd, "client")) {
 		protoverse_connect("127.0.0.1", 1988);
 	} else if (streq(cmd, "run")) {

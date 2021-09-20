@@ -5,3 +5,5 @@ move module instantiate from alloc to wasm_interp @wasm
 memcpy table init like we do for memory init @wasm
 use hashtable for labels @wasm
 dlopen for macos gfx apis @wasm
+send message to object @net
+pop values when breaking from labels/blocks that have an arity @wasm

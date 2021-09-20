@@ -21,13 +21,15 @@ SRCS=$(OBJS:.o=.c)
 WASMS = wasm/hello-c.wasm \
 	wasm/hello.wasm
 
-all: protoverse bench test libprotoverse.a
+all: protoverse bench test examples
 
 noinline: CFLAGS += -DNOINLINE
 noinline: all
 
 debug: CFLAGS += -DDEBUG
 debug: all
+
+examples: examples/server
 
 wasm: $(WASMS)
 
@@ -50,6 +52,9 @@ protoverse.wasm: src/protoverse.c $(SRCS)
 protoverse: src/protoverse.c $(OBJS)
 	@echo "ld $@"
 	@$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
+examples/server: examples/server.c libprotoverse.a
+	$(CC) -Isrc $(CFLAGS) $^ -o $@
 
 libprotoverse.a: $(OBJS)
 	ar rcs $@ $^

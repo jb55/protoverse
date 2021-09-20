@@ -12,3 +12,4 @@ todo/done.txt
 /tags
 todo/todo.txt.bak
 *.txt
+/examples/server

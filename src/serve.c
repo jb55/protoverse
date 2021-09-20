@@ -62,9 +62,9 @@ static int make_fetch_response(struct cursor *buf,
 	return 1;
 }
 
-static int handle_packet(int sockfd,
-			 struct env *env,
-			 struct cursor *buf,
+/*
+static int handle_packet(struct protoverse_server *server,
+			 int sockfd,
 			 struct sockaddr_in *from,
 			 struct packet *packet)
 {
@@ -89,6 +89,7 @@ static int handle_packet(int sockfd,
 
 	return 0;
 }
+*/
 
 
 int protoverse_serve(struct protoverse_server *server)
@@ -136,8 +137,7 @@ int protoverse_serve(struct protoverse_server *server)
 			continue;
 		}
 
-		ok = handle_packet(fd, &server->env, &buf, &from, &packet);
-		if (!ok) {
+		if (!server->handle_packet(server, fd, &from, &packet)) {
 			printf("handle packet failed for ");
 			print_packet(&server->env, &packet);
 		}
@@ -146,4 +146,9 @@ int protoverse_serve(struct protoverse_server *server)
 	}
 
 	free(buf_);
+}
+
+void protoverse_server_init(struct protoverse_server *server)
+{
+	memset(server, 0, sizeof(*server));
 }
