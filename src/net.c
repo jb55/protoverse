@@ -51,7 +51,10 @@ static int push_message_packet(struct cursor *c, struct message_packet *msg)
 	ok = push_varint(c, msg->receiver);
 	if (!ok) return 0;
 
-	return push_prefixed_str(c, msg->message);
+	ok = push_varint(c, msg->size);
+	if (!ok) return 0;
+
+	return cursor_push(c, msg->message, msg->size);
 }
 
 static int pull_message_packet(struct cursor *c, struct cursor *buf, struct message_packet *msg)
@@ -64,7 +67,13 @@ static int pull_message_packet(struct cursor *c, struct cursor *buf, struct mess
 	ok = pull_varint(c, &msg->receiver);
 	if (!ok) return 0;
 
-	return pull_prefixed_str(c, buf, &msg->message);
+	ok = pull_varint(c, &msg->size);
+	if (!ok) return 0;
+
+	if (msg->size > 65535)
+		return 0;
+
+	return pull_data_into_cursor(c, buf, &msg->message, msg->size);
 }
 
 static int pull_fetch_packet(struct cursor *c, struct cursor *buf, struct fetch_packet *fetch)
@@ -239,7 +248,10 @@ static int packet_message_eq(struct message_packet *a, struct message_packet *b)
 	if (!a->message ^ !b->message)
 		return 0;
 
-	return !strcmp(a->message, b->message);
+	if (a->size != b->size)
+		return 0;
+
+	return !memcmp(a->message, b->message, a->size);
 }
 
 static int packet_fetch_eq(struct fetch_packet *a, struct fetch_packet *b)

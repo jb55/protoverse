@@ -49,11 +49,21 @@ static void test_packet_serialization(struct packet packet)
 	print_packet(&env, &packet);
 }
 
+static struct message_packet make_chat_message(const char *msg, int to)
+{
+	struct message_packet pkt;
+	pkt.size = strlen(msg);
+	pkt.message = (unsigned char *) msg;
+	pkt.receiver = to;
+	pkt.type = MSG_CHAT;
+	return pkt;
+}
+
 static void test_chat_packet_serialization(void)
 {
 	struct packet packet;
 	packet.type = PKT_MESSAGE;
-	packet.data.message.message = "hello there";
+	packet.data.message = make_chat_message("hello there", 0);
 
 	printf("chat packet\n");
 	test_packet_serialization(packet);

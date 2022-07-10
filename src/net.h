@@ -33,7 +33,8 @@ struct fetch_response_packet {
 struct message_packet {
 	int receiver;
 	int type;
-	const char *message;
+	int size;
+	unsigned char *message;
 };
 
 union packet_data {
